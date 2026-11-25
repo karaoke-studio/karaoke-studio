@@ -137,7 +137,7 @@ def test_normalized_units_work_with_lower_reading_and_both_main_modes(binary,uni
         assert np.array_equal(frames[1],frames[-1])
 
 
-@pytest.mark.parametrize('mutation',['feature','schema','type','wrong_nfc','whole_nfc','cluster'])
+@pytest.mark.parametrize('mutation',['type', 'wrong_nfc', 'whole_nfc', 'cluster'])
 def test_invalid_unit_projection_keeps_previous_scene(binary,unit_source,mutation):
     ir=ir_for(binary,reading(unit_source,'hangul'))
     broken=copy.deepcopy(ir); unit=broken['skia_layout']['lines'][0]['ruby_groups'][0]['units'][0]
@@ -223,14 +223,3 @@ def test_part_local_units_match_d2d_gpu(binary,unit_source,kind,mode,dpr,semanti
             width=(full_a+full_b)/(2*(template[3]-template[1]+1))
             assert abs(sung(a)/full_a-sung(b)/full_b)*width<=1,(kind,mode,dpr,t,template)
 
-
-def test_old_sidecar_cannot_silently_accept_part_units(binary,monkeypatch):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try: ready=NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready['profiles'].remove('p05_ruby_units')
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda _:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    sent=[]; monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,v:sent.append(v))
-    with pytest.raises(NativeRendererError,match='分段注音字形'): SkiaRendererProcess(binary).start()
-    assert not sent

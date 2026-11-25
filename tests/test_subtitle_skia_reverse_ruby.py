@@ -239,9 +239,7 @@ def test_zero_duration_ruby_is_omitted_on_reverse_and_versioned_on_forward(binar
     assert all(frame.any() for frame in frames)
 
 
-@pytest.mark.parametrize('mutation', ['groups', 'lower_group', 'overlap_feature', 'overlap_value',
-                                      'clock', 'feature', 'forward_endpoint_shape', 'ruby_feature',
-                                      'ruby_schema', 'ruby_schema_type'])
+@pytest.mark.parametrize('mutation', ['groups', 'lower_group', 'overlap_value', 'clock', 'forward_endpoint_shape'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_invalid_reverse_ruby_ir_keeps_previous_scene(binary, marker_source, mutation, target):
     ir = ir_for(binary, reverse_source(marker_source, 'mixed'))
@@ -339,18 +337,6 @@ def test_reverse_ruby_matches_actual_d2d_gpu(binary, marker_source, case, effect
             full_a, full_b = sung(refs[-1]), sung(frames[-1])
             width = (full_a+full_b)/(2*(ya[-1]-ya[0]+1))
             assert abs(sung(a)/full_a-sung(b)/full_b)*width <= 1, (case, effect, semantics, dpr, t)
-
-
-def test_old_reverse_sidecar_is_rejected_before_selection(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready.pop('reverse_overlap_schema'); sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='反向走字重叠终点'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 def test_reverse_line_without_annotations_uses_the_same_endpoints(binary, marker_source):

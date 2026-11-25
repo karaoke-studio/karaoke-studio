@@ -100,46 +100,6 @@ def test_cell_box_metrics_come_from_authored_nominal_glyphs(binary, tmp_path):
     assert placed(missing)[0][2:] == (0, 3) and design(missing) == (1100, 50, 50)
 
 
-@pytest.mark.parametrize('payload', ['missing', 'bool', 'version', 'string'])
-def test_old_cell_glyph_sidecars_are_rejected_before_measurement_or_selection(binary, monkeypatch, payload):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try:
-        ready = NativeRendererProcess.start(process)
-    finally:
-        process.abort(reason='cell glyph handshake fixture')
-    assert ready['cell_glyph_schema'] == 1
-    if payload == 'missing': del ready['cell_glyph_schema']
-    else: ready['cell_glyph_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(NativeRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(NativeRendererProcess, '_send', lambda self, p: sent.append(p))
-    for cls in (SkiaTextMetricsProcess, SkiaRendererProcess):
-        with pytest.raises(NativeRendererError, match='单元字形策略'):
-            cls(binary).start()
-    assert not sent
-
-
-@pytest.mark.parametrize('payload', ['missing', 'bool', 'version', 'string'])
-def test_native_measurement_requires_the_requested_cell_glyph_policy(binary, monkeypatch, tmp_path, payload):
-    path = make_font(tmp_path / 'base.ttf')
-    original = SkiaTextMetricsProcess._send
-
-    def send(self, request):
-        if request.get('cmd') == 'measure_text':
-            request = dict(request)
-            if payload == 'missing': del request['cell_glyph_schema']
-            else: request['cell_glyph_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
-        return original(self, request)
-
-    with SkiaTextMetricsProcess(binary) as process:
-        assert measure(process, path, ['fi'])[0]['glyphs']
-        monkeypatch.setattr(SkiaTextMetricsProcess, '_send', send)
-        with pytest.raises(NativeRendererError, match='单元字形策略'):
-            measure(process, path, ['fi'])
-
-
 @pytest.mark.parametrize('forgery', ['old_identity', 'ligature_glyph', 'composed_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_forged_or_old_cell_snapshots_keep_the_previous_scene(binary, project, forgery, target):
@@ -282,43 +242,6 @@ def test_face_without_os2_keeps_hhea_line_box(binary, tmp_path):
     assert (run['font_metrics']['ascent'], run['font_metrics']['descent']) == pytest.approx((900, 400), abs=1e-3)
 
 
-@pytest.mark.parametrize('payload', ['missing', 'bool', 'version', 'string'])
-def test_old_vertical_metrics_sidecars_and_requests_are_rejected(binary, monkeypatch, tmp_path, payload):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try:
-        ready = NativeRendererProcess.start(process)
-    finally:
-        process.abort(reason='vertical metrics handshake fixture')
-    assert ready['vertical_metrics_schema'] == 1
-    bad = dict(ready)
-    if payload == 'missing': del bad['vertical_metrics_schema']
-    else: bad['vertical_metrics_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
-    sent = []
-    with monkeypatch.context() as patch:
-        patch.setattr(NativeRendererProcess, 'start', lambda self: bad)
-        patch.setattr(NativeRendererProcess, 'abort', lambda *a, **k: None)
-        patch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-        patch.setattr(NativeRendererProcess, '_send', lambda self, p: sent.append(p))
-        for cls in (SkiaTextMetricsProcess, SkiaRendererProcess):
-            with pytest.raises(NativeRendererError, match='纵向度量'):
-                cls(binary).start()
-    assert not sent
-    path = make_font(tmp_path / 'base.ttf')
-    original = SkiaTextMetricsProcess._send
-
-    def send(self, request):
-        if request.get('cmd') == 'measure_text':
-            request = dict(request)
-            if payload == 'missing': del request['vertical_metrics_schema']
-            else: request['vertical_metrics_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
-        return original(self, request)
-
-    with SkiaTextMetricsProcess(binary) as metrics:
-        monkeypatch.setattr(SkiaTextMetricsProcess, '_send', send)
-        with pytest.raises(NativeRendererError, match='纵向度量'):
-            measure(metrics, path, ['A'])
-
-
 VERTICAL_CASES = [*[(name, sem, dpr, False, False, 'plain') for name in VERTICAL_FONTS
                     for sem, dpr in (('legacy', 1.5), ('n3_1074', 1))],
                   ('win_over_hhea', 'n3_1074', 1.5, True, True, 'roles'),
@@ -386,27 +309,6 @@ def test_empty_cells_keep_authored_clocks_and_inkless_boxes(binary, project, rtl
     assert ir['track']['lines'][0]['resolved_intervals'] == lettered['track']['lines'][0]['resolved_intervals']
     if reverse:
         assert [c['clock_index'] for c in cells] == [3, 2, 1, 0]
-
-
-@pytest.mark.parametrize('payload', ['missing', 'bool', 'version', 'string'])
-def test_old_empty_cell_sidecars_are_rejected_before_measurement_or_selection(binary, monkeypatch, payload):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try:
-        ready = NativeRendererProcess.start(process)
-    finally:
-        process.abort(reason='empty cell handshake fixture')
-    assert ready['empty_cell_schema'] == 1
-    if payload == 'missing': del ready['empty_cell_schema']
-    else: ready['empty_cell_schema'] = {'bool': True, 'version': 2, 'string': '1'}[payload]
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(NativeRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(NativeRendererProcess, '_send', lambda self, p: sent.append(p))
-    for cls in (SkiaTextMetricsProcess, SkiaRendererProcess):
-        with pytest.raises(NativeRendererError, match='空文本'):
-            cls(binary).start()
-    assert not sent
 
 
 @pytest.mark.parametrize('forgery', ['glyph', 'advance', 'text'])

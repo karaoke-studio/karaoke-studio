@@ -116,25 +116,6 @@ def test_vertical_decoration_fades_as_a_complete_layer(binary, project, target, 
         assert delta.max() <= 2, (time, pos, actual[pos[:2]], baseline[pos[:2]], delta.max())
 
 
-@pytest.mark.parametrize('mutation', ['missing', 'schema', 'unsupported'])
-def test_invalid_fade_profile_preserves_the_previous_scene(binary, project, mutation):
-    ir = ir_for(binary, fade_project(project))
-    bad = copy.deepcopy(ir)
-    if mutation == 'missing':
-        bad['required_features'].remove('p07_line_fade')
-    elif mutation == 'schema':
-        bad['skia_layout']['line_fade_schema'] = True
-    else:
-        bad['track']['lines'][0]['entry_anim'] = 'rise'
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, ir)
-        before, _ = collect(process, [300])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
-        after, _ = collect(process, [300], generation=2)
-    assert np.array_equal(before[0], after[0])
-
-
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('case,dpr', [('plain', 1), ('outlines', 1.5), ('guide', 1), ('vertical_ruby', 1.5)])
 def test_line_fade_matches_actual_gpu(binary, project, case, dpr):

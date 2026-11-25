@@ -75,13 +75,10 @@ def test_multiple_sources_validate_all_sources_before_replacing_scene(binary, mu
     assert valid[1]['style']['timing_offset_ms'] == 110
     mutations = []
     for key, value in [('screen', {**ir['screen'], 'width': 641}), ('skia_extra_sources', []),
-                       ('skia_layout', None), ('required_features', ['p08_static_line_band'])]:
+                       ('skia_layout', None)]:
         invalid = copy.deepcopy(ir)
         invalid['skia_extra_sources'][1][key] = value
         mutations.append(invalid)
-    undeclared = copy.deepcopy(ir)
-    undeclared['required_features'].remove('p08_multiple_sources')
-    mutations.append(undeclared)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         process.configure(main, style, extra_tracks=extras, width=640, height=360, fps=60)
         before, _ = collect(process, [1200])
@@ -251,15 +248,6 @@ def test_unsupported_grid_settings_fail_without_replacing_scene(binary,grid,muta
         with pytest.raises(NativeRendererError):process.configure(track,replace(style,**changes),width=640,height=360,fps=60)
         after,_=collect(process,[1400],generation=2)
         assert np.array_equal(before[0],after[0])
-
-
-def test_old_sidecar_without_grid_capability_is_rejected(monkeypatch,tmp_path):
-    executable=tmp_path/'old';executable.touch()
-    ready={'ok':True,'backend':'skia','schema':3,'selection_version':1,'resolved_layout_schema':2,
-        'profiles':['p05_resolved_horizontal','p05_single_line_placement','p05_inline_roles'],'execution_targets':['raster']}
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    with pytest.raises(NativeRendererError,match='多行网格'):SkiaRendererProcess(executable).start()
 
 
 @pytest.mark.parametrize('lane',[-1,32,.5,'1',None])

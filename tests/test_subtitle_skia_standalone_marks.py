@@ -114,7 +114,7 @@ def test_upper_and_lower_keep_part_local_marks_and_pauses(binary,mark_source,kin
     for a,b in zip(*output,strict=True):assert np.abs(a.astype(float)-b).mean()<.3
 
 
-@pytest.mark.parametrize('mutation',['feature','schema','type','glyph_text','circle','position','selected_font'])
+@pytest.mark.parametrize('mutation',['glyph_text', 'circle', 'position', 'selected_font'])
 def test_bad_standalone_contract_preserves_old_scene(binary,mark_source,mutation):
     ir=ir_for(binary,marked(mark_source));bad=copy.deepcopy(ir)
     unit=bad['skia_layout']['lines'][0]['ruby_groups'][0]['units'][1]
@@ -227,14 +227,3 @@ def test_standalone_mark_matches_d2d_gpu(binary,mark_source,kind,mode,semantics,
             width=(full_a+full_b)/(2*(band[3]-band[1]+1))
             assert abs(sung(a)/full_a-sung(b)/full_b)*width<=1,(kind,mode,dpr,t,band)
 
-
-def test_old_sidecar_cannot_silently_accept_standalone_marks(binary,monkeypatch):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try:ready=NativeRendererProcess.start(process)
-    finally:process.abort(reason='handshake fixture')
-    ready.pop('standalone_mark_schema');sent=[]
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
-    with pytest.raises(NativeRendererError,match='独立组合标记'):SkiaRendererProcess(binary).start()
-    assert not sent

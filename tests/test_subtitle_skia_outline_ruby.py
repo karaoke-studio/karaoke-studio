@@ -218,23 +218,6 @@ def test_outlined_lower_ruby_replays_all_three_bands(binary, source, target, out
     assert np.array_equal(frames[1], frames[-1])
 
 
-@pytest.mark.parametrize('mutation', [ 'outline_feature'])
-def test_outlined_ruby_without_capability_keeps_previous_scene(binary, reading, mutation):
-    ir = upper_ir(binary, upper_source(reading, 2), 1)
-    bad = copy.deepcopy(ir)
-    if mutation == 'feature':
-        bad['required_features'].remove('p06_outline_ruby')
-    else:
-        bad['required_features'] = [f for f in bad['required_features'] if 'solid_outline' not in f]
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, ir)
-        before, _ = collect(process, [1100])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
-        after, _ = collect(process, [1100], generation=2)
-    assert before[0][..., 3].any() and np.array_equal(before, after)
-
-
 def annotated_paint(style, layers, translucent=False):
     alpha = 'A0' if translucent else 'FF'
     colors_ = colors(f'#{alpha}FF0000', f'#{alpha}00FF00')
@@ -260,13 +243,9 @@ def test_horizontal_annotation_outlines_share_the_authored_domain(binary, readin
     times = [550, 1100, 2300]
     local = upper_ir(binary, horizontal_ruby_outline(reading, False), 1)
     shared = upper_ir(binary, horizontal_ruby_outline(reading, True), 1)
-    invalid = copy.deepcopy(shared)
-    invalid['required_features'].remove('p06_ruby_horizontal_outline')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, shared)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError, match='注音描边'):
-            configure(process, invalid)
         replay, _ = collect(process, times[::-1], generation=2)
         configure(process, local)
         local_frames, _ = collect(process, times, generation=3)
@@ -301,13 +280,9 @@ def test_vertical_gradient_on_both_annotation_outline_layers(binary, reading):
     style = replace(style, ruby_karaoke_colors=replace(palette, before=before, after=after))
     ir = upper_ir(binary, (track, style), 1)
     assert ir['skia_layout']['ruby_outline_gradient_schema'] == 1
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p06_ruby_outline_gradient')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [250, 1000, 2300])
-        with pytest.raises(NativeRendererError, match='注音描边'):
-            configure(process, invalid)
         replay, _ = collect(process, [1000], generation=2)
     assert np.array_equal(frames[1], replay[0])
     # The before primary ring varies red and the after outer ring varies blue.
@@ -327,13 +302,9 @@ def test_annotated_solid_outlines_preserve_final_wipe_and_replay(binary, reading
     assert 'p06_ruby_solid_outline' in ir['required_features'] and layout['ruby_solid_outline_schema'] == 1
     ruby = layout['lines'][0]['ruby_groups'][0]
     assert set(ruby['outlines']) == {'stroke', 'stroke2'}
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_ruby_solid_outline')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [299, 900, 2300, 900])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         again, _ = collect(process, [900], generation=2)
     assert np.array_equal(frames[1], frames[-1]) and np.array_equal(frames[1], again[0])
     assert not np.array_equal(frames[0], frames[2])
@@ -399,19 +370,6 @@ def test_annotation_outline_width_follows_the_whole_reading_script(binary, readi
     gpu, raster = render_skia(binary, ir, UPPER_TIMES)
     assert_annotated_parity(UPPER_TIMES, refs, gpu, (text, width), 2)
     assert_annotated_parity(UPPER_TIMES, gpu, raster, (text, width, 'raster'), 2)
-
-
-def test_old_sidecar_without_outlined_ruby_is_rejected(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready['profiles'] = [p for p in ready['profiles'] if p != 'p06_outline_ruby']
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='描边正文与注音'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

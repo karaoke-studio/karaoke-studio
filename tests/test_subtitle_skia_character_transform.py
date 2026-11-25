@@ -89,8 +89,7 @@ def test_zero_duration_transform_draws_the_unanimated_frame(binary, project):
     assert np.array_equal(frames, expected)
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 9, 'missing_pivot', 'pivot_type',
-                                      'inverted_cell', 'unclaimed_pivot'])
+@pytest.mark.parametrize('mutation', ['missing_pivot', 'pivot_type', 'inverted_cell', 'unclaimed_pivot'])
 def test_forged_transform_ir_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, transform_source(project))
     bad = copy.deepcopy(ir)
@@ -136,19 +135,6 @@ def test_gpu_and_raster_agree_under_independent_seeks(binary, project, entry, ex
         assert within_one_pixel(a[..., 3] > 127, b[..., 3] > 127), t
         delta = abs(premultiplied(a) - premultiplied(b))
         assert delta.mean() < .15 and np.mean(delta.max(axis=-1) > 16) < .003, (t, delta.mean())
-
-
-def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready.pop('character_transform_schema')
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='逐字变换'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

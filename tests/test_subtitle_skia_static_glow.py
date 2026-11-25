@@ -60,10 +60,6 @@ def test_static_glow_palette_preserves_geometry_and_replay(binary, project, case
         configure(process, ir)
         frames, _ = collect(process, frames_at)
         if case != 'zero':
-            bad = copy.deepcopy(ir)
-            bad['required_features'].remove('p06_static_glow')
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
             after, _ = collect(process, [750], generation=2)
             assert np.array_equal(frames[1], after[0])
         configure(process, plain)
@@ -284,14 +280,10 @@ def test_plain_gradient_glow_keeps_previous_scene_when_capability_is_missing(
     ir = upper_ir(binary, (track, style), 1)
     assert 'p06_gradient_glow' in ir['required_features']
     assert 'p06_role_body_paints' not in ir['required_features']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_gradient_glow')
     times = (299, 750, 1750)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, tuple(reversed(times)), generation=2)
     assert any(frame[..., 3].max() > 16 for frame in frames)
     for frame, again in zip(frames, reversed(replay), strict=True):

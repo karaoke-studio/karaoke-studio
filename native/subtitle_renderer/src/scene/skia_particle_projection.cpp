@@ -142,22 +142,6 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
             || source.exitAnimation == "slide_out" || source.exitAnimation == "rise");
     // Singing particles follow the existing burst clocks. The line
     // display window determines visibility without rewriting those clocks.
-    if ((cfg.vertical && !verticalParticles) || (cfg.rightToLeft && !rtlSinging)
-        || (source.wipeReverse && !source.scanlineEnabled && !verticalParticles && !reverseSinging)
-        || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
-            && !scaledSinging && !verticalParticles && !noWipeSinging)
-        || (!verticalParticles && !fadedBand && !horizontalMotion && !energyLineMotion
-            && ((source.entryAnimation != "none" && entry.isEmpty())
-            || (source.exitAnimation != "none" && exit.isEmpty())))
-        || (animated && source.scanlineEnabled && !petalWithBand)
-        || (noteExit && !petalWithBand)
-        || (annotated && (!rubyParticles || (animated && !composedTransition)
-            || (source.scanlineEnabled && !rubyScanline && !verticalBand)))
-        || (!rubyParticles && !outlinedVertical && !fadedBand && !energyOutlines && !outlinedPlainScale && !outlinedUnscaled
-            && (style.strokeWidthPx > 0 || style.stroke2WidthPx > 0))
-        || !source.displayStartMs || !source.displayEndMs
-        || source.fxBursts.size() > 4096)
-        (void)0 /* composition gate lifted */;
     line.bursts.reserve(source.fxBursts.size());
     // Particle paints attach to each burst whatever the line does, as in Direct2D.
     const bool paintedSprites = features.contains("p07_singing_sprite_paints");

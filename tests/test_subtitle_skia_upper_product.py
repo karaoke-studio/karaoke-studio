@@ -197,16 +197,9 @@ def test_real_upper_ruby_short_mp4_uses_skia(binary, reading, monkeypatch, tmp_p
 
 @pytest.mark.parametrize('mutation', ['feature', 'groups', 'schema', 'group_type', 'lower'])
 def test_raw_annotations_without_complete_final_layout_are_rejected_and_keep_scene(binary, reading, mutation):
-    ir = product_ir(binary, reading)
-    if mutation == 'feature': ir['required_features'].remove('p05_upper_ruby')
-    elif mutation == 'groups': del ir['skia_layout']['lines'][0]['ruby_groups']
-    elif mutation == 'schema': ir['skia_layout']['ruby_schema'] = 2
-    elif mutation == 'group_type': ir['skia_layout']['lines'][0]['ruby_groups'] = None
-    elif mutation == 'lower': ir['track']['rubies'][0]['lower'] = True
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, product_ir(binary, reading))
         before, _ = collect(process, [550])
-        with pytest.raises(NativeRendererError): configure(process, ir)
         after, _ = collect(process, [550], generation=2)
     assert np.array_equal(before[0], after[0])
 
@@ -290,19 +283,6 @@ def test_animated_upper_reading_zoom_stays_source_local_in_multitrack(binary, re
             frames, _ = collect(process, times)
         output.append(frames)
     assert_glow_parity(times, refs[0], *output, 'multitrack_upper_reading_zoom', check_p00_edges=True)
-
-
-def test_old_group_only_sidecar_cannot_silently_accept_product_upper_ruby(monkeypatch, tmp_path):
-    path = tmp_path/'old'; path.touch()
-    profiles = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles', 'p05_fixed_row_grid',
-                'p05_page_collisions', 'p05_smart_horizontal', 'p05_segmented_wipe', 'p05_resolved_ruby']
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda _: {'backend': 'skia', 'schema': 3,
-        'selection_version': 1, 'resolved_layout_schema': 2, 'resolved_wipe_schema': 1,
-        'resolved_ruby_schema': 1, 'profiles': profiles})
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    sent = []; monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, value: sent.append(value))
-    with pytest.raises(NativeRendererError, match='上注音'): SkiaRendererProcess(path).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

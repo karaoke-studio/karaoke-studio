@@ -219,21 +219,6 @@ def write_body_gradient_bounds(ir, plan):
         ordinary_vector_paint = (static_directional
                                  or (not (look.vertical or directional) and source.get('karaoke_anim') == 'none'
                                      and (animations == {'none'} or paint_fade)))
-        if (not modes <= (_GRADIENTS | {'solid', 'image'})
-                or (look.vertical and not static_vertical)
-                or (directional and not (static_directional or static_vertical or (singing and unannotated_singing)))
-                or (not (faded_band or palette_band or moving or paint_fade or paint_scanline) and (animations != {'none'}
-                                                  or source.get('scanline') or source.get('fx_bursts')))
-                or source.get('stroke_flash')
-                or (source.get('karaoke_anim') not in {'none', 'no_wipe'} and not singing)
-                or (look.lower_ruby_enabled and not (particle_band
-                    and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
-                or any(c.role_label is not None for c in item.render_line.chars)
-                or (not bitmap_paints and any(guide_symbol_is_bitmap(c.vector_glyph) for c in item.render_line.chars))
-                or (not (ordinary_vector_paint or moving or vector_band)
-                    and any(c.vector_glyph is not None and not guide_symbol_is_bitmap(c.vector_glyph)
-                            for c in item.render_line.chars))):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         ruby_paint |= annotated or (moving and upper_ruby)
         singing_paint |= singing and (annotated or moving)
         unannotated_singing_paints |= singing and unannotated_singing
@@ -246,8 +231,6 @@ def write_body_gradient_bounds(ir, plan):
         directional_paints |= static_directional
         vertical_paints |= static_vertical
         if annotated:
-            if (faded_band or palette_band or moving) and not ruby_modes <= {'solid', 'gradient_vertical'}:
-                pass  # Composition gate lifted: layers compose as in Direct2D.
             ruby_gradient = ruby_gradient or bool(modes & _GRADIENTS and ruby_modes & _GRADIENTS)
             ruby_image = ruby_image or ('image' in modes and 'image' in ruby_modes)
         images = images or 'image' in modes

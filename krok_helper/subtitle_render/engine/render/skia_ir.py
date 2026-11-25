@@ -137,11 +137,6 @@ def _validate_stroke_flash(plan, lines, ruby):
         if not line.get('stroke_flash'):
             continue
         look = item.layout_style
-        if (look.vertical or look.right_to_left or item.line.wipe_reverse
-                or not ordinary_line_animation(line)
-                or line.get('karaoke_anim') not in {'none', 'utopia', 'no_wipe'}
-                or line.get('fx_bursts') or uses_authored_decoration(look, 'shadow')):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         readings = ruby.lines[index].rubies if ruby is not None else ()
         composed = (composed or bool(readings) or uses_authored_decoration(look, 'glow')
                     or line.get('karaoke_anim') != 'none' or line.get('scanline'))
@@ -158,15 +153,6 @@ def _validate_noise_transition(plan, lines, ruby):
         look = item.layout_style
         readings = ruby.lines[index].rubies if ruby is not None else ()
         lower_reading = any(group.target.lower for group in readings)
-        if (look.vertical or look.right_to_left or item.line.wipe_reverse
-                or entry not in {'noise', 'none'} or exit_ not in {'noise', 'none'}
-                or line.get('karaoke_anim') not in {'none', 'utopia'} or (line.get('zoom_pulse') and not readings)
-                or (lower_reading and (line.get('karaoke_anim') != 'none'
-                    or any(group.target.lower and set(ruby_decoration_kinds(group.target.style)) != {'none'}
-                           for group in readings)))
-                or line.get('scanline') or line.get('stroke_flash') or line.get('fx_bursts')
-                or uses_authored_decoration(look, 'shadow')):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         composed = (composed or bool(readings) or line.get('karaoke_anim') == 'utopia'
                     or uses_authored_decoration(look, 'glow'))
     return composed
@@ -213,14 +199,6 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
                        and not (look.stroke2_enabled and look.stroke2_width_px))
         styled = (simple and styled_cells and not reversed_flow
                   and ordinary_line_animation(source, extra_modes=('char_drip', 'spin_flip')))
-        if (look.vertical or (reversed_flow and not directional)
-                or (index not in character_warp_lines and index not in composed_geometry_lines
-                    and ((source.get('karaoke_anim') != 'none' and not whole_cell) or readings))
-                or (source.get('scanline') and item.track_index not in particle_band_tracks
-                    and not transformed_cell_band(source, look))
-                or any(group.get('lower') for group in readings)
-                or (styled_cells and not styled)):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         entry = source.get('entry_anim') in _TRANSFORMS and source['entry_duration_ms'] > 0
         exit_ = source.get('exit_anim') in _TRANSFORMS and source['exit_duration_ms'] > 0
         if not (entry or exit_):
@@ -236,8 +214,6 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
                 # Outline paths take the same per-cell transform as the body; the glow-out
                 # halo of an outline still differs from the existing GPU.
                 outlined_geometry = True
-            else:
-                pass  # Composition gate lifted: layers compose as in Direct2D.
         if not geometry and not readings and (look.stroke_width_px > 0 or look.stroke2_enabled):
             colors = effective_karaoke_colors(look)
             layers = ['text']
@@ -354,12 +330,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                            and (c.vector_glyph.bitmap_no_decor or glow))
                            for c in item.render_line.chars))
         modes = {'none', 'utopia'} if avatar_only or singing else {'none'}
-        if (not ordinary_line_animation(source)
-                or source.get('karaoke_anim') not in modes
-                or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                or (not avatar_only and (item.layout_style.right_to_left
-                    or (singing and _inline_role_labels(item))))):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         if avatar_only:
             # Direct2D poses no bitmap glyphs. Retain the resolved clock and skip glyph transforms.
             source['karaoke_anim'] = 'none'
@@ -461,8 +431,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                         body_glow = uses_authored_decoration(look, 'glow')
                         reading_glow = 'glow' in ruby_decorations
                         glow_allowed = not paired and (not with_flame or note_exit)
-                        if 'shadow' in ruby_decorations or ((body_glow or reading_glow) and not glow_allowed):
-                            pass  # Composition gate lifted: layers compose as in Direct2D.
                         particle_entry_glow |= body_glow
                         particle_entry_reading_glow |= reading_glow and not body_glow
                         symbol_entry_glow |= body_glow and entry in RUBY_SYMBOL_ENTRIES
@@ -544,12 +512,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
         overlapping = [ir['track']['lines'][item.track_index]
                        for item, line in zip(plan.lines, lines, strict=True) if line.get('vertical_overlapping_ruby')]
         if overlapping:
-            if (any(vertical_ruby.get(f'ruby_{kind}_schema') for kind in ('solid_outline', 'glow', 'shadow'))
-                    or any(source.get('karaoke_anim') != 'none'
-                           or {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
-                           or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                           for source in overlapping)):
-                pass  # Composition gate lifted: layers compose as in Direct2D.
             ir['required_features'].append('p05_vertical_overlapping_ruby')
         if vertical_ruby.get('vertical_ruby_shift_schema'):
             ir['required_features'].append('p05_vertical_shifted_ruby')
@@ -577,11 +539,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
     if any(item.layout_style.vertical for item in vector_guide_lines):
         for item in vector_guide_lines:
             source = ir['track']['lines'][item.track_index]
-            if item.layout_style.vertical and (
-                    not ordinary_line_animation(source)
-                    or source.get('karaoke_anim') not in {'none', 'no_wipe'}
-                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))):
-                pass  # Composition gate lifted: layers compose as in Direct2D.
         ir['required_features'].append('p05_vertical_vector_guides')
     declare_line_animations(ir)
     fade_lines = set()
@@ -638,13 +595,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 solid_shadows = all(palette.before.shadow.mode == palette.after.shadow.mode == 'solid'
                                     for palette in palettes)
                 singing &= solid_shadows
-            if (look.vertical or look.right_to_left or item.line.wipe_reverse or look.lower_ruby_enabled
-                    or (track.rubies and moving)
-                    or (source.get('karaoke_anim') != 'none' and not singing)
-                    or not ordinary_line_animation(source)
-                    or any(source.get(flag) for flag in ('scanline', 'zoom_pulse', 'stroke_flash', 'fx_bursts'))
-                    or (bitmap and (moving or singing or not solid_shadows))):
-                pass  # Composition gate lifted: layers compose as in Direct2D.
             role_shadow_motion |= moving
             role_shadow_singing |= singing
         ir['required_features'].append('p06_role_static_shadow')
@@ -663,10 +613,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                              and any(uses_authored_decoration(item.layout_style, kind) for kind in decorations)]
         for item in decorated_reverse:
             source = ir['track']['lines'][item.track_index]
-            if (source.get('karaoke_anim') not in {'none', 'no_wipe'} or not ordinary_line_animation(source)
-                    or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
-                    or _inline_role_labels(item)):
-                pass  # Composition gate lifted: layers compose as in Direct2D.
         if decorated_reverse:
             ir['required_features'].append('p06_reverse_decoration')
             if any(ir['track']['lines'][item.track_index].get('karaoke_anim') == 'no_wipe' for item in decorated_reverse):
@@ -686,11 +632,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
         vertical_no_wipe = bool(vertical_paints) and any(
             line.get('karaoke_anim') == 'no_wipe' for line in ir['track']['lines'])
         modes = {'none', 'no_wipe'} if vertical_no_wipe else {'none'}
-        if any((index not in vertical_singing and line.get('karaoke_anim') not in modes)
-               or not ordinary_line_animation(line)
-               or line.get('stroke_flash') or (line.get('fx_bursts') and not vertical_singing_particle_modes(line))
-               for index, line in enumerate(ir['track']['lines'])):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         if any(line.get('fx_bursts') for line in ir['track']['lines']):
             ir['required_features'].append('p07_vertical_decorated_singing_particles')
         if 'p07_vertical_scanline_band' in ir['required_features']:
@@ -776,16 +717,6 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 moving = {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                 karaoke = source.get('karaoke_anim')
                 has_lower = any(group.target.lower for group in reading.rubies)
-                if has_lower and (moving or karaoke != 'none' or any(
-                        group.target.lower and set(ruby_decoration_kinds(group.target.style)) != {'none'}
-                        for group in reading.rubies)):
-                    pass  # Composition gate lifted: layers compose as in Direct2D.
-                if (item.line.wipe_reverse
-                        or karaoke not in {'none', 'no_wipe', 'utopia'} or source.get('zoom_pulse')
-                        or (moving and not ordinary_line_animation(source))
-                        or source.get('scanline') or source.get('stroke_flash') or source.get('fx_bursts')
-                        or (shadow and karaoke == 'utopia')):
-                    pass  # Composition gate lifted: layers compose as in Direct2D.
                 rtl_without_body_stroke |= look.stroke_width_px <= 0
                 rtl_shadow |= shadow
                 rtl_motion |= moving and karaoke == 'utopia'

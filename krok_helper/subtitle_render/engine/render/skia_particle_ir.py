@@ -241,25 +241,6 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                         and ({entry, exit_} <= ENERGY_TRANSITIONS | {'none'} or energy_motion))
         entry_sweep = 1 if entry_kind in FALLING_PARTICLES else 0
         exit_sweep = -1 if exit_kind in FALLING_PARTICLES else 0
-        if ((look.vertical and not vertical_particles) or (look.right_to_left and not rtl_singing)
-                or (item.line.wipe_reverse and not (band or vertical_particles or reverse_singing))
-                or (source.get('karaoke_anim') != 'none' and not (scaled_singing or vertical_particles or no_wipe_singing))
-                or (not (vertical_particles or faded_band or unscaled_motion or energy_motion)
-                    and entry != 'none' and (not entry_kind or entry == 'dissolve_out'))
-                or (not (vertical_particles or faded_band or unscaled_motion or energy_motion)
-                    and exit_ != 'none' and (not exit_kind or exit_ == 'assemble_in'))
-                or (animated and ((band and not petal_with_band)
-                                  or (look.sing_fx != 'none' and not (petal_with_flame or energy_stars))))
-                or (has_lower and not (faded_band
-                    and 'p07_lower_ruby_scanline_singing_particles' in ir['required_features']))
-                or (annotated and animated and index not in composed_lines)
-                or (not (annotated or vertical_particles or faded_band or outlined_energy
-                         or outlined_singing or unscaled_outline) and outlined)
-                or (not static_sprite_paint and any(
-                    c.role_label is not None or (c.vector_glyph is not None and not faded_vector_guides
-                        and not (plain_scale and not item.line.wipe_reverse and not guide_symbol_is_bitmap(c.vector_glyph)))
-                    for c in chars))):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         horizontal_line_motion |= unscaled_motion
         plain_scaled_singing |= plain_scale
         plain_zoom_singing |= plain_scale and bool(source.get('zoom_pulse'))
@@ -304,12 +285,6 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
             if animated:
                 sweep = burst['sweep']
-                if not ((entry_kind and sweep == entry_sweep and kind in _transition_layers(entry_kind, True))
-                        or (exit_kind and sweep == exit_sweep and kind in _transition_layers(exit_kind, False))
-                        or (petal_with_flame and sweep == _FLAME_SINGING_SWEEPS.get(kind))
-                        or (energy_stars and (kind, sweep) in _SINGING_STARS)
-                        or (petal_with_band and kind == 'scanline' and sweep == 0)):
-                    pass  # Composition gate lifted: layers compose as in Direct2D.
             elif kind in {'fireball', 'flash', 'shockwave', 'ash'}:
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')
             if kind == 'ripple':

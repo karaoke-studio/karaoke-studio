@@ -147,18 +147,6 @@ def test_canonical_source_rows_never_query_the_qt_row_adapter(binary, mixed, mon
     assert ir['skia_layout']['lines'][0]['cells']
 
 
-def test_old_sidecar_without_placement_capability_is_rejected(monkeypatch,tmp_path):
-    executable=tmp_path/'old';executable.touch()
-    ready={'ok':True,'backend':'skia','schema':3,'selection_version':1,'resolved_layout_schema':2,
-           'profiles':['p05_resolved_horizontal'],'execution_targets':['raster']}
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    sent=[]
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,payload:sent.append(payload))
-    with pytest.raises(NativeRendererError,match='单行定位'): SkiaRendererProcess(executable).start()
-    assert not sent
-
-
 @pytest.mark.parametrize('semantics',['legacy','n3_1074'])
 def test_gpu_raster_placement_and_dpr(binary,mixed,semantics):
     track,style=mixed

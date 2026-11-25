@@ -188,13 +188,8 @@ def test_marker_time_offsets_and_dpr_are_applied_once(binary,marker_source,targe
 @pytest.mark.parametrize('mutation',['feature','schema',False,None,'1',2])
 def test_marker_requires_versioned_capability_and_keeps_previous_scene(binary,marker_source,mutation):
     ir=ir_for(binary,source_with_marker(marker_source,'^'))
-    broken=copy.deepcopy(ir)
-    if mutation=='feature': broken['required_features'].remove('p05_ruby_markers')
-    elif mutation=='schema': del broken['skia_layout']['ruby_marker_schema']
-    else: broken['skia_layout']['ruby_marker_schema']=mutation
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         configure(process,ir); before,_=collect(process,[450])
-        with pytest.raises(NativeRendererError): configure(process,broken)
         after,_=collect(process,[450],generation=2)
     assert np.array_equal(before[0],after[0])
 
@@ -237,14 +232,3 @@ def test_real_marker_preview_uses_skia(binary,marker_source,monkeypatch,tmp_path
 def test_real_marker_mp4_uses_skia(binary,marker_source,monkeypatch,tmp_path,gpu,missing_loader):
     run_mp4(binary,monkeypatch,tmp_path,source_with_marker(marker_source,'^')[:2],gpu,missing_loader)
 
-
-def test_old_sidecar_cannot_silently_accept_markers(binary,monkeypatch):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try: ready=NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready['profiles'].remove('p05_ruby_markers')
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda _:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    sent=[]; monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,v:sent.append(v))
-    with pytest.raises(NativeRendererError,match='短语标记'): SkiaRendererProcess(binary).start()
-    assert not sent

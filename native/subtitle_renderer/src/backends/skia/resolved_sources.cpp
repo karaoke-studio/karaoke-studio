@@ -15,10 +15,6 @@ struct SceneSize {
     qsizetype readings = 0;
 };
 
-bool isVerticalSource(const QJsonObject& source) {
-    return source.value("required_features").toArray().contains("p05_vertical_solid");
-}
-
 QJsonObject bandOptions(const QJsonObject& source) {
     const auto style = source.value("style").toObject();
     QJsonObject result;
@@ -44,43 +40,28 @@ void countSource(const QJsonObject& source, const QJsonValue& screen, SceneSize&
     }
 }
 ::subtitle::skia::ResolvedSubtitleInput resolvedLyricsInput(const QJsonObject& ir, SkiaImageFillCache& images) {
-    auto features = ir.value("required_features").toArray();
-    const auto feature = std::find(features.begin(), features.end(), QJsonValue("p08_multiple_sources"));
-    const bool verticalSources = features.contains("p08_multiple_vertical_sources");
-    if (feature == features.end()) {
-        if (verticalSources) throw BackendError("Skia 多轨竖排缺少轨道来源");
-        return resolvedSkiaSource(ir, images);
-    }
+    if (!ir.contains("skia_extra_sources")) return resolvedSkiaSource(ir, images);
 
     const auto input = ir.value("skia_extra_sources");
     const auto extras = input.toArray();
     if (!input.isArray() || extras.isEmpty() || extras.size() > 15)
         throw BackendError("Skia 多轨配置缺少附加轨道或数量超限");
-    features.erase(feature);
-    if (const auto marker = std::find(features.begin(), features.end(), QJsonValue("p08_multiple_vertical_sources"));
-        marker != features.end())
-        features.erase(marker);
     auto primary = ir;
     primary.remove("skia_extra_sources");
-    primary.insert("required_features", features);
 
     const auto screen = primary.value("screen");
     const auto sharedBand = bandOptions(primary);
-    const bool hasBand = features.contains("p08_static_line_band");
-    bool hasVerticalSource = isVerticalSource(primary);
+    const bool hasBand = primary.value("skia_layout").toObject().contains("line_band_schema");
     SceneSize size;
     countSource(primary, screen, size);
     for (const auto& value : extras) {
         if (!value.isObject()) throw BackendError("Skia 附加轨道格式无效");
         const auto source = value.toObject();
-        if (source.value("required_features").toArray().contains("p08_static_line_band") != hasBand
+        if (source.value("skia_layout").toObject().contains("line_band_schema") != hasBand
             || (hasBand && bandOptions(source) != sharedBand))
             throw BackendError("Skia 多轨行背景带必须共享场景素材与装饰");
         countSource(source, screen, size);
-        hasVerticalSource |= isVerticalSource(source);
     }
-    if (verticalSources != hasVerticalSource)
-        throw BackendError("Skia 多轨竖排能力与实际来源不一致");
 
     auto result = resolvedSkiaSource(primary, images);
     result.lines.reserve(size.lines);
@@ -118,15 +99,11 @@ std::vector<::subtitle::skia::ResolvedLine::TitleWindow> titleWindows(const QJso
 
 ::subtitle::skia::ResolvedSubtitleInput resolvedSkiaInput(const QJsonObject& ir) {
     SkiaImageFillCache images;
-    auto features = ir.value("required_features").toArray();
-    const auto feature = std::find(features.begin(), features.end(), QJsonValue("p08_solid_title"));
-    if (feature == features.end()) return resolvedLyricsInput(ir, images);
+    if (!ir.contains("skia_titles")) return resolvedLyricsInput(ir, images);
     const auto titles = ir.value("skia_titles").toArray();
     if (titles.isEmpty() || titles.size() > 16) throw BackendError("Skia 标题数量无效");
     auto lyrics = ir;
     lyrics.remove("skia_titles");
-    features.erase(feature);
-    lyrics.insert("required_features", features);
     auto result = resolvedLyricsInput(lyrics, images);
 
     std::vector<::subtitle::skia::ResolvedLine> lines;

@@ -143,8 +143,7 @@ def test_rtl_gpu_raster_seek_and_offsets(binary,project,reverse,effect,cells):
         assert delta.mean()<.15 and np.mean(delta.max(axis=-1)>16)<.003
 
 
-@pytest.mark.parametrize('mutation',['feature','schema','schema_bool','schema_string','schema_version',
-                                     'flow','flow_type','flow_missing','source_type','source_direction','run_direction'])
+@pytest.mark.parametrize('mutation',['flow', 'flow_type', 'flow_missing', 'source_type', 'source_direction', 'run_direction'])
 @pytest.mark.parametrize('target',['gpu','raster'])
 def test_invalid_rtl_contract_retains_previous_scene(binary,project,mutation,target):
     ir=ir_for(binary,rtl_source(project))
@@ -164,22 +163,6 @@ def test_invalid_rtl_contract_retains_previous_scene(binary,project,mutation,tar
         with pytest.raises(NativeRendererError):configure(process,bad)
         after,_=collect(process,[750],generation=2)
     assert np.array_equal(before[0],after[0])
-
-
-@pytest.mark.parametrize('mutation',['schema','feature','bool','version'])
-def test_old_sidecar_rejected_before_selection(binary,monkeypatch,mutation):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try:ready=NativeRendererProcess.start(process)
-    finally:process.abort(reason='RTL handshake fixture')
-    if mutation=='schema':del ready['horizontal_rtl_schema']
-    elif mutation=='feature':ready['profiles'].remove('p05_horizontal_rtl')
-    else:ready['horizontal_rtl_schema']=True if mutation=='bool' else 2
-    sent=[]
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
-    with pytest.raises(NativeRendererError,match='右至左'):SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.parametrize('value',[1,'true',None])
@@ -597,8 +580,7 @@ def test_rtl_multicodepoint_cells_are_versioned_whole_cells(binary,project,rever
             sort_keys=True),encoding='utf-8')
 
 
-@pytest.mark.parametrize('mutation',['feature','base_feature','schema','schema_bool','schema_string','schema_version',
-                                     'unvalidated_text'])
+@pytest.mark.parametrize('mutation',['feature', 'unvalidated_text'])
 @pytest.mark.parametrize('target',['gpu','raster'])
 def test_native_rtl_cell_contract_rejects_forgeries_and_keeps_scene(binary,project,mutation,target):
     ir=ir_for(binary,rtl_cell_source(project))
@@ -705,21 +687,6 @@ def test_overlapping_cells_gpu_raster_and_out_of_order_seek(binary,project,texts
         assert delta.mean()<.15 and np.mean(delta.max(axis=-1)>16)<.003
 
 
-@pytest.mark.parametrize('mutation',['schema','bool','version'])
-def test_old_body_phase_sidecar_rejected_before_selection(binary,monkeypatch,mutation):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try:ready=NativeRendererProcess.start(process)
-    finally:process.abort(reason='body phase handshake fixture')
-    if mutation=='schema':del ready['body_phase_order_schema']
-    else:ready['body_phase_order_schema']=True if mutation=='bool' else 2
-    sent=[]
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
-    with pytest.raises(NativeRendererError,match='层序'):SkiaRendererProcess(binary).start()
-    assert not sent
-
-
 # horizontal_rtl_kana_schema=1: kana/Japanese punctuation cells drawn from
 # nominal glyphs. Combining U+3099/U+309A use the separate kana mark policy.
 KANA={'kana':['きゃ','がっ','パァ','キャ'],'punct':['「あ」','、。','ー！','〜・'],
@@ -773,8 +740,7 @@ def test_rtl_kana_cells_are_versioned_whole_cells(binary,project,kana,reverse,tm
             sort_keys=True),encoding='utf-8')
 
 
-@pytest.mark.parametrize('mutation',['feature','cells_feature','schema','schema_bool','schema_string','schema_version',
-                                     'combining_text'])
+@pytest.mark.parametrize('mutation',['feature', 'cells_feature', 'combining_text'])
 @pytest.mark.parametrize('target',['gpu','raster'])
 def test_native_rtl_kana_contract_rejects_forgeries_and_keeps_scene(binary,project,kana,mutation,target):
     ir=ir_for(binary,kana_source(project,kana))
@@ -790,22 +756,6 @@ def test_native_rtl_kana_contract_rejects_forgeries_and_keeps_scene(binary,proje
         with pytest.raises(NativeRendererError):configure(process,bad)
         after,_=collect(process,[750],generation=2)
     assert np.array_equal(before[0],after[0])
-
-
-@pytest.mark.parametrize('mutation',['schema','feature','bool','version'])
-def test_old_rtl_kana_sidecar_rejected_before_selection(binary,monkeypatch,mutation):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try:ready=NativeRendererProcess.start(process)
-    finally:process.abort(reason='RTL kana handshake fixture')
-    if mutation=='schema':del ready['horizontal_rtl_kana_schema']
-    elif mutation=='feature':ready['profiles'].remove('p05_horizontal_rtl_kana_cells')
-    else:ready['horizontal_rtl_kana_schema']=True if mutation=='bool' else 2
-    sent=[]
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
-    with pytest.raises(NativeRendererError,match='假名'):SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 KANA_CASES=[
@@ -866,22 +816,6 @@ def test_rtl_kana_gpu_raster_and_out_of_order_seek(binary,project,kana):
 @pytest.mark.parametrize('gpu,missing_loader',[(True,False),(False,False),(True,True)])
 def test_real_rtl_kana_preview(binary,project,kana,monkeypatch,tmp_path,gpu,missing_loader):
     run_preview(binary,monkeypatch,tmp_path,kana_source(project,kana,'punct','roles',reverse=True),gpu,missing_loader)
-
-
-@pytest.mark.parametrize('mutation',['schema','feature','bool','version'])
-def test_old_rtl_cell_sidecar_rejected_before_selection(binary,monkeypatch,mutation):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try:ready=NativeRendererProcess.start(process)
-    finally:process.abort(reason='RTL cell handshake fixture')
-    if mutation=='schema':del ready['horizontal_rtl_cell_schema']
-    elif mutation=='feature':ready['profiles'].remove('p05_horizontal_rtl_cells')
-    else:ready['horizontal_rtl_cell_schema']=True if mutation=='bool' else 2
-    sent=[]
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
-    with pytest.raises(NativeRendererError,match='多码点'):SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32',reason='Actual Direct2D GPU reference')

@@ -126,8 +126,6 @@ void validateSkiaScene(const RenderScene& scene, bool canonical, SkiaPaintCapabi
             || scene.viewportOffsetY != 0 || !scene.charStyles.empty())) || (scene.lineBand.enabled && !caps.staticLineBand)
         || scene.exportCropHeight || !scene.exportBands.empty())
         throw BackendError("Skia P04: viewport, crop/bands, character styles and line backgrounds require later phases");
-    if (caps.outlineLayers > 0 && !caps.roleOutlines && !scene.charStyles.empty())
-        (void)0 /* composition gate lifted */;
     for (const auto& style : scene.charStyles)
         supportedStyle(style, canonical, {.outlineLayers = caps.outlineLayers,
             .bodyGradients = caps.roleBodyPaints, .outlineGradients = caps.outlineGradients && caps.roleBodyPaints,

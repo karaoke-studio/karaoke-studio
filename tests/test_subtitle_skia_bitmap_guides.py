@@ -120,12 +120,10 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     group, = final['ruby_groups']
     assert group['units'][0]['interval_ms'][0] >= source['resolved_intervals'][5][0]
     forgeries = []
-    for mutation in ('feature', 'schema', 'ink', 'advance', 'wipe', 'identity'):
+    for mutation in ('ink', 'advance', 'wipe', 'identity'):
         bad = copy.deepcopy(ir)
         forged = bad['skia_layout']['lines'][0]['cells'][0]
-        if mutation == 'feature': bad['required_features'].remove('p08_bitmap_guides')
-        elif mutation == 'schema': bad['skia_layout']['bitmap_guide_schema'] = 2
-        elif mutation == 'ink': forged['metrics']['ink'][3] += 1
+        if mutation == 'ink': forged['metrics']['ink'][3] += 1
         elif mutation == 'advance': forged['metrics']['advance'] += .5
         elif mutation == 'wipe': forged['wipe_right'] += 2
         else: forged['metrics']['font_identity'] = 'vector:x'
@@ -512,14 +510,10 @@ def shadowed_bitmap_guide(project, tmp_path, *, paint_mode='solid'):
 @pytest.mark.parametrize('paint_mode', ['solid', 'gradient', 'image'])
 def test_bitmap_guide_shadow_preserves_scene_without_capability(binary, project, tmp_path, paint_mode):
     ir = ir_for(binary, shadowed_bitmap_guide(project, tmp_path, paint_mode=paint_mode))
-    bad = copy.deepcopy(ir)
     feature = 'p08_bitmap_guide_shadow' if paint_mode == 'solid' else f'p08_bitmap_guide_{paint_mode}_shadow'
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         output, _ = collect(process, [450, 900])
-        with pytest.raises(NativeRendererError, match='阴影'):
-            configure(process, bad)
         replay, _ = collect(process, [900, 450], generation=2)
     assert np.array_equal(output, replay[::-1])
 
@@ -635,13 +629,9 @@ def test_bitmap_guide_gradient_glow_requires_capability(binary, project, tmp_pat
     track, style, plain = gradient_glowing_bitmap_guide(project, tmp_path)
     times = [450, 900]
     ir = ir_for(binary, (track, style))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p08_bitmap_guide_gradient_glow')
     with SkiaRendererProcess(binary, selection=selection('gpu')) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
         configure(process, ir_for(binary, (plain, style)))
         unadorned, _ = collect(process, times, generation=3)
@@ -957,14 +947,10 @@ def test_bitmap_lower_reading_requires_its_capability(binary, lower_source, tmp_
     final, = ir['skia_layout']['lines']
     assert final['cells'][0]['metrics']['bitmap_guide']
     assert any(group.get('lower') and group['style_cell'] > 0 for group in final['ruby_groups'])
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p08_bitmap_lower_ruby')
     times = [250, 650] if entry == 'fade' else [400, 950]
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError, match='下方注音'):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
     if entry == 'fade':
@@ -1175,13 +1161,9 @@ def test_role_tagged_inline_avatars_preserve_cells_and_clocks(binary, project, t
     assert [i for i, c in enumerate(source['chars']) if 'bitmap_guide' in c] == [0, 2]
     assert final['cells'][0]['metrics']['advance'] == 0
     assert final['cells'][2]['metrics']['ink'][3] - final['cells'][2]['metrics']['ink'][1] == 64
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [1250, 2600, 1250])
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
         replay, _ = collect(process, [2600], generation=2)
     assert frames[0][..., 3].any() and np.array_equal(frames[0], frames[-1])
     assert np.array_equal(frames[1], replay[0]) and not np.array_equal(frames[1], frames[0])

@@ -129,25 +129,6 @@ def test_use_edge2_off_matches_an_unset_width(binary, project, target):
     assert all(np.array_equal(a, b) for a, b in zip(before, after, strict=True))
 
 
-@pytest.mark.parametrize('mutation', ['schema', 'primary_feature', 'secondary_feature'])
-def test_native_requires_both_outline_capabilities(binary, project, mutation):
-    ir = ir_for(binary, two_outlines(project))
-    bad = copy.deepcopy(ir)
-    if mutation == 'schema':
-        bad['skia_layout']['secondary_solid_outline_schema'] = '1'
-    else:
-        bad['required_features'].remove(
-            'p06_primary_solid_outline' if mutation == 'primary_feature' else 'p06_secondary_solid_outline'
-        )
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, ir)
-        before, _ = collect(process, [750])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
-        after, _ = collect(process, [750], generation=2)
-    assert np.array_equal(before[0], after[0])
-
-
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('inner,body_alpha,inner_alpha,semantics,dpr,enabled', [
     (8, False, False, 'legacy', 1, True),

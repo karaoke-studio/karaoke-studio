@@ -106,7 +106,7 @@ def test_independent_lower_glow_tracks_its_own_phase(binary, glowing_lower, targ
         assert np.count_nonzero(match) > 100 and not np.any(wrong_phase)
 
 
-@pytest.mark.parametrize('mutation', [ 'schema', 'radius', 'phase', 'upper'])
+@pytest.mark.parametrize('mutation', ['radius', 'phase', 'upper'])
 def test_invalid_lower_glow_keeps_previous_scene(binary, glowing_lower, mutation):
     valid = ir_for(binary, glowing_lower)
     bad = copy.deepcopy(valid)
@@ -148,14 +148,10 @@ def test_lower_reading_line_band_preserves_reading_geometry(binary, source, tmp_
     assert len(ir['skia_layout']['lines']) == len(plain['skia_layout']['lines'])
     for line, normal in zip(ir['skia_layout']['lines'], plain['skia_layout']['lines'], strict=True):
         assert {key: value for key, value in line.items() if key != 'line_band_rect'} == normal
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     t = ir['track']['lines'][0]['display_start_ms'] + 50
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [t])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [t], generation=2)
     assert frames[0].any() and np.array_equal(frames[0], replay[0])
 
@@ -556,9 +552,7 @@ def test_role_lower_paint_and_two_line_source_ownership(binary, source):
     with SkiaRendererProcess(binary, selection=selection('raster')) as process: configure(process, ir)
 
 
-@pytest.mark.parametrize('mutation', ['feature','schema','overlap','source_missing','source_duplicate',
-    'source_line','source_target','source_reading','source_clock','paint_missing','paint_size',
-    'paint_nan','paint_fraction','paint_bool','paint_range','lower_bool','upper_paint'])
+@pytest.mark.parametrize('mutation', ['source_missing', 'source_duplicate', 'source_line', 'source_target', 'source_reading', 'source_clock', 'paint_missing', 'paint_size', 'paint_nan', 'paint_fraction', 'paint_bool', 'paint_range', 'lower_bool', 'upper_paint'])
 def test_invalid_lower_contract_keeps_previous_scene(binary, independent, mutation):
     valid = ir_for(binary, independent)
     ir = copy.deepcopy(valid)
@@ -624,15 +618,13 @@ def test_lower_image_shadow_validates_each_paint_before_replacing_scene(binary, 
     track, style, resolve = independent
     style = lower_image_shadow_style(style, write_png(tmp_path / 'shadow.png', pattern('transparent')))
     ir = ir_for(binary, (track, style, resolve))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_lower_ruby_shadow_image')
     invalid = copy.deepcopy(ir)
     group = next(group for group in invalid['skia_layout']['lines'][0]['ruby_groups'] if group.get('lower'))
     group['lower_shadow_image']['before']['scale_pct'] = 0
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [400, 950])
-        for rejected in (bad, invalid):
+        for rejected in (invalid,):
             with pytest.raises(NativeRendererError, match='下方注音图片'):
                 configure(process, rejected)
         after, _ = collect(process, [950, 400], generation=2)
@@ -869,19 +861,6 @@ def test_real_lower_product_matches_d2d(binary, source, semantics, independent, 
     import test_subtitle_skia_lower_geometry as probe
     monkeypatch.setattr(probe, 'probe_ir', lambda source, value, dpr=1: ir_for(binary, source, dpr=dpr))
     run_d2d(binary, source, semantics, independent, dpr)
-
-
-def test_old_upper_only_sidecar_rejected_before_selection(binary, monkeypatch):
-    # Obtain the actual ready envelope before selecting a backend.
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready['profiles'].remove('p05_lower_ruby')
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda _: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    sent=[]; monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self,value: sent.append(value))
-    with pytest.raises(NativeRendererError, match='下方注音'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

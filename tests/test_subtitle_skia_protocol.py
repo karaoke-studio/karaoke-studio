@@ -578,15 +578,6 @@ def test_title_bitmap_guides_use_before_image_at_every_time(binary, tmp_path, ta
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=640, height=360, fps=60)
         frames, _ = collect(process, [400, 500, 1800, 500, 1000])
-        if inline:
-            from test_subtitle_skia_resolved import ir_for
-
-            title = ir_for(binary, (track, style))['skia_titles'][0]['source']
-            process._send({'cmd': 'configure', 'ir': title})
-            with pytest.raises(NativeRendererError, match='横排位置或独立装饰'):
-                process._expect_ok(process._read_until_event('configured'))
-            replay, _ = collect(process, [500], generation=2)
-            assert np.array_equal(replay[0], frames[1])
     assert not frames[4].any()
     assert np.array_equal(frames[1], frames[2]) and np.array_equal(frames[1], frames[3])
     colors = frames[1][frames[1][..., 3] == 255, :3]
@@ -888,16 +879,38 @@ def test_selection_gpu_off_means_skia_raster(monkeypatch):
         SkiaSelection("qpainter")
 
 
-def test_old_sidecar_is_rejected_before_selection_or_configure(monkeypatch, tmp_path):
-    exe = tmp_path / "old-sidecar"
-    exe.touch()
-    monkeypatch.setattr(NativeRendererProcess, "start", lambda self: {"ok": True, "event": "ready", "schema": 3})
+@pytest.mark.parametrize("ready", [{}, {"skia_protocol": 0}, {"skia_protocol": "1"}, {"backend": "d2d"}])
+def test_sidecar_with_another_protocol_is_rejected_before_selection_or_measurement(binary, monkeypatch, ready):
+    """One protocol version replaces per-capability negotiation; the sidecar
+    and the IR builder ship from one source tree."""
+    from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
+    from krok_helper.subtitle_render.native.skia_process import SKIA_PROTOCOL
+
+    process = SkiaRendererProcess(binary, selection=selection("raster"))
+    try:
+        actual = NativeRendererProcess.start(process)
+    finally:
+        process.abort(reason="protocol handshake fixture")
+    assert actual["skia_protocol"] == SKIA_PROTOCOL and actual["backend"] == "skia"
+    assert "profiles" not in actual
+    forged = {**actual, **ready} if ready else {k: v for k, v in actual.items() if k != "skia_protocol"}
     sent = []
-    monkeypatch.setattr(SkiaRendererProcess, "_send", lambda self, payload: sent.append(payload))
-    monkeypatch.setattr(SkiaRendererProcess, "abort", lambda self, **kwargs: None)
-    with pytest.raises(NativeRendererError, match="握手"):
-        SkiaRendererProcess(exe).start()
+    monkeypatch.setattr(NativeRendererProcess, "start", lambda self: forged)
+    monkeypatch.setattr(NativeRendererProcess, "abort", lambda *a, **k: None)
+    monkeypatch.setattr(NativeRendererProcess, "_send", lambda self, payload: sent.append(payload))
+    for cls in (SkiaTextMetricsProcess, SkiaRendererProcess):
+        with pytest.raises(NativeRendererError, match="协议版本"):
+            cls(binary).start()
     assert not sent
+
+
+def test_measurement_request_with_another_protocol_is_rejected(binary):
+    from krok_helper.subtitle_render.native.skia_text import SkiaTextMetricsProcess
+
+    with SkiaTextMetricsProcess(binary) as process:
+        process._send({"cmd": "measure_text", "skia_protocol": 0, "fonts": {}, "runs": []})
+        with pytest.raises(NativeRendererError, match="协议版本"):
+            process._expect_ok(process._read_until_event("text_measured"))
 
 
 @pytest.mark.parametrize("target", ["gpu", "raster"])
@@ -1017,7 +1030,7 @@ def test_unicode_font_resource_path(binary, tmp_path):
         assert frames[0][..., 3].max() > 0
 
 
-@pytest.mark.parametrize("mutation", ["schema", "required", "dimensions", "effect", "text", "font", "missing_guide", "bitmap_guide"])
+@pytest.mark.parametrize("mutation", ["schema", "dimensions", "effect", "text", "font", "missing_guide", "bitmap_guide"])
 def test_unsupported_ir_fails_without_replacing_live_scene(binary, mutation):
     from krok_helper.subtitle_render.engine.render.render_ir import build_render_ir
     from krok_helper.subtitle_render.native.protocol import apply_resolved_font_faces
@@ -1029,7 +1042,6 @@ def test_unsupported_ir_fails_without_replacing_live_scene(binary, mutation):
         apply_resolved_font_faces(ir)
         ir = copy.deepcopy(ir)
         if mutation == "schema": ir["schema"] = 999
-        elif mutation == "required": ir["required_features"] = ["future-shaping"]
         elif mutation == "dimensions": ir["screen"]["width"] = "640"
         elif mutation == "effect": ir["style"]["stroke_width_px"] = 7
         elif mutation == "text": ir["track"]["lines"][0]["chars"][0]["text"] = "字"

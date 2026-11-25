@@ -185,9 +185,7 @@ def test_final_ruby_compiler_still_rejects_mismatched_marker_geometry(binary, re
         prepared_ruby_layout(prepared, width=641, height=720)
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', 'type', 'empty', 'style', 'style_bool', 'units',
-    'unit_type', 'text', 'font', 'metrics', 'nan', 'coordinate', 'interval', 'fraction', 'reverse',
-    'overlap', 'range', 'curve', 'stroke', 'groups'])
+@pytest.mark.parametrize('mutation', ['type', 'empty', 'style', 'style_bool', 'units', 'unit_type', 'text', 'font', 'metrics', 'nan', 'coordinate', 'interval', 'fraction', 'reverse', 'overlap', 'range', 'curve', 'stroke', 'groups'])
 def test_bad_final_ruby_preserves_the_previous_scene(binary, reading, mutation):
     ir = ir_for(binary, reading)
     line = ir['skia_layout']['lines'][0]
@@ -221,19 +219,6 @@ def test_bad_final_ruby_preserves_the_previous_scene(binary, reading, mutation):
         with pytest.raises(NativeRendererError): configure(process, ir)
         after, _ = collect(process, [1100], generation=2)
     assert np.array_equal(before[0], after[0])
-
-
-def test_old_sidecar_is_rejected_before_selecting_a_backend(monkeypatch, tmp_path):
-    path = tmp_path/'old-renderer'; path.touch()
-    profiles = ['p05_resolved_horizontal', 'p05_single_line_placement', 'p05_inline_roles', 'p05_fixed_row_grid',
-                'p05_page_collisions', 'p05_smart_horizontal', 'p05_segmented_wipe']
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda _: {'backend': 'skia', 'schema': 3,
-        'selection_version': 1, 'resolved_layout_schema': 2, 'resolved_wipe_schema': 1, 'profiles': profiles})
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    sent = []; monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, payload: sent.append(payload))
-    with pytest.raises(NativeRendererError, match='注音组'):
-        SkiaRendererProcess(path).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU reference is Windows-only')

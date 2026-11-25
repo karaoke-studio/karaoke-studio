@@ -40,13 +40,9 @@ def test_singing_scale_preserves_clocks_and_replays(binary, project, target, eff
     for animated, still in zip(ir['skia_layout']['lines'][0]['cells'], plain['skia_layout']['lines'][0]['cells'], strict=True):
         assert {k: v for k, v in animated.items() if k not in ('layout_left', 'layout_right', 'pivot_y')} == still
     times = [0, 275, 1900, 2200, 275]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_singing_scale')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         previous, _ = collect(process, [275], generation=2)
         configure(process, plain)
         still, _ = collect(process, times[:-1], generation=3)
@@ -127,13 +123,9 @@ def test_utopia_transition_releases_following_glyph_and_replays(binary, project,
     ir = ir_for(binary, (track, style), dpr=1.5)
     assert 'p07_utopia_transition' in ir['required_features']
     assert ir['skia_layout']['utopia_transition_schema'] == 1
-    bad = copy.deepcopy(ir)
-    bad['skia_layout']['utopia_transition_schema'] = False
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [0, 250, 600, 1400, 2350, 2999, 250])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         previous, _ = collect(process, [250], generation=2)
     assert not frames[0][..., 3].any() and not frames[5][..., 3].any()
     assert all(frame[..., 3].any() for frame in frames[1:5])

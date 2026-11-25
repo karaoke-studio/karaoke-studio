@@ -87,9 +87,6 @@ def test_final_clock_projection_moves_curves_without_moving_source_cells():
     # Endpoints are geometry of the source cell, never moved with the clock.
     assert [c['wipe_end_position'] for c in cells] == ends
     with pytest.raises(ValueError, match='重复投影'): project_reverse_wipe(ir)
-    undeclared = copy.deepcopy(unadjusted)
-    undeclared['required_features'].remove('p05_overlap_wipe')
-    with pytest.raises(ValueError, match='重叠走字能力'): project_reverse_wipe(undeclared)
     del unadjusted['skia_layout']['lines'][0]['cells'][1]['wipe_end_position']
     with pytest.raises(ValueError, match='重叠终点'): project_reverse_wipe(unadjusted)
 
@@ -341,7 +338,7 @@ def test_mixed_forward_reverse_pages_keep_the_existing_schedule(binary, grid):
     assert np.array_equal(frames[0], frames[-1])
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 2, 'missing_clock', 'duplicate', 'fraction', 'bool_clock', 'flag', 'forward', 'overlap', 'reverse_overlap', 'reverse_overlap_schema'])
+@pytest.mark.parametrize('mutation', ['missing_clock', 'duplicate', 'fraction', 'bool_clock', 'flag', 'forward'])
 def test_invalid_direction_contract_keeps_old_scene(binary, project, mutation):
     ir = ir_for(binary, source(project)); bad = copy.deepcopy(ir)
     cell = bad['skia_layout']['lines'][0]['cells'][0]
@@ -457,14 +454,3 @@ def test_reverse_matches_actual_d2d_gpu(binary, project, kind, effect, semantics
         width = (full_a+full_b)/(2*(bounds[3]-bounds[1]+1))
         assert abs(sung(a)/full_a-sung(b)/full_b)*width <= 1, (kind, effect, semantics, dpr, t)
 
-
-def test_old_sidecar_is_rejected_before_selection(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready.pop('reverse_wipe_schema'); sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='反向走字'): SkiaRendererProcess(binary).start()
-    assert not sent

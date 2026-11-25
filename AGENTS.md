@@ -273,6 +273,17 @@ git submodule status
    当前源码已接通 P09 正式浮窗直画与 P10 五种导出格式。功能组合以实施计划 §8 的清单和
    §14 的最新验证为准。下面 P04–P05 段落中的子集限制记录各批次引入时的边界。
 
+   **能力协商已取消（2026-11-25，优先于下文所有“须检查 X 能力 / X_schema”的历史描述）**：
+   sidecar 与 IR 构建器同源同版本发布，不再逐项协商。握手只核对单一协议版本
+   `skia_protocol`（Python `skia_process.SKIA_PROTOCOL`，C++ `scene::kSkiaProtocolVersion`），
+   协议有任何变化就同时递增这一个数字；ready 不再携带能力名列表与逐项 `*_schema`。
+   `required_features` 只表示 Python 为该场景**选定的绘制模式**，native 照此执行，
+   **不得**再因能力组合、能力与数据是否一致或缺少 schema 而拒绝场景；
+   `validateSkiaIrEnvelope` 只校验数据本身（版本、必需对象、数值范围、引用存在）。
+   真正未实现的输入（如彩色 emoji、未验证的复杂文字码位）才在单处明确拒绝。
+   新增功能时不要再加“声明 X 必须同时声明 Y”的交叉校验，也不要用
+   `(void)0 /* composition gate lifted */` 这类空判断；画面正确性由 D2D 实拍对照验证。
+
    P01 的独立构建入口已实现：`scripts/build_skia_renderer.py`，锁文件为
    `native/subtitle_renderer/skia.lock.json`。它构建 C++ Skia 基础层和 GPU/Raster
    冒烟目标，尚未替换生产 sidecar。三平台默认缓存均为 `~/.cache/krok-helper/skia-deps`

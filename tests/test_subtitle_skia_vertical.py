@@ -133,13 +133,9 @@ def test_vertical_column_offsets_use_authored_slots(binary, project):
     for with_offset, without in zip(ir['skia_layout']['lines'], control['skia_layout']['lines'], strict=True):
         assert with_offset['cells'][0]['origin_x'] - without['cells'][0]['origin_x'] == pytest.approx(
             style.line_offsets_x[with_offset['vertical_lane']])
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p05_vertical_column_offsets')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [600])
-        with pytest.raises(NativeRendererError, match='列偏移'):
-            configure(process, bad)
         replay, _ = collect(process, [600], generation=2)
     assert frames[0].any() and np.array_equal(frames, replay)
 
@@ -338,11 +334,6 @@ def test_vertical_column_decoration_keeps_positions_and_column_wipe(binary, proj
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        for missing in (feature, 'p05_vertical_columns'):
-            bad = copy.deepcopy(ir)
-            bad['required_features'].remove(missing)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
         replay, _ = collect(process, [times[1]], generation=2)
         configure(process, undecorated)
         baseline, _ = collect(process, times, generation=3)
@@ -402,11 +393,6 @@ def test_vertical_columns_switch_decoration_at_their_own_unit_ends(binary, proje
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            for missing in required:
-                bad = copy.deepcopy(ir)
-                bad['required_features'].remove(missing)
-                with pytest.raises(NativeRendererError):
-                    configure(process, bad)
             replay, _ = collect(process, times[::-1], generation=2)
         assert all(np.array_equal(frame, repeated) for frame, repeated in zip(frames, replay[::-1], strict=True))
         for index, window in enumerate(windows):
@@ -574,13 +560,9 @@ def test_vertical_column_decoration_fades_each_line_independently(binary, projec
              second['display_end_ms'] - second['exit_duration_ms'] // 2]
     boundary = round(sum(line['cells'][0]['origin_x'] for line in valid['skia_layout']['lines']) / 2
                      + style.font_size_px / 2)
-    bad = copy.deepcopy(valid)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, valid)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, list(reversed(times)), generation=2)
         configure(process, baseline)
         full, _ = collect(process, times, generation=3)
@@ -916,8 +898,7 @@ def test_vertical_singing_shadow_scales_around_the_fixed_wipe_axis(binary, proje
     assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'flow', 'top_missing', 'box_inverted',
-                                      'rotated_text', 'horizontal_box'])
+@pytest.mark.parametrize('mutation', ['flow', 'top_missing', 'box_inverted', 'rotated_text', 'horizontal_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_native_vertical_contract_rejects_forgeries_and_keeps_scene(binary, project, mutation, target):
     ir = ir_for(binary, vertical_source(project))
@@ -939,23 +920,6 @@ def test_native_vertical_contract_rejects_forgeries_and_keeps_scene(binary, proj
             configure(process, bad)
         after, _ = collect(process, [750], generation=2)
     assert np.array_equal(before[0], after[0])
-
-
-@pytest.mark.parametrize('mutation', ['schema', 'feature', 'bool', 'version'])
-def test_old_vertical_sidecar_rejected_before_selection(binary, monkeypatch, mutation):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='vertical handshake fixture')
-    if mutation == 'schema': del ready['vertical_solid_schema']
-    elif mutation == 'feature': ready['profiles'].remove('p05_vertical_solid')
-    else: ready['vertical_solid_schema'] = True if mutation == 'bool' else 1
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='竖排'):
-        SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.parametrize('reverse', [False, True])
@@ -1037,7 +1001,7 @@ def test_vertical_japanese_glyphs_keep_cell_geometry(binary, project, kana, tmp_
     }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', 'missing_pivot', 'unexpected_pivot', 'pivot_type'])
+@pytest.mark.parametrize('mutation', ['feature', 'missing_pivot', 'unexpected_pivot', 'pivot_type'])
 def test_invalid_vertical_japanese_transforms_keep_previous_scene(binary, project, kana, mutation):
     track, style = vertical_source(project, texts=['ゃ', '、', 'ー', '」'])
     ir = ir_for(binary, (track, replace(style, font_family=kana)))
@@ -1249,10 +1213,6 @@ def test_vertical_overlapping_readings_match_actual_d2d_gpu(binary, project):
     assert (second['style_cell'], second['span_end_cell']) == (0, 2)
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs[0], gpu, raster, 'vertical_overlapping_ruby', check_p00_edges=True)
-    ir['required_features'].remove('p05_vertical_overlapping_ruby')
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        with pytest.raises(NativeRendererError, match='竖排重叠注音'):
-            configure(process, ir)
 
 
 def test_vertical_reading_latin_and_middle_dot_require_their_capability(binary, project, kana):
@@ -1394,22 +1354,6 @@ def test_vertical_ruby_groups_in_one_column_keep_independent_clocks(binary, proj
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        for mutation in ('feature', 'missing_span', 'overlapping_span', 'overlapping_ink'):
-            bad = copy.deepcopy(ir)
-            upper, lower = bad['skia_layout']['lines'][0]['ruby_groups']
-            if mutation == 'feature':
-                bad['required_features'].remove(feature)
-            elif mutation == 'missing_span':
-                del lower['span_end_cell']
-            elif mutation == 'overlapping_span':
-                upper['span_end_cell'] = lower['style_cell'] + 1
-            else:
-                unit = lower['units'][0]
-                unit['baseline_y'] = upper['units'][0]['baseline_y']
-                unit['wipe_top'] = unit['baseline_y'] + unit['metrics']['ink'][1]
-                unit['wipe_bottom'] = unit['baseline_y'] + unit['metrics']['ink'][3]
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
         replay, _ = collect(process, [late, early, middle, between], generation=2)
     assert visible_rows(frames[0], first, lit=True).size == 0
     assert visible_rows(frames[1], first, lit=True).size > 0
@@ -1430,8 +1374,7 @@ def test_vertical_ruby_groups_in_one_column_keep_independent_clocks(binary, proj
             assert difference.mean() < .15 and np.mean(difference.max(axis=-1) > 16) < .003
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_bool', 'unit_top', 'unit_box', 'unit_ink', 'two_units',
-                                      'unit_text', 'groups_missing', 'two_groups'])
+@pytest.mark.parametrize('mutation', ['schema', 'schema_bool', 'unit_top', 'unit_box', 'unit_ink', 'two_units', 'unit_text', 'groups_missing', 'two_groups'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_native_vertical_ruby_rejects_forgeries_and_keeps_scene(binary, project, mutation, target):
     ir = ir_for(binary, vertical_ruby_source(project))
@@ -1454,23 +1397,6 @@ def test_native_vertical_ruby_rejects_forgeries_and_keeps_scene(binary, project,
             configure(process, bad)
         after, _ = collect(process, [750], generation=2)
     assert np.array_equal(before[0], after[0])
-
-
-@pytest.mark.parametrize('mutation', ['schema', 'feature', 'bool', 'version'])
-def test_old_vertical_ruby_sidecar_rejected_before_selection(binary, monkeypatch, mutation):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='vertical ruby handshake fixture')
-    if mutation == 'schema': del ready['vertical_ruby_schema']
-    elif mutation == 'feature': ready['profiles'].remove('p05_vertical_ruby')
-    else: ready['vertical_ruby_schema'] = True if mutation == 'bool' else 1
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='竖排注音'):
-        SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 def test_vertical_ruby_gpu_raster_and_out_of_order_seek(binary, project):

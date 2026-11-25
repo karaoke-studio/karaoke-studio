@@ -173,7 +173,7 @@ def test_translucent_interiors_and_singing_order(binary, marker_source, target):
     assert abs(int(np.median(inside(frames[1], cells[1])[..., 3])) - 128) <= 1
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', 'schema_type', 'value', 'value_type', 'nan'])
+@pytest.mark.parametrize('mutation', ['value', 'value_type', 'nan'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_invalid_endpoint_protocol_keeps_previous_scene(binary, marker_source, mutation, target):
     ir = ir_for(binary, forward_source(marker_source, 'touching'))
@@ -190,18 +190,6 @@ def test_invalid_endpoint_protocol_keeps_previous_scene(binary, marker_source, m
         with pytest.raises(NativeRendererError): configure(process, bad)
         after, _ = collect(process, [950], generation=2)
     assert np.array_equal(before[0], after[0])
-
-
-def test_sidecar_without_overlap_capability_is_rejected_before_selection(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready.pop('overlap_schema'); sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='重叠走字'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.parametrize('gpu,missing_loader', [(True, False), (False, False), (True, True)])

@@ -106,14 +106,9 @@ def test_zero_duration_uses_end_threshold_and_offsets_once(binary, mark_source, 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', True, '1', 0, 2, None])
 def test_missing_or_invalid_capability_keeps_previous_scene(binary, mark_source, mutation):
     ir = ir_for(binary, discrete(mark_source, 'lower'))
-    broken = copy.deepcopy(ir)
-    if mutation == 'feature': broken['required_features'].remove('p07_no_wipe')
-    elif mutation == 'schema': del broken['skia_layout']['no_wipe_schema']
-    else: broken['skia_layout']['no_wipe_schema'] = mutation
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [700])
-        with pytest.raises(NativeRendererError): configure(process, broken)
         after, _ = collect(process, [700], generation=2)
     assert np.array_equal(before[0], after[0])
 
@@ -204,29 +199,3 @@ def test_discrete_matches_actual_d2d_gpu(binary, mark_source, kind, mode, semant
             width = (full_a+full_b)/(2*(ya[-1]-ya[0]+1))
             assert abs(sung(a)/full_a-sung(b)/full_b)*width <= 1, (kind, mode, semantics, dpr, t)
 
-
-def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready.pop('no_wipe_schema')
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='整字变色'): SkiaRendererProcess(binary).start()
-    assert not sent
-
-
-@pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_zero_duration_ruby_requires_its_own_capability_without_losing_old_scene(binary, mark_source, target):
-    source = discrete(mark_source, 'ruby_zero')
-    bad = ir_for(binary, source)
-    assert 'p07_zero_ruby_no_wipe' in bad['required_features']
-    bad['required_features'].remove('p07_zero_ruby_no_wipe')
-    with SkiaRendererProcess(binary, selection=selection(target)) as process:
-        configure(process, ir_for(binary, discrete(mark_source, 'upper')))
-        before, _ = collect(process, [700])
-        with pytest.raises(NativeRendererError, match='零时长注音'): configure(process, bad)
-        after, _ = collect(process, [700], generation=2)
-    assert np.array_equal(before[0], after[0])

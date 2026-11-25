@@ -222,25 +222,6 @@ def test_lower_final_compiler_requires_source_mapping(binary, source):
         prepared_ruby_layout(prepared(binary, source), width=900, height=600)
 
 
-@pytest.mark.parametrize('kind', ['main', 'ruby'])
-@pytest.mark.parametrize('mutation', ['feature', 'schema', float('nan'), float('inf'), -.1, 1.1, None, False, '0.5'])
-def test_invalid_overlap_endpoint_keeps_previous_scene(binary, source, kind, mutation):
-    valid = probe_ir(source, prepared(binary, source))
-    broken = copy.deepcopy(valid)
-    if mutation == 'feature': broken['required_features'].remove('p05_overlap_wipe')
-    elif mutation == 'schema': broken['skia_layout']['overlap_schema'] = 2
-    else:
-        line = broken['skia_layout']['lines'][0]
-        cell = line['cells'][0] if kind == 'main' else line['ruby_groups'][0]['units'][0]
-        cell['wipe_end_position'] = mutation
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, valid)
-        before, _ = collect(process, [400])
-        with pytest.raises(NativeRendererError): configure(process, broken)
-        after, _ = collect(process, [400], generation=2)
-    assert np.array_equal(before[0], after[0])
-
-
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
 @pytest.mark.parametrize('semantics', ['legacy', 'n3_1074'])
 @pytest.mark.parametrize('independent', [False, True])

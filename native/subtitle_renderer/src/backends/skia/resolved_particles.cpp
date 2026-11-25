@@ -28,8 +28,7 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
     const auto lineHeight = box.toDouble();
     const bool validBox = style.vertical ? box.isUndefined()
         : box.isDouble() && std::isfinite(lineHeight) && lineHeight >= 0 && lineHeight <= 1e5;
-    if (!validBox || (!prepared.rubyGroups.empty() && !rubyParticles)
-        || (style.vertical && !scene::hasSkiaVerticalParticleProfile(features)))
+    if (!validBox)
         throw BackendError("Skia 字幕粒子缺少有效的行盒高度");
     // Line-anchored particle paints span the physical line box (cells run right to left on RTL lines).
     float lineLeft = 0.f, lineRight = 1.f;

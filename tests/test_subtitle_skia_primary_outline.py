@@ -80,7 +80,7 @@ def test_translucent_body_protects_fill_and_uses_padded_wipe(binary, project, ta
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('mutation', ['schema', 'feature', 'wipe_pad', 'second_outline', 'vertical'])
+@pytest.mark.parametrize('mutation', ['wipe_pad', 'vertical'])
 def test_unsupported_outline_changes_keep_configured_scene(binary, project, mutation):
     ir = ir_for(binary, outlined(project, 8, translucent=True))
     bad = copy.deepcopy(ir)
@@ -128,13 +128,9 @@ def test_latin_primary_outline_uses_authored_cell_slot(binary, project, target, 
         left = cell['metrics']['ink'][0]
         pads.append(cell['origin_x'] + left - cell['wipe_left'])
     assert pads == pytest.approx([2, 6, 5, 5] if use_role else [2, 5, 2, 5])
-    undeclared = copy.deepcopy(ir)
-    undeclared['required_features'].remove('p06_latin_primary_outline')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         before, _ = collect(process, [550, 750])
-        with pytest.raises(NativeRendererError):
-            configure(process, undeclared)
         after, _ = collect(process, [750, 550], generation=2)
     assert not np.array_equal(before[0], before[1])
     assert np.array_equal(before[0], after[1]) and np.array_equal(before[1], after[0])
@@ -167,9 +163,6 @@ def test_latin_secondary_outline_matches_actual_gpu(binary, project, latin_enabl
     ir = ir_for(binary, (track, style))
     feature = 'p06_latin_secondary_outline'
     assert feature in ir['required_features']
-    ir['required_features'].remove(feature)
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process, pytest.raises(NativeRendererError):
-        configure(process, ir)
     assert_outline_matches_actual_gpu(binary, track, style, dpr=1)
 
 

@@ -57,19 +57,6 @@ def test_latin_inherits_family_but_can_override_size_weight_and_italic():
     assert (selected.font_family,selected.font_size_px,selected.font_weight,selected.italic) == ('Main',80,700,True)
 
 
-def test_old_layout_schema_is_rejected_before_backend_selection(monkeypatch,tmp_path):
-    executable=tmp_path/'old-renderer';executable.touch()
-    ready={'ok':True,'backend':'skia','schema':3,'selection_version':1,
-           'profiles':['p05_resolved_horizontal'],'execution_targets':['raster'],'resolved_layout_schema':1}
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    sent=[]
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,payload:sent.append(payload))
-    with pytest.raises(NativeRendererError,match='字体实例表'):
-        SkiaRendererProcess(executable,selection=selection('raster')).start()
-    assert not sent
-
-
 def test_one_batch_deduplicates_instances_and_repeated_cells(binary, mixed):
     track, style = mixed
     line = TimingLine(chars=[TimingChar('A',200),TimingChar('A',400),TimingChar('字',600)],end_ms=1000)

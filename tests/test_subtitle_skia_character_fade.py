@@ -67,23 +67,6 @@ def test_character_fade_matches_fixed_stagger(binary, project, target, single, t
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('mutated', ['feature', 'schema'])
-def test_invalid_character_fade_capabilities_preserve_scene(binary, project, mutated):
-    ir = ir_for(binary, character_fade_project(project))
-    bad = copy.deepcopy(ir)
-    if mutated == 'feature':
-        bad['required_features'].remove('p07_character_fade')
-    else:
-        bad['skia_layout']['character_fade_schema'] = True
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, ir)
-        before, _ = collect(process, [125])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
-        after, _ = collect(process, [125], generation=2)
-    assert np.array_equal(before[0], after[0])
-
-
 def test_vertical_reading_ignores_inactive_character_entry_fade(binary, project):
     track, style = vertical_ruby_source(project)
     plain = ir_for(binary, (track, style))

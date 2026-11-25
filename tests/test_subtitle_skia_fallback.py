@@ -134,7 +134,7 @@ def test_chain_instances_have_independent_simulations_size_and_scale(binary, sou
     assert len(chain['font_chain']) == 2 and chain['font_metrics'] != direct['font_metrics']
 
 
-@pytest.mark.parametrize('mutation', ['order','selected','options','nan','count','entry','unknown','feature','schema'])
+@pytest.mark.parametrize('mutation', ['order', 'selected', 'options', 'nan', 'count', 'entry', 'unknown'])
 def test_bad_chain_rejected_without_replacing_valid_scene(binary, source, mutation):
     ir = ir_for(binary, source)
     bad = copy.deepcopy(ir)
@@ -265,19 +265,6 @@ def test_real_fallback_preview(binary, source, monkeypatch, tmp_path, gpu, missi
 @pytest.mark.parametrize('gpu,missing_loader', [(True,False),(False,False),(True,True)])
 def test_real_fallback_mp4(binary, source, monkeypatch, tmp_path, gpu, missing_loader):
     run_mp4(binary, monkeypatch, tmp_path, source[:2], gpu, missing_loader)
-
-
-def test_old_font_chain_sidecar_rejected_before_backend_selection(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready.pop('font_chain_schema')
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a,**k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, payload: sent.append(payload))
-    with pytest.raises(NativeRendererError, match='字体链'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

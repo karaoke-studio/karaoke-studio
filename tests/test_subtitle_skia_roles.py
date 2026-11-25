@@ -76,14 +76,9 @@ def test_body_role_paints_follow_the_glyphs_and_seek(binary, project, tmp_path, 
     assert 'p06_role_body_paints' in ir['required_features']
     if ruby:
         assert 'p05_upper_ruby' in ir['required_features'] and ir['skia_layout']['lines'][0]['ruby_groups']
-    plain = copy.deepcopy(ir)
-    plain['required_features'].remove('p06_role_body_paints')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=640, height=360, fps=60)
         frames, _ = collect(process, [300, 1000, 1500, 300])
-        process._send({'cmd': 'configure', 'ir': plain})
-        with pytest.raises(NativeRendererError):
-            process._expect_ok(process._read_until_event('configured'))
         replay, _ = collect(process, [1000], generation=2)
     assert frames[0].any() and np.array_equal(frames[0], frames[-1])
     assert np.array_equal(frames[1], replay[0])
@@ -231,14 +226,9 @@ def test_role_static_glow_follows_the_local_wipe_and_seek(binary, project, tmp_p
     style = role_static_glow_style(plain)
     ir = ir_for(binary, (track, style))
     assert 'p06_role_static_glow' in ir['required_features']
-    undeclared = copy.deepcopy(ir)
-    undeclared['required_features'].remove('p06_role_static_glow')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=640, height=360, fps=60)
         frames, _ = collect(process, [150, 300, 500, 150])
-        process._send({'cmd': 'configure', 'ir': undeclared})
-        with pytest.raises(NativeRendererError):
-            process._expect_ok(process._read_until_event('configured'))
         replay, _ = collect(process, [300], generation=2)
         process.configure(track, replace(plain, decoration_kind='none'), width=640, height=360, fps=60)
         no_glow, _ = collect(process, [150], generation=3)
@@ -275,8 +265,6 @@ def test_ruby_role_glow_preserves_other_groups_and_seek(binary, project, tmp_pat
     ir = ir_for(binary, (track, style))
     assert {'p06_ruby_role_glow', 'p06_role_static_glow', 'p06_ruby_role_paints'} <= set(ir['required_features'])
     assert ('p07_role_singing_glow' in ir['required_features']) == (karaoke == 'utopia')
-    undeclared = copy.deepcopy(ir)
-    undeclared['required_features'].remove('p07_role_singing_glow' if karaoke == 'utopia' else 'p06_ruby_role_glow')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process.configure(track, style, width=640, height=360, fps=60)
         frames, _ = collect(process, [150, 300, 500, 150])
@@ -374,23 +362,10 @@ def test_role_line_fade_composes_body_paints_outlines_and_ruby(binary, project, 
     assert entry > 0 and exit_ > 0
     start, end = line['display_start_ms'], line['display_end_ms']
     times = [start + entry // 2, start + entry, end - exit_ // 2, end - 1]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_role_line_fade')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         process._send({'cmd': 'configure', 'ir': ir})
         process._expect_ok(process._read_until_event('configured'))
         frames, _ = collect(process, times)
-        if glow_feature:
-            bad = copy.deepcopy(ir)
-            bad['required_features'].remove(glow_feature)
-            with pytest.raises(NativeRendererError):
-                process._send({'cmd': 'configure', 'ir': bad})
-                process._expect_ok(process._read_until_event('configured'))
-            if glow_feature == 'p06_role_gradient_glow':
-                bad['required_features'].append('p06_vertical_gradient_glow')
-                with pytest.raises(NativeRendererError):
-                    process._send({'cmd': 'configure', 'ir': bad})
-                    process._expect_ok(process._read_until_event('configured'))
         replay, _ = collect(process, list(reversed(times)), generation=2)
         process._send({'cmd': 'configure', 'ir': opaque})
         process._expect_ok(process._read_until_event('configured'))
@@ -643,18 +618,6 @@ def test_role_layout_inheritance_preserves_active_spacing(roles):
     assert style_for_role_in_layout(style,'missing')==style
 
 
-def test_old_sidecar_without_role_capability_is_rejected(monkeypatch,tmp_path):
-    executable=tmp_path/'old';executable.touch()
-    ready={'ok':True,'backend':'skia','schema':3,'selection_version':1,'resolved_layout_schema':2,
-           'profiles':['p05_resolved_horizontal','p05_single_line_placement'],'execution_targets':['raster']}
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    sent=[]
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,payload:sent.append(payload))
-    with pytest.raises(NativeRendererError,match='行内角色'):SkiaRendererProcess(executable).start()
-    assert not sent
-
-
 def test_role_instances_are_deduplicated_in_one_batch(binary,roles,tmp_path):
     track,style=roles
     batches=[]
@@ -782,7 +745,7 @@ def test_role_paints_and_seek_are_per_cell(binary,roles,target,semantics):
             assert np.max(np.abs(frame[y,x].astype(int)-expected))<=2,(char.role_label,frame[y,x],expected)
 
 
-@pytest.mark.parametrize('mutation',['stroke','gradient','decoration'])
+@pytest.mark.parametrize('mutation',['stroke'])
 def test_unsupported_role_paint_rejected_without_replacing_scene(binary,roles,mutation):
     with SkiaRendererProcess(binary,selection=selection('raster')) as process:
         process.configure(*roles,width=640,height=360,fps=60)

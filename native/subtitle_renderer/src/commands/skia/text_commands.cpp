@@ -1,20 +1,16 @@
 #include "text_commands.h"
 #include "../../scene/skia_text_projection.h"
+#include "../../scene/skia_ir_contract.h"
 #include "../../protocol/json_protocol.h"
 #include <QtCore/QJsonArray>
 #include <stdexcept>
 
 namespace krok::subtitle::native::commands {
 QJsonObject measureSkiaText(const QJsonObject& request) {
-    if (request.value("metrics_schema").toInt() != 1 || !request.value("fonts").isObject() || !request.value("runs").isArray())
-        throw std::runtime_error("Skia 批量度量 schema 或必需字段无效");
-    // The caller must ask for the authored-cell glyph policy this sidecar implements.
-    if (!request.value("cell_glyph_schema").isDouble() || request.value("cell_glyph_schema").toDouble() != 1)
-        throw std::runtime_error("Skia 批量度量缺少单元字形策略版本");
-    if (!request.value("kana_mark_schema").isDouble() || request.value("kana_mark_schema").toDouble() != 1)
-        throw std::runtime_error("Skia 批量度量缺少假名浊音字形策略版本");
-    if (!request.value("vertical_metrics_schema").isDouble() || request.value("vertical_metrics_schema").toDouble() != 1)
-        throw std::runtime_error("Skia 批量度量缺少行框纵向度量策略版本");
+    if (request.value("skia_protocol").toDouble(-1) != scene::kSkiaProtocolVersion)
+        throw std::runtime_error("Skia 批量度量的协议版本与 sidecar 不一致");
+    if (!request.value("fonts").isObject() || !request.value("runs").isArray())
+        throw std::runtime_error("Skia 批量度量缺少字体表或单元");
     const auto table = request.value("fonts").toObject();
     const auto runs = request.value("runs").toArray();
     if (table.isEmpty() || table.size() > 32 || runs.size() > 4096) throw std::runtime_error("Skia 度量批次大小超限");
@@ -51,10 +47,9 @@ QJsonObject measureSkiaText(const QJsonObject& request) {
             {"cap_height", primary.capHeight()}}}});
     }
     auto out = protocol::response(true, "text_measured");
-    out.insert("metrics_schema", 1); out.insert("cell_glyph_schema", 1); out.insert("backend", "skia"); out.insert("execution_target", "cpu_metrics");
+    out.insert("skia_protocol", scene::kSkiaProtocolVersion);
+    out.insert("backend", "skia"); out.insert("execution_target", "cpu_metrics");
     out.insert("gpu_initialized", false); out.insert("runs", output);
-    out.insert("kana_mark_schema", 1);
-    out.insert("vertical_metrics_schema", 1);
     return out;
 }
 }

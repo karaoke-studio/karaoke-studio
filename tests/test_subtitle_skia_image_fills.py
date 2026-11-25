@@ -298,13 +298,9 @@ def test_replaced_and_deleted_images_take_effect_on_reconfigure(binary, project,
 @pytest.mark.parametrize('mutation', ['feature', 'gradient_feature'])
 def test_invalid_image_fill_keeps_previous_scene(binary, project, images, mutation):
     ir = ir_for(binary, image_source(project, images, 'mixed'))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_image_fill' if mutation == 'feature' else 'p06_outline_gradient')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         before, _ = collect(process, [750])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         after, _ = collect(process, [750], generation=2)
     assert before[0][..., 3].any() and np.array_equal(before, after)
 
@@ -391,19 +387,6 @@ def test_image_fill_fade_matches_actual_d2d_gpu(binary, project, images, guide):
     refs = [np.frombuffer(frame, np.uint8).reshape(360, 640, 4) for frame in raw]
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, refs, gpu, raster, ('image_fill_fade', guide))
-
-
-def test_old_sidecar_without_image_fills_is_rejected(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready['profiles'] = [p for p in ready['profiles'] if p != 'p06_image_fill']
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='图片填充'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

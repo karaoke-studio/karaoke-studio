@@ -4,11 +4,17 @@
 #include <QtCore/QJsonObject>
 
 namespace krok::subtitle::native::scene {
+// The sidecar and its IR builder ship from one source tree. Any change to the
+// IR, the measurement protocol or the frame protocol bumps this one version.
+inline constexpr int kSkiaProtocolVersion = 1;
 inline constexpr int kScanlineBandSchema = 6;
 inline constexpr int kCharacterTransformSchema = 8;
 inline constexpr int kSingingParticleSchema = 13;
 
-const QJsonArray& skiaIrProfiles();
+// Render modes the IR builder selected for this scene. The sidecar follows
+// them and never refuses a scene over their combination: the sidecar and the
+// IR builder ship from one source tree, so there is nothing to negotiate.
+QJsonArray skiaFeatures(const QJsonObject& ir);
 bool hasSkiaVerticalParticleProfile(const QJsonArray& features);
 bool isSkiaFallingParticle(const QString& kind);
 QString skiaParticleKindForTransition(const QString& animation, bool entry);

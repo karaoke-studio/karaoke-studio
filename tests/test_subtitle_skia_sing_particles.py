@@ -333,13 +333,9 @@ def test_upper_ruby_particles_keep_clocks_and_replay(binary, reading, target, ki
     assert bursts and all(burst['front'] == front for burst in bursts)
     assert [burst['start_ms'] for burst in bursts] == [
         ir['track']['lines'][0]['resolved_intervals'][burst['char_index']][0] for burst in bursts]
-    invalid = copy.deepcopy(ir)
-    invalid['skia_layout']['sing_twinkle_schema'] = 11
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [*RUBY_PARTICLE_TIMES, 550])
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
         again, _ = collect(process, [550], generation=2)
     assert np.array_equal(frames[2], frames[-1]) and np.array_equal(frames[2], again[0])
     assert not (blue_coverage(frames[0]) > 35).any()
@@ -571,7 +567,7 @@ def test_singing_particles_under_line_motion_match_actual_d2d_gpu(binary, projec
     assert_glow_parity(times, reference, gpu, raster, 'singing_particles_under_line_motion', check_p00_edges=True)
 
 
-@pytest.mark.parametrize('mutation', ['schema', 'feature', 'sprite', 'pivot', 'box', 'anchor', 'timing', 'legacy_classic', 'speed'])
+@pytest.mark.parametrize('mutation', ['sprite', 'pivot', 'box', 'anchor', 'timing', 'legacy_classic', 'speed'])
 def test_invalid_particle_ir_preserves_previous_scene(binary, project, mutation):
     ir = ir_for(binary, twinkle_source(project))
     bad = copy.deepcopy(ir)
@@ -606,22 +602,6 @@ def test_invalid_particle_ir_preserves_previous_scene(binary, project, mutation)
         after, _ = collect(process, [1820], generation=2)
     assert blue_coverage(before[0]).any()
     assert np.array_equal(before[0], after[0])
-
-
-def test_old_sidecar_is_rejected_before_backend_selection(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try:
-        ready = NativeRendererProcess.start(process)
-    finally:
-        process.abort(reason='handshake fixture')
-    ready.pop('sing_twinkle_schema')
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *args, **kwargs: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, packet: sent.append(packet))
-    with pytest.raises(NativeRendererError, match='唱字粒子'):
-        SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 def test_singing_twinkle_agrees_between_gpu_and_raster(binary, project):
@@ -1127,16 +1107,12 @@ def test_vertical_particles_composite_sources_in_track_order(binary, project, re
     for actual, expected in zip(parts, separate, strict=True):
         assert actual['skia_layout']['lines'] == expected['skia_layout']['lines']
         assert actual['track']['lines'] == expected['track']['lines']
-    bad = copy.deepcopy(combined)
-    bad['skia_extra_sources'][0]['required_features'].remove('p07_vertical_sing_shapes')
     times = [320, 740, 1250, 2000, 2300]
     results = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, combined)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
             replay, _ = collect(process, times[::-1], generation=2)
             actual = []
             for generation, single in enumerate(separate, 3):

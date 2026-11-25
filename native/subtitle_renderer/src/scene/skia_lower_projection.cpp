@@ -17,9 +17,6 @@ void validateSkiaLowerLayout(const QJsonObject& ir) {
     const auto layout = ir.value("skia_layout").toObject();
     const auto features = ir.value("required_features").toArray();
     const bool enabled = features.contains("p05_lower_ruby");
-    if (enabled && (layout.value("lower_ruby_schema").toDouble(-1) != 1
-        || !features.contains("p05_resolved_ruby") || !features.contains("p05_overlap_wipe")))
-        throw BackendError("Skia 下方注音缺少版本化布局或重叠走字能力");
     const auto track = ir.value("track").toObject();
     const auto sources = track.value("rubies").toArray(), lines = layout.value("lines").toArray();
     const auto sourceLines = track.value("lines").toArray();
@@ -40,7 +37,6 @@ void validateSkiaLowerLayout(const QJsonObject& ir) {
                     throw BackendError("Skia 上注音不能携带下方注音外观或来源");
                 continue;
             }
-            if (!enabled) throw BackendError("Skia 下方注音缺少能力声明");
             const int index = integer(group.value("source_index"), 0, sources.size()-1);
             if (!required.count(index) || !seen.insert(index).second)
                 throw BackendError("Skia 下方注音来源缺失或重复使用");
@@ -66,7 +62,7 @@ void validateSkiaLowerLayout(const QJsonObject& ir) {
                 throw BackendError("Skia 下方注音最终文本与来源不一致");
         }
     }
-    if ((!required.empty() && !enabled) || seen != required)
+    if (seen != required)
         throw BackendError("Skia 下方注音缺少完整逐行最终组");
 }
 }

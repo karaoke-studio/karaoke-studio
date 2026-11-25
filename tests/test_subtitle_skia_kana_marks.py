@@ -62,52 +62,8 @@ def test_kana_mark_mixed_boundary_keeps_base_and_mark_together(binary, tmp_path)
             process.measure(resources, [dict(request, font_ids=['latin', 'base', 'mark'])])
 
 
-@pytest.mark.parametrize('value', [None, True, '1', 2])
-def test_old_kana_mark_policy_is_rejected_before_selection_or_measurement(binary, monkeypatch, value):
-    process = SkiaTextMetricsProcess(binary)
-    try:
-        # Read the raw ready frame before substituting an older handshake.
-        ready = NativeRendererProcess.start(process)
-    finally:
-        process.abort(reason='kana mark handshake fixture')
-    if value is None:
-        del ready['kana_mark_schema']
-    else:
-        ready['kana_mark_schema'] = value
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(NativeRendererProcess, 'abort', lambda *args, **kwargs: None)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *args, **kwargs: None)
-    monkeypatch.setattr(NativeRendererProcess, '_send', lambda self, request: sent.append(request))
-    for process_type in (SkiaTextMetricsProcess, SkiaRendererProcess):
-        with pytest.raises(NativeRendererError, match='浊音字形策略'):
-            process_type(binary).start()
-    assert not sent
-
-
-@pytest.mark.parametrize('value', [None, True, '1', 2])
-def test_kana_mark_requests_require_policy_version(binary, tmp_path, monkeypatch, value):
-    path = make_kana_font(tmp_path / 'kana.ttf')
-    original = SkiaTextMetricsProcess._send
-
-    def send(process, request):
-        if request['cmd'] == 'measure_text':
-            request = dict(request)
-            if value is None:
-                del request['kana_mark_schema']
-            else:
-                request['kana_mark_schema'] = value
-        return original(process, request)
-
-    with SkiaTextMetricsProcess(binary) as process:
-        assert run(process, path, TEXTS)
-        monkeypatch.setattr(SkiaTextMetricsProcess, '_send', send)
-        with pytest.raises(NativeRendererError, match='浊音字形策略'):
-            run(process, path, TEXTS)
-
-
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
-@pytest.mark.parametrize('mutation', ['feature', 'parent', 'schema', 'unproven'])
+@pytest.mark.parametrize('mutation', ['feature', 'parent', 'unproven'])
 def test_kana_mark_forged_layout_preserves_previous_scene(binary, project, kana, target, mutation):
     ir = ir_for(binary, kana_source(project, kana, TEXTS))
     bad = copy.deepcopy(ir)

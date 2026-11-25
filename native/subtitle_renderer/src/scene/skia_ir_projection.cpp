@@ -44,32 +44,22 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     if (!parsed) throw BackendError(error.toStdString());
     const auto& cfg = *parsed;
     const auto features = ir.value("required_features").toArray();
-    if (features.contains("p08_animated_title_guides") && (!staticTitle || !features.contains("p08_bitmap_guides")))
-        throw BackendError("Skia 动图导唱符必须属于标题布局");
-    if (features.contains("p08_title_role_outlines") && (!staticTitle || !features.contains("p06_primary_solid_outline")))
-        throw BackendError("Skia 角色描边必须属于标题布局");
     const bool mixedGuides = features.contains("p08_mixed_guide_kinds");
-    if (mixedGuides != (!staticTitle && features.contains("p08_bitmap_guides") && features.contains("p05_vector_guides")))
-        throw BackendError("Skia 位图与矢量导唱符混用缺少对应布局能力声明");
     const bool markerFeature = features.contains("p05_ruby_markers");
-    if (markerFeature && ir.value("skia_layout").toObject().value("ruby_marker_schema").toDouble(-1) != 1)
-        throw BackendError("Skia 短语标记布局版本无效");
     for (const auto& ruby : cfg.rubies) {
         const auto reading = ruby.reading.trimmed();
         const bool marker = (reading.isEmpty() || reading == QStringLiteral("^"))
             && std::all_of(ruby.readingParts.begin(), ruby.readingParts.end(), [](const QString& part) {
                 return part.trimmed().isEmpty() || part.trimmed() == QStringLiteral("^");
             });
-        if (marker && !markerFeature) throw BackendError("Skia 空读音或短语标记缺少能力声明");
     }
     if (!cfg.rubies.empty()) {
         const auto features = ir.value("required_features").toArray();
         const auto layout = ir.value("skia_layout").toObject();
         const auto lines = layout.value("lines");
-        if (!features.contains("p05_upper_ruby") || !features.contains("p05_resolved_ruby")
-            || layout.value("ruby_schema").toDouble(-1) != 1 || !lines.isArray()
+        if (!lines.isArray()
             || lines.toArray().size() != int(cfg.lines.size()))
-            throw BackendError("Skia 源注音需要版本化的最终上注音布局");
+            throw BackendError("Skia 源注音缺少逐行最终布局");
         for (const auto& value : lines.toArray())
             if (!value.isObject() || !value.toObject().value("ruby_groups").isArray())
                 throw BackendError("Skia 源注音缺少逐行最终注音组");
@@ -77,14 +67,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         // were materialized by Python; never invoke legacy Qt ruby projection.
     }
     const bool rtlRuby = cfg.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
-    if (cfg.rightToLeft && (!features.contains("p05_horizontal_rtl")
-        || (!cfg.rubies.empty() && !rtlRuby)))
-        throw BackendError("Skia 右至左单元排列缺少能力声明或携带未支持注音");
     // Fixed-cell columns. Readings require a separately versioned feature.
-    if (cfg.vertical && (!features.contains("p05_vertical_solid") || cfg.rightToLeft
-        || (!cfg.rubies.empty() && !features.contains("p05_vertical_ruby"))
-        || (cfg.dualLineLayout && !features.contains("p05_vertical_columns"))))
-        throw BackendError("Skia 竖排列布局或能力声明无效");
+    if (cfg.vertical && cfg.rightToLeft)
+        throw BackendError("Skia 竖排与右至左排列不能同时启用");
     // Upper and lower annotations over solid main outlines need their own capability.
     const bool outlineRuby = features.contains("p06_outline_ruby");
     const bool multiLaneOutline = features.contains("p06_multi_lane_outline");
@@ -95,13 +80,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         || features.contains("p08_mixed_reverse_bitmap_guides");
     const bool directionalOutlines = features.contains("p06_directional_body_paints")
         || features.contains("p06_directional_solid_outline") || features.contains("p07_reverse_singing_outline");
-    if (features.contains("p06_primary_solid_outline")
-        && ((cfg.vertical && !features.contains("p06_vertical_outline"))
-            || (cfg.rightToLeft && !(rtlRuby || directionalOutlines)) || (cfg.dualLineLayout && !multiLaneOutline)
-            || (features.contains("p05_reverse_wipe")
-                && !(reverseVerticalOutline || reverseHorizontalOutline || reverseBitmapGuides || directionalOutlines))
-            || (!outlineRuby && (!cfg.rubies.empty() || features.contains("p05_resolved_ruby")))))
-        (void)0 /* composition gate lifted */;
     const auto& band = cfg.lineBand;
     const bool staticBand = features.contains("p08_static_line_band");
     const bool fittedBand = features.contains("p08_line_band_fit");
@@ -127,20 +105,15 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     const bool bandFitSupported = slicedBand ? band.fillMode == "three_slice"
         : fittedBand ? band.fillMode == "repeat" || band.fillMode == "cover" : band.fillMode == "stretch";
     const bool bandEnabled = band.enabled && !cfg.vertical && !band.imagePath.isEmpty();
-    if (bandEnabled != staticBand
-        || (staticBand && (!bandFitSupported
-            || !bandImageSupported
-            || (tintedBand == band.tint.isEmpty())
-            || (rubyBand != features.contains("p05_resolved_ruby")) || (!rubyBand && !cfg.rubies.empty())
-            || !bandLayersSupported || blurBand != hasBlurBand
-            || strokeBand != hasStrokeBand || (strokeBand && (positionedStrokeBand == (band.stroke.position == "outside")
-                || band.stroke.sizePx > 512)))))
-        throw BackendError("Skia 行背景带的素材、布局或画笔声明无效");
+    const bool staffLayers = !band.linesPath.isEmpty() || !band.clefPath.isEmpty();
+    if (band.enabled && !cfg.vertical && !band.imagePath.isEmpty()
+        && ((staffLayers && !(isPng(band.linesPath) && isPng(band.clefPath)))
+            || (band.fillMode != "stretch" && band.fillMode != "repeat" && band.fillMode != "cover"
+                && band.fillMode != "three_slice")
+            || band.stroke.sizePx > 512))
+        throw BackendError("Skia 行背景带的素材或填充模式无效");
     const bool viewport = cfg.viewportScalePct != 100 || cfg.viewportRotationDeg
         || cfg.viewportOffsetX || cfg.viewportOffsetY;
-    if (viewport && (!features.contains("p08_viewport") || cfg.rightToLeft
-        || (cfg.vertical && !features.contains("p08_vertical_viewport"))))
-        throw BackendError("Skia 字幕视口变换缺少对应布局能力声明");
     RenderScene out;
     if (staticBand) {
         out.lineBand.enabled = true;
@@ -264,42 +237,17 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         });
         const bool singingScale = source.karaokeAnimation == "utopia" && features.contains("p07_singing_scale");
         if (source.annotationBaselineY
-            || !supportedAnimation(source.entryAnimation, true)
-            || !supportedAnimation(source.exitAnimation, false)
             || (source.karaokeAnimation != "none" && source.karaokeAnimation != "inherit"
-                && source.karaokeAnimation != "no_wipe" && !singingScale)
-            || (source.zoomPulseEnabled && !singingScale)
-            || (!source.fxBursts.empty() && !features.contains("p07_sing_twinkle")))
-            throw BackendError("Skia P04: unsupported line feature");
+                && source.karaokeAnimation != "no_wipe" && source.karaokeAnimation != "utopia")
+            || (source.zoomPulseEnabled && source.karaokeAnimation != "utopia"))
+            throw BackendError("Skia 行的唱字动画无效");
         TextStyle style;
         const auto& resolved = protocol::resolvedStyleForLine(cfg, source);
-        if (staticBand && !bandTransition && (!plainLineAnimation(source.entryAnimation, true)
-                || !plainLineAnimation(source.exitAnimation, false)))
-            throw BackendError("Skia 行背景带缺少对应行出入场能力");
-        if (staticBand && (source.scanlineEnabled || !source.fxBursts.empty()) && !bandWithEffects)
-            throw BackendError("Skia 行背景带缺少对应扫字线或粒子能力声明");
         const bool noise = source.entryAnimation == "noise" || source.exitAnimation == "noise";
         const bool composedNoise = features.contains("p07_noise_composition");
-        if (noise && (cfg.vertical || cfg.rightToLeft || source.wipeReverse
-                || (hasLowerReading && source.karaokeAnimation != "none")
-                || ((!rubyGroups.isEmpty() || singingScale) && !composedNoise)
-                || source.scanlineEnabled || (source.zoomPulseEnabled && !features.contains("p07_ruby_zoom_noise"))
-                || (source.entryAnimation != "none" && source.entryAnimation != "noise")
-                || (source.exitAnimation != "none" && source.exitAnimation != "noise")
-                || source.karaokeAnimation == "no_wipe" || !source.fxBursts.empty() || source.strokeFlashEnabled))
-            (void)0 /* composition gate lifted */;
         const bool composedFlash = features.contains("p07_composed_stroke_flash");
         const bool composedScanline = features.contains(
             cfg.vertical ? "p07_vertical_zoom_scanline" : "p07_composed_scanline");
-        if (source.strokeFlashEnabled
-            && (!features.contains("p07_stroke_flash") || cfg.vertical || cfg.rightToLeft || source.wipeReverse
-                || (!composedFlash && (!rubyGroups.isEmpty() || source.karaokeAnimation == "utopia"))
-                || (source.scanlineEnabled && !composedScanline)
-                || (source.zoomPulseEnabled && !features.contains("p07_zoom_pulse_decoration"))
-                || !plainLineAnimation(source.entryAnimation, true) || !plainLineAnimation(source.exitAnimation, false)
-                || (source.karaokeAnimation == "no_wipe" && !features.contains("p07_no_wipe_decoration"))
-                || !source.fxBursts.empty()))
-            (void)0 /* composition gate lifted */;
         const bool rubyScanline = !rubyGroups.isEmpty() && features.contains("p07_ruby_scanline");
         const bool roleScanlineParticles = features.contains("p07_role_scanline_particles") && rubyScanline
             && !cfg.vertical && !cfg.rightToLeft && resolved.scanlineMode == "role" && resolved.scanlineShape == "band"
@@ -417,39 +365,10 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"
             && source.karaokeAnimation == "none" && !source.strokeFlashEnabled && !source.zoomPulseEnabled
             && source.fxBursts.empty();
-        if (source.scanlineEnabled
-            && (!features.contains("p07_scanline_band")
-                || (resolved.scanlineMode != "color" && scanlineVersion < 3)
-                || (resolved.scanlineShape != "band" && !scanlineShape)
-                || (resolved.scanlineGlowPx != 0 && scanlineVersion < 2)
-                || (cfg.vertical && !verticalBand) || (cfg.rightToLeft && !rtlBand)
-                || (source.wipeReverse && scanlineVersion < 4)
-                || ((source.strokeFlashEnabled || source.zoomPulseEnabled)
-                    && (!composedScanline || (source.wipeReverse && !cfg.vertical)
-                        || (resolved.scanlineMode == "role" && !roleSingingScanline)))
-                || source.karaokeAnimation == "no_wipe" || (utopiaSinging && !utopiaScanline)
-                || (hasLowerReading && !lowerScanline)
-                || (!rubyScanline && !rubyGroups.isEmpty())
-                || (rubyScanline && ((source.wipeReverse && !mixedVerticalScanline)
-                    || (resolved.scanlineMode == "role" && !(roleLayers || roleSingingScanline))
-                    || !(staticScanline || movingScanline || particleScanline)
-                    || (source.karaokeAnimation != "none" && !utopiaScanline)))))
-            (void)0 /* composition gate lifted */;
-        if (source.scanlineEnabled && utopiaSinging && resolved.scanlineMode == "role" && !roleSingingScanline)
-            throw BackendError("Skia 角色扫字线缺少唱字放大能力");
         applyResolvedStyle(style, resolved, cfg.dpr);
-        if (source.scanlineEnabled && shapePalette
-            && (style.scanlineMode == "follow_before" || style.scanlineMode == "follow_after"
-                || style.scanlineMode == "brighten")
-            && (style.beforeFillPaint.mode != "solid" || style.afterFillPaint.mode != "solid"))
-            (void)0 /* composition gate lifted */;
         if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid") {
             const auto& paint = style.scanlineRolePaint.mode;
             const bool gradient = paint == "gradient_horizontal" || paint == "gradient_vertical" || paint == "split_vertical";
-            if (!features.contains("p07_scanline_role_gradient") || !gradient || !staticScanline
-                || cfg.vertical || rubyScanline || utopiaSinging || source.zoomPulseEnabled
-                || source.strokeFlashEnabled || !source.fxBursts.empty() || resolved.scanlineShape != "band")
-                throw BackendError("Skia 扫字线缺少对应角色取色画笔能力");
         }
         style.rightToLeft = cfg.rightToLeft;
         style.vertical = cfg.vertical;
@@ -469,17 +388,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         style.leadInMs = cfg.lineLeadInMs;
         style.tailMs = cfg.lineTailMs;
         applyLineLayout(style, source.layout, source.lane, source.centerOverride, source.pageLineCount, cfg.dpr);
-        if (cfg.vertical && style.laneOffsetX != 0 && !features.contains("p05_vertical_column_offsets"))
-            throw BackendError("Skia 竖排列偏移缺少对应布局能力声明");
         style.layoutOffsetX += float(source.layoutOffsetX * cfg.dpr);
         style.layoutOffsetY += float(source.layoutOffsetY * cfg.dpr);
-        if (source.karaokeAnimation == "no_wipe"
-            && (!features.contains("p07_no_wipe")
-                || ir.value("skia_layout").toObject().value("no_wipe_schema").toDouble(-1) != 1))
-            throw BackendError("Skia 整字变色缺少版本化能力声明");
-        if (source.wipeReverse && (!features.contains("p05_reverse_wipe")
-            || ir.value("skia_layout").toObject().value("reverse_wipe_schema").toDouble(-1) != 1))
-            throw BackendError("Skia 反向走字缺少能力声明");
         // The existing GPU omits every upper/lower reading on a reverse line;
         // sources stay provenance, so a final group there is a forged layout.
         // A missing final line is rejected by the resolved-layout line count.
@@ -499,10 +409,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             const bool endpoints = std::any_of(cells.begin(), cells.end(), [](const QJsonValue& cell) {
                 return cell.toObject().contains("wipe_end_position");
             });
-            if ((features.contains("p05_resolved_ruby") || !cfg.rubies.empty() || endpoints)
-                && (!features.contains("p05_reverse_overlap")
-                    || ir.value("skia_layout").toObject().value("reverse_overlap_schema").toDouble(-1) != 1))
-                throw BackendError("Skia 反向走字的重叠终点或注音轨道缺少能力声明");
         }
         TextLine line;
         line.litHead = source.litHead;
@@ -631,8 +537,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                     return category == QChar::Other_Control || category == QChar::Other_Surrogate;
                 }))
                 throw BackendError("Skia 竖排单元包含控制字符或无效码点");
-            if (cell.vectorGlyph && vectorGuideShadow && !wholeLineGuideShadow)
-                (void)0 /* composition gate lifted */;
             if (cfg.vertical && &protocol::resolvedStyleForCharacter(cfg, source, cell) != &resolved)
                 throw BackendError("Skia 竖排单元包含尚未支持的行内角色");
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
@@ -647,47 +551,20 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
             const auto& cellStyle = protocol::resolvedStyleForCharacter(cfg, source, cell);
-            if (source.scanlineEnabled && ((cell.vectorGlyph && !(vectorFadedScanline || staticScanlineCells))
-                || (&cellStyle != &resolved && !(roleFadedScanline || staticScanlineCells))))
-                (void)0 /* composition gate lifted */;
-            if (!source.fxBursts.empty() && !staticCellParticles
-                && ((cell.vectorGlyph && !(fadedGuideParticles || scaledGuideParticles)) || &cellStyle != &resolved))
-                (void)0 /* composition gate lifted */;
-            if ((transformAnimation(source.entryAnimation, true) || transformAnimation(source.exitAnimation, false))
-                && (cell.vectorGlyph || &cellStyle != &resolved)
-                && (!styledCellTransform
-                    || protocol::decorationKindForState(cellStyle, false) != "none"
-                    || protocol::decorationKindForState(cellStyle, true) != "none"
-                    || cellStyle.baseFill.mode != "solid" || cellStyle.afterFill.mode != "solid"))
-                (void)0 /* composition gate lifted */;
             // Ruby and outlines use their own composition profile.
             const bool lowerVectorClock = source.karaokeAnimation == "none"
                 || (!cfg.rightToLeft && (singingScale || source.karaokeAnimation == "no_wipe"));
-            if (cell.vectorGlyph && hasLowerReading
-                && (cfg.vertical || (cfg.rightToLeft && !features.contains("p05_rtl_lower_ruby"))
-                    || source.wipeReverse || !guideRubyAnimation || !lowerVectorClock || &cellStyle != &resolved
-                    || source.scanlineEnabled || source.zoomPulseEnabled || source.strokeFlashEnabled || !source.fxBursts.empty()))
-                (void)0 /* composition gate lifted */;
-            if (cell.vectorGlyph && (!features.contains("p05_vector_guides") || (cfg.vertical && !verticalVectorGuide)
-                || (cfg.rightToLeft && !rtlVectorGuide)
-                || (&cellStyle != &resolved && !(roleVectorGuides || unscaledRoleVectorGuide))
-                || ((!rubyGroups.isEmpty() || features.contains("p06_primary_solid_outline"))
-                    && !composedGuide)))
-                (void)0 /* composition gate lifted */;
             if (cell.bitmapGuide) {
                 const bool needsInline = !staticTitle && (sawBitmapText || &cellStyle != &resolved);
                 // Bitmap guides compose with every layout, animation and reading;
                 // only their versioned capability is required.
-                if (!features.contains("p08_bitmap_guides") || cell.vectorGlyph)
-                    throw BackendError("Skia 图片导唱符缺少版本化能力或与矢量导唱符冲突");
+                if (cell.vectorGlyph)
+                    throw BackendError("Skia 图片导唱符与矢量导唱符冲突");
                 // An inline guide outside a title still needs its declared capability.
-                if (needsInline && !inlineBitmapGuides)
-                    throw BackendError("Skia 图片导唱符的横排位置或独立装饰缺少能力声明");
             }
             sawBitmapText = sawBitmapText || !cell.bitmapGuide;
-            if ((!cell.fallbackFamily.isEmpty() && !features.contains("p05_font_fallback"))
-                || !cell.resolvedEndMs)
-                throw BackendError("Skia 导唱符、未声明的缺字回退或未解析计时尚未支持");
+            if (!cell.resolvedEndMs)
+                throw BackendError("Skia 单元缺少已解析的计时");
             TextChar ch;
             if (&cellStyle != &resolved) {
                 auto [entry, inserted] = roleStyles.try_emplace(&cellStyle, int(out.charStyles.size()));

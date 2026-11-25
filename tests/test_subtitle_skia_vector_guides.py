@@ -391,10 +391,6 @@ def test_inline_vector_outlines_use_the_existing_outline_capability(binary, proj
         configure(process, ir)
         frames, _ = collect(process, [550, 750, 1100])
         configure(process, composed)
-        bad = copy.deepcopy(composed)
-        bad['required_features'].remove('p06_primary_solid_outline')
-        with pytest.raises(NativeRendererError, match='描边'):
-            configure(process, bad)
         replay, _ = collect(process, [1100, 750, 550], generation=2)
     assert np.array_equal(frames, replay[::-1]) and all(frame.any() for frame in frames)
 
@@ -717,8 +713,7 @@ def test_role_guides_compose_with_any_line_animation_like_actual_gpu(binary, app
                                       (300, 450, 650, 1500, 2600, 3700, 5100, 5300, 5500))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'schema', 'ink', 'advance', 'metrics_id', 'different_id',
-                                      'inline_outline', 'wipe_box'])
+@pytest.mark.parametrize('mutation', ['ink', 'advance', 'metrics_id', 'different_id', 'inline_outline', 'wipe_box'])
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_native_vector_guide_rejects_forgeries_and_keeps_scene(binary, project, mutation, target):
     ir = ir_for(binary, guide_source(project))
@@ -740,23 +735,6 @@ def test_native_vector_guide_rejects_forgeries_and_keeps_scene(binary, project, 
             configure(process, bad)
         after, _ = collect(process, [750], generation=2)
     assert np.array_equal(before[0], after[0])
-
-
-@pytest.mark.parametrize('mutation', ['schema', 'feature', 'bool', 'version'])
-def test_old_vector_guide_sidecar_rejected_before_selection(binary, monkeypatch, mutation):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='vector guide handshake fixture')
-    if mutation == 'schema': del ready['vector_guide_schema']
-    elif mutation == 'feature': ready['profiles'].remove('p05_vector_guides')
-    else: ready['vector_guide_schema'] = True if mutation == 'bool' else 2
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='导唱符'):
-        SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.parametrize('kind', ['prefix', 'inline'])

@@ -179,7 +179,7 @@ def test_unverified_joined_scripts_remain_explicitly_gated(binary,source,text,re
     with pytest.raises(NativeRendererError,match=reason):ir_for(binary,(track,style,resolve))
 
 
-@pytest.mark.parametrize('mutation',['glyph_font','font_run','byte_boundary','identity','feature','schema','flag','flag_type'])
+@pytest.mark.parametrize('mutation',['glyph_font', 'font_run', 'byte_boundary', 'identity', 'flag', 'flag_type'])
 def test_mixed_snapshot_tampering_preserves_old_scene(binary,source,mutation):
     ir=ir_for(binary,source);bad=copy.deepcopy(ir);cell=bad['skia_layout']['lines'][0]['cells'][0]['metrics']
     if mutation=='glyph_font':cell['glyphs'][1]['font_index']=0
@@ -352,15 +352,3 @@ def test_comparison_requires_exact_font_and_byte_indices():
     for name in ['font_index','byte_start','byte_end']:
         with pytest.raises(ValueError):compare({name:1},{name:1.000001})
 
-
-def test_old_sidecar_cannot_accept_mixed_cells(binary,monkeypatch):
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try:ready=NativeRendererProcess.start(process)
-    finally:process.abort(reason='handshake fixture')
-    ready.pop('mixed_font_schema')
-    sent=[]
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,p:sent.append(p))
-    with pytest.raises(NativeRendererError,match='混合字体'):SkiaRendererProcess(binary).start()
-    assert not sent

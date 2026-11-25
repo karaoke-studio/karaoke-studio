@@ -93,20 +93,14 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool imageFills = features.contains("p06_image_fill") || roleBodyPaints;
     const bool bodyShadowGradients = features.contains("p06_body_gradient_shadow");
     const bool bodyShadowImages = features.contains("p06_body_image_shadow");
-    validateSkiaScene(projected, true, {.outlineLayers = outlineLayers, .bodyGradients = bodyGradients,
-        .outlineGradients = outlineGradients, .imageFills = imageFills,
-        .staticShadow = features.contains("p06_static_shadow"), .staticGlow = features.contains("p06_static_glow"),
-        .customShapeSignal = features.contains("p08_custom_shape_signal"),
-        .imageShapeSignal = features.contains("p08_custom_image_signal"),
-        .decoratedShapeSignal = features.contains("p08_decorated_shape_signal"),
-        .vectorShapeSignal = features.contains("p08_vector_shape_signal"),
-        .volumeSignal = features.contains("p08_volume_signal"),
-        .staticLineBand = features.contains("p08_static_line_band"),
-        .roleOutlines = (staticTitle && features.contains("p08_title_role_outlines"))
-            || features.contains("p06_role_solid_outlines"), .roleBodyPaints = roleBodyPaints,
-        .roleStaticShadow = roleStaticShadow || (roleVectorGuides && features.contains("p06_static_shadow")),
-        .roleStaticGlow = roleStaticGlow, .bodyShadowGradients = bodyShadowGradients,
-        .bodyShadowImages = bodyShadowImages, .roleShadowPaints = roleShadowPaints, .glowPaints = glowPaints});
+    // Validation only: every paint, decoration and signal kind is implemented.
+    validateSkiaScene(projected, true, {.outlineLayers = 2, .bodyGradients = true,
+        .outlineGradients = true, .imageFills = true, .staticShadow = true, .staticGlow = true,
+        .customShapeSignal = true, .imageShapeSignal = true, .decoratedShapeSignal = true,
+        .vectorShapeSignal = true, .volumeSignal = true, .staticLineBand = true,
+        .roleOutlines = true, .roleBodyPaints = true, .roleStaticShadow = true, .roleStaticGlow = true,
+        .bodyShadowGradients = true, .bodyShadowImages = true, .roleShadowPaints = true,
+        .glowPaints = GlowPaintSupport::LineGradients});
     const bool staticGlow = features.contains("p06_static_glow");
     const bool scriptStylesOnly = projected.charStyles.empty()
         && (latinSecondaryOutline || (latinPrimaryOutline && features.contains("p05_vector_guide_composition")
@@ -122,8 +116,7 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     const bool verticalTextCells = features.contains("p05_vertical_text_cells");
     if (layout.value("version").toInt() != 2 || layout.value("metrics_identity").toString().size() != 64
         || !layout.value("fonts").isObject() || !layout.value("lines").isArray()
-        || !layout.value("runs").isArray()
-        || !ir.value("required_features").toArray().contains("p05_resolved_horizontal"))
+        || !layout.value("runs").isArray())
         throw BackendError("Skia 缺少版本化的最终布局与度量快照");
     const auto lines = layout.value("lines").toArray();
     const auto resources = lines.isEmpty() && layout.value("fonts").toObject().isEmpty()
@@ -139,14 +132,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
     for (const auto& value : runs) {
         if (!value.isObject()) throw BackendError("Skia 字体实例必须为对象");
         const auto run = value.toObject();
-        if (run.value("mixed_fallback").toBool()
-            && (!ir.value("required_features").toArray().contains("p05_mixed_fonts")
-                || layout.value("mixed_font_schema").toDouble(-1) != 1))
-            throw BackendError("Skia 混合字体缺少版本化能力声明");
-        if ((run.value("font_ids").toArray().size() > 1 || run.contains("font_options"))
-            && (!ir.value("required_features").toArray().contains("p05_font_fallback")
-                || layout.value("font_chain_schema").toDouble(-1) != 1))
-            throw BackendError("Skia 显式字体链缺少版本化能力声明");
         if (run.value("rtl").toBool()) throw BackendError("Skia 当前规范布局尚不支持 RTL");
         glyphs.fonts.push_back(scene::skiaRunFonts(run, resources));
         glyphs.mixedFallback.push_back(run.value("mixed_fallback").toBool());
@@ -184,22 +169,11 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
-        if (latinSecondaryOutline && (style.vertical || style.rightToLeft || line.wipeReverse
-            || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-            || !ordinaryLineAnimation || line.karaokeAnimation == "no_wipe"))
-            (void)0 /* composition gate lifted */;
         const bool animatedGuideGradients = features.contains("p05_vector_guide_composition")
             && features.contains("p06_animated_singing_gradient_fill") && line.karaokeAnimation == "utopia"
             && !style.vertical && !style.rightToLeft && !line.wipeReverse && !line.scanlineEnabled
             && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
             && ordinaryLineAnimation;
-        if (gradientGlowWithoutTexturedRoles && !(brightenedScanlineGradient
-                || animatedGuideGradients || (vectorFadedScanline && features.contains("p06_faded_scanline_gradient_fill")))
-            && (style.vertical || style.rightToLeft || line.wipeReverse
-            || line.karaokeAnimation != "none" || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()
-            || (line.entryAnimation != "none" && line.entryAnimation != "fade")
-            || (line.exitAnimation != "none" && line.exitAnimation != "fade")))
-            (void)0 /* composition gate lifted */;
         if (!source.value("cells").isArray()) throw BackendError("Skia 最终布局缺少单元");
         const auto cells = source.value("cells").toArray();
         const auto original = originalLines[index].toObject();
@@ -265,13 +239,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 || (prepared.noWipe && features.contains("p07_vertical_decoration_no_wipe_animation")));
         const bool rtlRubyUnscaledMotion = rtlRuby && !singingScale && ordinaryLineAnimation
             && features.contains("p07_rtl_ruby_unscaled_line_animation");
-        if (rtlRuby && annotated && ((style.strokeWidth <= 0 && !features.contains("p05_rtl_ruby_without_body_stroke"))
-            || line.wipeReverse
-            || (line.karaokeAnimation != "none" && !rtlRubySinging && !rtlRubyNoWipe)
-            || (!(rtlRubyMotion || rtlRubyUnscaledMotion) && (line.entryAnimation != "none" || line.exitAnimation != "none"))
-            || line.zoomPulseEnabled
-            || line.scanlineEnabled || line.strokeFlashEnabled || !line.bursts.empty()))
-            (void)0 /* composition gate lifted */;
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         // A bitmap guide's glow takes the line's glow paint on any line.
         const bool bitmapGradientGlow = features.contains("p08_bitmap_guide_gradient_glow") && !staticTitle;
@@ -389,12 +356,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const auto supportsParticleEntryDecoration = [](const auto& kind, bool glow) {
             return kind == "none" || (glow && kind == "glow");
         };
-        if (particleComposition && features.contains("p07_ruby_particle_entry")
-            && (!supportsParticleEntryDecoration(style.decorationKindForState(false), particleEntryGlow)
-                || !supportsParticleEntryDecoration(style.decorationKindForState(true), particleEntryGlow)
-                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(false), readingEntryGlow)
-                || !supportsParticleEntryDecoration(style.rubyDecorationKindForState(true), readingEntryGlow)))
-            (void)0 /* composition gate lifted */;
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         // Without readings the singing pose and per-character transition are independent layers.
         const bool singingTransform = !annotated && singingScale && features.contains("p07_singing_character_transform")
@@ -425,7 +386,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && features.contains("p06_animated_singing_gradient_fill");
-        if (rtlRubyMotion && !lineAnimation) (void)0 /* composition gate lifted */;
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && ((line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled)
                 || roleFadedScanline || ((inlineAvatars || roleVectorGuides)
@@ -434,10 +394,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                     && (line.exitAnimation == "none" || line.exitAnimation == "fade")))
             && !line.strokeFlashEnabled && line.bursts.empty();
         if (line.scanlineEnabled && !features.contains("p07_scanline_static_cells")) {
-            if (hasInlineRoles && !roleFadedScanline)
-                (void)0 /* composition gate lifted */;
-            if (vectorGuides && !vectorFadedScanline)
-                (void)0 /* composition gate lifted */;
         }
         const bool reverseRoleSinging = hasInlineRoles && roleSinging && !line.scanlineEnabled
             && features.contains("p07_reverse_role_singing")
@@ -471,27 +427,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
-        if (utopia && ((style.vertical && !verticalSinging) || (style.rightToLeft && !rtlRubySinging && !rtlPlainSinging) || prepared.noWipe
-            || (vectorGuides && !features.contains("p05_vector_guide_composition"))
-            || (line.wipeReverse && !(verticalSinging || reverseHorizontalSinging))
-            || (line.strokeFlashEnabled && (utopiaEntry || utopiaExit
-                || !features.contains("p07_composed_stroke_flash")))
-            || (!line.bursts.empty() && !verticalScaledParticles && !singingTransform
-                && ((!rubyParticles && !fadedScanlineParticles && !features.contains("p07_plain_scaled_singing_particles"))
-                    || utopiaEntry || utopiaExit
-                    || (line.zoomPulseEnabled && !features.contains("p07_plain_zoom_singing_particles"))))
-            || (line.scanlineEnabled && ((utopiaEntry && !features.contains("p07_scanline_utopia_entry")) || utopiaExit
-                || (line.zoomPulseEnabled && !features.contains(style.vertical
-                    ? "p07_vertical_zoom_scanline" : "p07_composed_scanline"))))
-            || (!lineAnimation && !fadeComposition && !noiseComposition && !warpComposition && !geometryComposition
-                && !singingTransform
-                && ((!utopiaEntry && line.entryAnimation != "none")
-                || (!utopiaExit && line.exitAnimation != "none")))
-            || (annotated && (!features.contains("p07_ruby_singing_scale")
-                || (line.zoomPulseEnabled && !features.contains("p07_ruby_zoom_pulse"))
-                || (utopiaEntry && !rubyUtopiaEntry) || (utopiaExit && !rubyUtopiaExit)))
-            || (!projected.charStyles.empty() && !(roleSinging || scriptStylesOnly))))
-            (void)0 /* composition gate lifted */;
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
         if ((singingScale || ((rubyUtopiaEntry || rubyUtopiaExit) && source.contains("utopia_origin_x")))
             && annotated && !verticalSinging) {
@@ -527,9 +462,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             && (particleEntry || particleExit);
         const bool outlinedGeometry = !annotated && line.exitAnimation != "glow_out"
             && features.contains("p07_outlined_character_geometry");
-        if (geometry && !geometryComposition && !outlinedEnergy && !outlinedGeometry
-            && (style.strokeWidth > 0 || style.stroke2Width > 0))
-            (void)0 /* composition gate lifted */;
         prepared.rubyGeometryComposition = geometryComposition || (annotated && (geoEntry || geoExit));
         // Inside its window a geometry transition owns the cell pose, whatever else the line sings.
         prepared.geometryOwnsPose = geoEntry || geoExit;
@@ -579,20 +511,12 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         prepared.wipeRightToLeft = style.vertical ? line.wipeReverse : style.rightToLeft != line.wipeReverse;
         if (style.vertical) {
             const auto rubyGroups = source.value("ruby_groups").toArray();
-            if (!ir.value("required_features").toArray().contains("p05_vertical_solid")
-                || !source.value("text_flow").isString() || source.value("text_flow").toString() != "vertical"
-                || (!rubyGroups.isEmpty()
-                    && (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
-                        || (rubyGroups.size() > 1 && !features.contains("p05_vertical_ruby_groups")))))
-                throw BackendError("Skia 竖排缺少能力声明或最终方向无效");
+            if (!source.value("text_flow").isString() || source.value("text_flow").toString() != "vertical")
+                throw BackendError("Skia 竖排最终方向无效");
         } else if (style.rightToLeft || source.contains("text_flow")) {
-            if (!ir.value("required_features").toArray().contains("p05_horizontal_rtl")
-                || layout.value("horizontal_rtl_schema").toDouble(-1) != 1
-                || !source.value("text_flow").isString()
-                || source.value("text_flow").toString() != (style.rightToLeft ? "rtl" : "ltr")
-                || (!source.value("ruby_groups").toArray().isEmpty()
-                    && !rtlRuby))
-                throw BackendError("Skia 右至左单元排列缺少能力声明或最终方向无效");
+            if (!source.value("text_flow").isString()
+                || source.value("text_flow").toString() != (style.rightToLeft ? "rtl" : "ltr"))
+                throw BackendError("Skia 右至左单元排列的最终方向无效");
         }
         // The existing GPU places vertical columns from margins only; page offsets do not apply.
         if (!style.vertical)
@@ -618,10 +542,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             // A script-slot override has no effect on non-Latin cells or guides.
             const bool latin = isLatinText(line.chars[j].text);
             if (latin) {
-                if (paint.strokeWidth != paint.latinStrokeWidth && !latinPrimaryOutline)
-                    throw BackendError("Skia 英数首层描边缺少能力声明");
-                if (paint.stroke2Width != paint.latinStroke2Width && !latinSecondaryOutline)
-                    throw BackendError("Skia 英数第二道描边缺少能力声明");
             }
             if (roleFadedScanline) {
                 const auto supported = [](const PaintStyle& fill) {
@@ -640,8 +560,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             if ((glyphId.isString() && !vector) || (vector && line.chars[j].text != L"\ufffc"))
                 throw BackendError("Skia 导唱符缺少有效的来源轮廓引用");
             const auto& bitmap = line.chars[j].bitmapGuide;
-            if (bitmap && (!features.contains("p08_bitmap_guides") || vector || line.chars[j].text != L"￼"))
-                throw BackendError("Skia 图片导唱符缺少版本化能力或来源无效");
+            if (bitmap && (vector || line.chars[j].text != L"￼"))
+                throw BackendError("Skia 图片导唱符来源无效");
             auto glyph = bitmap
                 ? resolvedBitmapGuideCell(cell, *bitmap, imageCache, paint, glyphs.dpr, line.chars[clock].startMs,
                                           line.chars[clock].endMs, beforeColor, afterColor, wipePad,
@@ -711,10 +631,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                         && features.contains("p07_translucent_character_outline");
                     const bool reverseProtectedOutline = reverseHorizontalSinging && reverseSingingOutline
                         && singingScale && !transforms;
-                    if (!paintedSinging && !translucentOutline && !reverseProtectedOutline
-                        && ((!utopia && !allowAnimatedOutlines) || (glyph.outline && !opaque(*glyph.outline))
-                        || (glyph.outerOutline && !opaque(*glyph.outerOutline))))
-                        (void)0 /* composition gate lifted */;
                     const auto ink = glyph.path.computeTightBounds();
                     glyph.pivot.inkLeft = ink.fLeft;
                     glyph.pivot.inkRight = ink.fRight;
@@ -798,9 +714,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             {rtlRubyUnscaledMotion || horizontalShadowMotion || horizontalGlowMotion || verticalMotion,
              lowerUnscaledMotion || lowerUtopiaMotion, movingSingingGradientFill},
             totalCells, totalGroups);
-        if (((prepared.characterFade.active() && !fadeComposition && !warpComposition)
-                || (geometry && !geometryComposition)) && !prepared.rubyGroups.empty())
-            (void)0 /* composition gate lifted */;
         resolveSkiaParticleAnchors(source.value("particle_box_height"), features, line, style,
                                    rubyParticles, particleSprites, imageCache, glyphs.dpr, prepared);
         if (transforms) {
@@ -811,9 +724,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 const auto& c = prepared.cells[i];
                 const int start = c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs;
                 const int end = c.wipePoints.empty() ? c.endMs : c.wipePoints.back().timeMs;
-                if ((fade.entry && fade.entryKind != Kind::Fade && start < prepared.startMs + fade.delay * int(i) + 250)
-                    || (fade.exit && fade.exitKind != Kind::Fade && end > std::max(line.endMs, prepared.endMs - 600)))
-                    (void)0 /* composition gate lifted */;
             }
             const auto simpleTransform = [](std::string_view animation) {
                 return animation == "none" || animation == "char_drip" || animation == "spin_flip";
@@ -829,10 +739,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 && line.karaokeAnimation == "none" && !line.scanlineEnabled
                 && style.strokeWidth == 0 && style.stroke2Width == 0
                 && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none";
-            if (style.vertical || ((style.rightToLeft || line.wipeReverse) && !directionalTransform)
-                || (prepared.noWipe && !wholeCellTransform)
-                || (line.scanlineEnabled && !(petalScanline || transformBand)))
-                (void)0 /* composition gate lifted */;
         }
         const bool primaryOutline = style.strokeWidth > 0, secondaryOutline = style.stroke2Width > 0;
         // Drawn layers in before/after pairs: body, primary outline, outer ring.
@@ -871,9 +777,8 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
             const bool imagePaint = paint.mode == "image";
             // Painted shadows compose with every layout and animation; posed
             // cells paint them in line space like the static shadow.
-            if (!(imagePaint ? bodyShadowImages : bodyShadowGradients) || (!imagePaint && !rolePaintBounds)
-                || (hasBitmapGuide && !staticTitle && !(imagePaint ? bitmapGuideImageShadow : bitmapGuideGradientShadow)))
-                throw BackendError("Skia 正文渐变或图片阴影缺少画笔能力声明");
+            if (!imagePaint && !rolePaintBounds)
+                throw BackendError("Skia 正文渐变阴影缺少绘制范围");
             if (imagePaint) {
                 state.image = imageCache.fill(paint, projected.layoutReferenceScale);
                 state.color = argb(paint.color);
@@ -936,13 +841,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool roleGuideShadow = lineAnimation && (!hasInlineRoles || roleSinging)
             && roleVectorGuides && features.contains("p06_static_shadow") && !line.scanlineEnabled
             && !line.strokeFlashEnabled && line.bursts.empty();
-        if (roleStaticShadow && hasInlineRoles && !(inlineShadow || roleGuideShadow)
-            && std::ranges::any_of(line.chars, [&](const auto& cell) {
-                if (cell.styleIndex < 0) return false;
-                const auto& look = projected.charStyles[cell.styleIndex];
-                return look.decorationKindForState(false) == "shadow" || look.decorationKindForState(true) == "shadow";
-            }))
-            (void)0 /* composition gate lifted */;
         if ((roleGuideShadow && hasInlineRoles) || inlineShadow)
             resolveRoleShadows(prepared, line, projected.charStyles,
                                roleShadowPaints && inlineShadow ? &*rolePaintBounds : nullptr,
@@ -1029,11 +927,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool directionalPaints = staticDirectional && features.contains("p06_directional_body_paints");
         const bool directionalOutlines = directionalPaints
             || (staticDirectional && !gradient && !image && features.contains("p06_directional_solid_outline"));
-        if (!style.vertical && (primaryOutline || secondaryOutline)
-            && ((line.wipeReverse && !(reverseHorizontalDecoration || reverseBitmapLine || mixedReverseBitmaps
-                                      || directionalOutlines || (reverseHorizontalSinging && reverseSingingOutline)))
-                || (style.rightToLeft && !(rtlRuby || directionalOutlines))))
-            (void)0 /* composition gate lifted */;
         const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
         const bool rtlBitmapDecoration = style.rightToLeft && hasBitmapGuide
             && features.contains("p08_rtl_bitmap_guide_decoration") && !annotated && !hasInlineRoles
@@ -1043,25 +936,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
         const bool reverseSingingGlow = singingGlow && reverseHorizontalSinging && hasGlow && !hasShadow
             && !gradientGlow && !line.scanlineEnabled && !hasInlineRoles && (!hasBitmapGuide || reverseBitmapGlow)
             && features.contains("p07_reverse_singing_glow");
-        if (hasDecoration
-            && ((style.vertical && !verticalDecoration)
-                || (style.rightToLeft && !rtlBitmapDecoration && (!rtlRuby || (hasShadow && !rtlShadow)))
-                || (line.wipeReverse && !(reverseVerticalDecoration || reverseHorizontalDecoration || reverseSingingGlow))
-                || (prepared.noWipe && !(noWipeGlow || verticalShadowNoWipe || verticalMixedNoWipe || rtlShadow
-                    || horizontalShadowMotion || horizontalGlowMotion
-                    || (reverseHorizontalDecoration && reverseHorizontalNoWipe)))
-                || (!(lineGlow || rtlRubyUnscaledMotion || horizontalShadowMotion || movingGradientShadow || roleGuideShadow
-                      || (inlineShadow && roleShadowMotion)
-                      || (verticalDecoration && verticalDecorationAnimation)
-                      || (reverseHorizontalDecoration && reverseHorizontalMotion))
-                    && (line.entryAnimation != "none" || line.exitAnimation != "none"))
-                || (line.scanlineEnabled && !(scanlineGlow || scanlineShadow || verticalScanlineDecoration))
-                || (!line.bursts.empty() && !(particleGlow || (verticalParticleDecoration && verticalDecoration)))
-                || (line.strokeFlashEnabled && !flashGlow)
-                || (hasInlineRoles && !(roleGuideShadow || inlineShadow)) || ((gradient || image) && !paintedDecoration)
-                || (hasGlow && utopia && !singingGlow)
-                || (vectorGuides && !inlineShadow && !features.contains("p05_vector_guide_composition"))))
-            (void)0 /* composition gate lifted */;
         if (!roleBodyPaints && (gradient || image)) {
             const bool unscaledPaintFade = features.contains("p06_unscaled_paint_fade")
                 && (line.entryAnimation == "none" || line.entryAnimation == "fade")
@@ -1073,19 +947,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                 && line.scanlineEnabled && style.scanlineShape == "band"
                 && (style.scanlineMode == "default" || style.scanlineMode == "color")
                 && !line.zoomPulseEnabled && line.bursts.empty() && prepared.rubyGroups.empty();
-            if ((gradient && (!bodyGradients || ((primaryOutline || secondaryOutline) && !outlineGradients)))
-                || (image && !imageFills)
-                || (style.vertical && !verticalPaints)
-                || ((style.rightToLeft || line.wipeReverse)
-                    && !(directionalPaints || verticalPaints || unannotatedSingingPaint))
-                || (utopia && !singingMainPaint)
-                || (!movingGradient && !unscaledPaintFade && !unscaledPaintScanline
-                    && (line.entryAnimation != "none" || line.exitAnimation != "none"
-                    || line.scanlineEnabled || !line.bursts.empty()))
-                || line.strokeFlashEnabled
-                || (!prepared.rubyGroups.empty() && !rubyMainPaint)
-                || (!projected.charStyles.empty() && !scriptStylesOnly))
-                (void)0 /* composition gate lifted */;
             // Image paints need no line domain: the existing GPU tiles them on the canvas.
             for (int i = 0; i < 6 && image; ++i)
                 if (layers[i] && layers[i]->mode == "image")
@@ -1137,8 +998,6 @@ void applyVerticalGeometry(::subtitle::skia::ResolvedCell& glyph, const QJsonObj
                                 ::subtitle::skia::scanlineGradient(*layers[i], ink, pad, prepared.scanline.paint);
             }
         }
-        if (!roleBodyPaints && !gradient && source.contains("body_gradient_bounds"))
-            throw BackendError("Skia 实色正文携带了未声明的渐变范围");
         if (line.wipeReverse) {
             std::reverse(prepared.cells.begin(), prepared.cells.end());
             // Per-cell role glows and shadows were resolved in source order.

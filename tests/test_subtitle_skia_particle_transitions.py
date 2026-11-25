@@ -306,7 +306,7 @@ def test_energy_transitions_keep_companion_layers_and_outside_tail(binary, proje
         }, sort_keys=True), encoding='utf-8')
 
 
-@pytest.mark.parametrize('mutation', ['profile', 'transform_profile', 'foreign_layer', 'front_shockwave', 'entry_ash'])
+@pytest.mark.parametrize('mutation', ['profile', 'foreign_layer', 'front_shockwave', 'entry_ash'])
 def test_invalid_energy_transition_keeps_scene(binary, project, mutation):
     ir = ir_for(binary, symbol_source(project, 'flame', 'lightning'))
     bad = copy.deepcopy(ir)

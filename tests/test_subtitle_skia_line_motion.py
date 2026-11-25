@@ -110,15 +110,11 @@ def test_static_line_bands_stay_below_active_rows_and_follow_line_motion(binary,
     times = [first - 1, first + 150, overlap, last - 150, last + 1]
     invalid = copy.deepcopy(valid)
     invalid['skia_layout']['lines'][0]['line_band_rect'][0] = float('nan')
-    bad_schema = copy.deepcopy(valid)
-    bad_schema['skia_layout']['line_band_schema'] = 2 if fit == 'stretch' else 1
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, valid)
         frames, _ = collect(process, times)
         with pytest.raises(NativeRendererError):
             configure(process, invalid)
-        with pytest.raises(NativeRendererError, match='行背景带布局版本无效'):
-            configure(process, bad_schema)
         replay, _ = collect(process, list(reversed(times)), generation=2)
         configure(process, plain)
         text, _ = collect(process, times, generation=3)
@@ -177,14 +173,10 @@ def test_static_line_band_can_include_the_upper_reading_box(binary, reading, tar
     body_rect = body['skia_layout']['lines'][0]['line_band_rect']
     assert rect[0] == body_rect[0] and rect[2:] == body_rect[2:]
     assert rect[1] < body_rect[1] and rect[1] < min(u['baseline_y'] for u in source['ruby_groups'][0]['units'])
-    bad = copy.deepcopy(annotated)
-    bad['required_features'].remove(feature)
     t = annotated['track']['lines'][0]['display_start_ms']+170
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, annotated)
         before, _ = collect(process, [t])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         after, _ = collect(process, [t], generation=2)
     assert before[0].any() and np.array_equal(before[0], after[0])
 
@@ -216,14 +208,10 @@ def test_static_staff_line_band_resolves_colored_layers_and_note_toggle(binary, 
         assert ir['style']['line_band_image'].endswith(asset)
         assert ir['style']['line_band_lines_image'].endswith('staff_scroll_lines.png')
         assert ir['style']['line_band_clef_image'].endswith('staff_scroll_clef.png')
-    bad = copy.deepcopy(modes[0])
-    bad['required_features'].remove('p08_staff_line_band')
     t = modes[0]['track']['lines'][0]['display_start_ms'] + 550
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, modes[0])
         notes, _ = collect(process, [t])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [t], generation=2)
         configure(process, modes[1])
         without, _ = collect(process, [t], generation=3)
@@ -255,16 +243,12 @@ def test_animated_staff_line_band_loops_on_scene_time_and_replays(binary, projec
     feature = 'p08_animated_staff_line_band'
     assert feature in ir['required_features']
     assert ir['style']['line_band_image'].endswith('staff_scroll.webp')
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     # The shipped note animation has sixty 20ms frames. Sample two adjacent
     # frames in different cycles, after the lyric has finished.
     times = [2420, 2400, 3620, 3600, 2420]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [2420], generation=2)
     assert all(np.array_equal(frames[0], other) for other in (frames[2], frames[4], replay[0]))
     assert np.array_equal(frames[1], frames[3])
@@ -417,13 +401,9 @@ def test_line_band_with_scanline_keeps_effect_geometry_and_seek(binary, reading,
     line, = ir['skia_layout']['lines']
     unbanded, = baseline['skia_layout']['lines']
     assert {k: v for k, v in line.items() if k != 'line_band_rect'} == unbanded
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, [550, 1250, 550])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [550], generation=2)
         configure(process, baseline)
         plain, _ = collect(process, [550], generation=3)
@@ -453,8 +433,6 @@ def test_line_band_character_transition_uses_its_own_smoothstep(binary, project,
     ir = ir_for(binary, (track, style))
     feature = 'p08_line_band_transition'
     assert feature in ir['required_features']
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     source, = ir['track']['lines']
     start, end = source['display_start_ms'], source['display_end_ms']
     entry, leave = source['entry_duration_ms'] or 600, source['exit_duration_ms'] or 600
@@ -464,8 +442,6 @@ def test_line_band_character_transition_uses_its_own_smoothstep(binary, project,
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [times[1]], generation=2)
     alpha = np.array([int(frame[y, x, 3]) for frame in frames])
     intervals = np.array(times)
@@ -536,8 +512,6 @@ def test_line_band_outer_stroke_expands_transparent_alpha(binary, project, tmp_p
     feature = 'p08_line_band_outer_stroke'
     assert feature not in plain['required_features'] and feature in outlined['required_features']
     t = outlined['track']['lines'][0]['display_start_ms'] + 250
-    bad = copy.deepcopy(outlined)
-    bad['style']['line_band_stroke_position'] = 'inside'
     oversized = copy.deepcopy(outlined)
     oversized['skia_layout']['lines'][0]['line_band_rect'][2] = 9000
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -545,8 +519,6 @@ def test_line_band_outer_stroke_expands_transparent_alpha(binary, project, tmp_p
         bare, _ = collect(process, [t])
         configure(process, outlined)
         outline, _ = collect(process, [t], generation=2)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         with pytest.raises(NativeRendererError, match='行背景带描边尺寸超限'):
             configure(process, oversized)
         replay, _ = collect(process, [t], generation=3)
@@ -611,16 +583,12 @@ def test_line_band_blur_uses_independent_shadow_and_glow_layers(binary, project,
     assert feature in ir['required_features']
     no_glow = ir_for(binary, (track, replace(style, line_band_glow_enabled=False)))
     no_shadow = ir_for(binary, (track, replace(style, line_band_shadow_enabled=False)))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     t = ir['track']['lines'][0]['display_start_ms'] + 250
     oversized = copy.deepcopy(ir)
     oversized['style']['line_band_glow_size_px'] = 512
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         both, _ = collect(process, [t])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         with pytest.raises(NativeRendererError, match='阴影或发光尺寸超限'):
             configure(process, oversized)
         replay, _ = collect(process, [t], generation=2)
@@ -732,14 +700,10 @@ def test_animated_line_band_decoration_uses_current_frame_alpha(binary, project,
     if wide_blur:
         band = ir['skia_layout']['lines'][0]['line_band_rect']
         assert (band[3] - band[1]) * 4 / 8 >= 15.5
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     times = [2500, 2600, 2750, 2850, 2500]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, [2600], generation=2)
     assert np.count_nonzero(frames[0][..., 3] != frames[1][..., 3]) > 100
     assert all(np.array_equal(frames[0], frame) for frame in (frames[2], frames[-1]))
@@ -799,25 +763,6 @@ def test_motion_relative_to_static_line(binary, project, target, axis, tmp_path)
             'window': [start, end],
             'durations': [line['entry_duration_ms'], line['exit_duration_ms']],
         }, sort_keys=True), encoding='utf-8')
-
-
-@pytest.mark.parametrize('mutation', ['feature', 'schema', 'wrong_phase'])
-def test_invalid_line_motion_keeps_scene(binary, project, mutation):
-    ir = ir_for(binary, motion_project(project))
-    bad = copy.deepcopy(ir)
-    if mutation == 'feature':
-        bad['required_features'].remove('p07_line_motion')
-    elif mutation == 'schema':
-        bad['skia_layout']['line_motion_schema'] = '1'
-    else:
-        bad['track']['lines'][0]['exit_anim'] = 'slide_in'
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, ir)
-        before, _ = collect(process, [100])
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
-        after, _ = collect(process, [100], generation=2)
-    assert np.array_equal(before[0], after[0])
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
@@ -949,16 +894,12 @@ def test_viewport_translation_moves_body_and_ruby_without_retiming(binary, readi
     assert 'p08_viewport' in moved['required_features']
     assert moved['skia_layout']['lines'] == plain['skia_layout']['lines']
     assert moved['track']['lines'] == plain['track']['lines']
-    invalid = copy.deepcopy(moved)
-    invalid['required_features'].remove('p08_viewport')
     times = [299, 550, 1400, 2300]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, plain)
         original, _ = collect(process, times)
         configure(process, moved)
         translated, _ = collect(process, [*times, 550], generation=2)
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
         replay, _ = collect(process, [550], generation=3)
     expected = []
     for source in original:

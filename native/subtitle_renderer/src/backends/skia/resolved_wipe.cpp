@@ -8,18 +8,13 @@ std::optional<float> resolvedSkiaWipeEnd(const QJsonObject& cell, const QJsonObj
     if (!cell.contains("wipe_end_position")) return {};
     const auto value = cell.value("wipe_end_position");
     const double end = value.toDouble(-1);
-    if (!ir.value("required_features").toArray().contains("p05_overlap_wipe")
-        || ir.value("skia_layout").toObject().value("overlap_schema").toDouble(-1) != 1
-        || !value.isDouble() || !std::isfinite(end) || end < 0 || end > 1)
-        throw BackendError("Skia 重叠走字终点缺少能力声明或包含无效值");
+    if (!value.isDouble() || !std::isfinite(end) || end < 0 || end > 1)
+        throw BackendError("Skia 重叠走字终点包含无效值");
     return float(end);
 }
 std::vector<WipePoint> resolvedSkiaWipePoints(const QJsonObject& cell, const QJsonObject& ir,
                                             int timingOffset, std::size_t& totalPoints) {
     if (!cell.contains("wipe_points")) return {};
-    if (!ir.value("required_features").toArray().contains("p05_segmented_wipe")
-        || ir.value("skia_layout").toObject().value("wipe_schema").toDouble(-1) != 1)
-        throw BackendError("Skia 分段走字缺少版本或能力声明");
     const auto value = cell.value("wipe_points");
     if (!value.isArray() || value.toArray().size() < 2 || value.toArray().size() > 4096
         || (totalPoints += value.toArray().size()) > 1048576)

@@ -202,16 +202,6 @@ def test_gpu_raster_translations_and_all_time_offsets_agree(binary,collisions,mo
     assert delta.mean()<.15 and np.mean(np.max(delta,axis=-1)>16)<.003
 
 
-def test_old_sidecar_without_collision_capability_is_rejected(monkeypatch,tmp_path):
-    executable=tmp_path/'old';executable.touch()
-    ready={'ok':True,'backend':'skia','schema':3,'selection_version':1,'resolved_layout_schema':2,
-        'profiles':['p05_resolved_horizontal','p05_single_line_placement','p05_inline_roles','p05_fixed_row_grid'],
-        'execution_targets':['raster']}
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    with pytest.raises(NativeRendererError,match='跨页避让'):SkiaRendererProcess(executable).start()
-
-
 @pytest.mark.parametrize('target',['gpu','raster'])
 def test_translation_half_open_windows_move_paths_and_wipe_together(binary,grid,target):
     track,style=grid

@@ -190,10 +190,6 @@ def test_vertical_ruby_outlines_follow_ink_and_keep_independent_colors(binary, p
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        bad = copy.deepcopy(ir)
-        bad['required_features'].remove(feature)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, times[::-1], generation=2)
     assert np.array_equal(frames[1], replay[1])
 
@@ -393,10 +389,6 @@ def test_vertical_viewport_rotates_body_and_reading_wipes(binary, project, angle
             configure(process, ir)
             frames, _ = collect(process, [*times, times[1]])
             assert np.array_equal(frames[1], frames[-1])
-            bad = copy.deepcopy(ir)
-            bad['required_features'].remove(feature)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
             replay, _ = collect(process, [times[1]], generation=2)
             assert np.array_equal(frames[1], replay[0])
         captures.append(np.stack(frames[:-1]))
@@ -460,8 +452,6 @@ def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke
     assert len(forward['ruby_groups']) == 1 and reverse['ruby_groups'] == []
     assert reverse['cells'] == bare['skia_layout']['lines'][1]['cells']
     assert [cell['clock_index'] for cell in reverse['cells']] == list(range(len(second.chars) - 1, -1, -1))
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p07_vertical_mixed_scanline' if with_band else feature)
     bad_group = copy.deepcopy(ir)
     bad_group['skia_layout']['lines'][1]['ruby_groups'] = forward['ruby_groups']
     times = [400, 3300, 3800, 4300]
@@ -470,7 +460,7 @@ def test_vertical_reverse_line_preserves_other_readings(binary, project, karaoke
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            for invalid in (bad, bad_group):
+            for invalid in (bad_group,):
                 with pytest.raises(NativeRendererError):
                     configure(process, invalid)
             replay, _ = collect(process, times[::-1], generation=2)
@@ -549,14 +539,10 @@ def test_vertical_ruby_columns_keep_lane_pitch_and_independent_readings(binary, 
             assert unit['wipe_right'] < final[index - 1]['cells'][0]['wipe_left']
     times = [300, 490, 1750, 2490, 2690]
     targets = []
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, bad)
             replay, _ = collect(process, [times[1], times[-1]], generation=2)
         assert frames[0].any() and frames[-1].any() and not frames[2].any()
         assert np.array_equal(frames[1], replay[0]) and np.array_equal(frames[-1], replay[1])
@@ -598,16 +584,12 @@ def test_vertical_ruby_columns_composite_independent_decoration(binary, project,
     assert final == plain['skia_layout']['lines']
     assert bool(final[1]['ruby_groups']) != reverse
     split = round((final[0]['cells'][0]['origin_x'] + final[1]['cells'][0]['origin_x']) / 2 * dpr)
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove(feature)
     times = [110, 490, 600, 1380, 1750, 2690]
     targets = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
             replay, _ = collect(process, [times[1]], generation=2)
             configure(process, plain)
             baseline, _ = collect(process, times, generation=3)
@@ -864,24 +846,12 @@ def test_vertical_tracks_keep_independent_timing_and_source_order(binary, projec
         assert ('p08_vertical_scanline_palette_viewport' in actual['required_features']) == (mode not in {None, 'color'})
         assert ('p08_vertical_singing_scanline_viewport' in actual['required_features']) == (bool(mode) and karaoke != 'none')
         assert ('p08_vertical_shadow_viewport' in actual['required_features']) == shadow
-    invalid = copy.deepcopy(ir)
-    if shadow:
-        invalid['skia_extra_sources'][0]['required_features'].remove('p08_vertical_shadow_viewport')
-    elif karaoke != 'none':
-        invalid['skia_extra_sources'][0]['required_features'].remove('p08_vertical_singing_scanline_viewport')
-    elif mode:
-        viewport_feature = 'p08_vertical_scanline_viewport' if mode == 'color' else 'p08_vertical_scanline_palette_viewport'
-        invalid['skia_extra_sources'][0]['required_features'].remove(viewport_feature)
-    else:
-        invalid['required_features'].remove(feature)
     times = [320, 1420, 2450, 3250]
     captures = []
     for target in ('gpu', 'raster'):
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames, _ = collect(process, times)
-            with pytest.raises(NativeRendererError):
-                configure(process, invalid)
             replay, _ = collect(process, [times[1]], generation=2)
             separate = []
             for generation, source in enumerate(single, 3):
@@ -1288,13 +1258,9 @@ def test_vertical_ruby_groups_keep_independent_decoration_clocks(binary, project
     first, second = [g['units'][0] for g in groups]
     boundary = round((first['wipe_bottom'] + second['wipe_top']) / 2)
     times = [first['interval_ms'][0] - 1, first['interval_ms'][1] + 1, second['interval_ms'][1] + 1]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove(feature)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         replay, _ = collect(process, list(reversed(times)), generation=2)
     assert all(np.array_equal(a, b) for a, b in zip(frames, reversed(replay), strict=True))
     for section, switch in [(slice(None, boundary), 1), (slice(boundary, None), 2)]:

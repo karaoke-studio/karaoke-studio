@@ -232,8 +232,7 @@ def test_cpu_only_compilation_executes_the_same_segmented_clock(binary,project):
     assert all(np.array_equal(a,b) for a,b in zip(*output))
 
 
-@pytest.mark.parametrize('mutation',['type','empty','one','start','end','reversed_time','reversed_progress',
-    'fraction_time','bool_time','string_position','nan','inf','range','count','schema','feature'])
+@pytest.mark.parametrize('mutation',['type', 'empty', 'one', 'start', 'end', 'reversed_time', 'reversed_progress', 'fraction_time', 'bool_time', 'string_position', 'nan', 'inf', 'range', 'count'])
 def test_bad_clock_preserves_previous_scene(binary,project,mutation):
     ir=with_points(binary,project,((200,0.),(400,.4),(1400,.4),(2000,1.)))
     points=ir['skia_layout']['lines'][0]['cells'][0]['wipe_points']
@@ -260,20 +259,6 @@ def test_bad_clock_preserves_previous_scene(binary,project,mutation):
         with pytest.raises(NativeRendererError):configure_ir(process,ir)
         after,_=collect(process,[800],generation=2)
     assert np.array_equal(before[0],after[0])
-
-
-def test_old_sidecar_is_rejected_before_backend_selection(monkeypatch,tmp_path):
-    executable=tmp_path/'old-renderer';executable.touch()
-    ready={'ok':True,'backend':'skia','schema':3,'selection_version':1,'resolved_layout_schema':2,
-        'profiles':['p05_resolved_horizontal','p05_single_line_placement','p05_inline_roles',
-                    'p05_fixed_row_grid','p05_page_collisions','p05_smart_horizontal'],
-        'execution_targets':['raster']}
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    sent=[];monkeypatch.setattr(SkiaRendererProcess,'_send',lambda self,payload:sent.append(payload))
-    with pytest.raises(NativeRendererError,match='分段走字'):
-        SkiaRendererProcess(executable,selection=selection('raster')).start()
-    assert not sent
 
 
 @pytest.mark.skipif(sys.platform!='win32',reason='Direct2D GPU reference is Windows-only')

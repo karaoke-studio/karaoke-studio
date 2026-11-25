@@ -2,84 +2,14 @@
 from __future__ import annotations
 
 from .backend import NativeRendererError, heartbeat_lease_s
-from .skia_process import SkiaSidecarProcess
-
-# Authored-cell glyph policy (existing GPU rule): OpenType shaping only for a
-# supplementary scalar, or a multi-scalar cell holding a mark or ZWJ; nominal
-# glyphs otherwise, and cell design metrics always from nominal glyphs.
-CELL_GLYPH_SCHEMA = 1
-CELL_GLYPH_ERROR = 'Skia sidecar 不支持单元字形策略，请重新构建'
-
-
-def has_cell_glyph_schema(payload: dict) -> bool:
-    value = payload.get('cell_glyph_schema')
-    return type(value) is int and value == CELL_GLYPH_SCHEMA
-
-
-def has_kana_mark_schema(payload: dict) -> bool:
-    value = payload.get('kana_mark_schema')
-    return type(value) is int and value == 1
-
-
-# Line-box ascent/descent follow the existing GPU's font metrics: OS/2 typo when
-# USE_TYPO_METRICS is set, otherwise OS/2 win (never hhea).
-VERTICAL_METRICS_ERROR = 'Skia sidecar 不支持行框纵向度量策略，请重新构建'
-
-
-def has_vertical_metrics_schema(payload: dict) -> bool:
-    value = payload.get('vertical_metrics_schema')
-    return type(value) is int and value == 1
-
-
-# An authored empty-text cell keeps its clock and the GPU's inkless box but has
-# no glyph; older sidecars reject such cells during measurement.
-EMPTY_CELL_ERROR = 'Skia sidecar 不支持空文本计时单元，请重新构建'
-
-
-def has_empty_cell_schema(payload: dict) -> bool:
-    value = payload.get('empty_cell_schema')
-    return type(value) is int and value == 1
+from .skia_process import SKIA_PROTOCOL, SkiaSidecarProcess
 
 
 class SkiaTextMetricsProcess(SkiaSidecarProcess):
-    def start(self):
-        if self.is_running:
-            return {"ok": True, "event": "already_running"}
-        ready = super().start()
-        if ready.get("backend") != "skia" or ready.get("text_metrics_schema") != 1:
-            self.abort(reason="Skia metrics handshake failed")
-            raise NativeRendererError("sidecar 未声明 Skia 批量度量协议")
-        if ready.get('font_chain_schema') != 1:
-            self.abort(reason='Skia font chain handshake failed')
-            raise NativeRendererError('Skia sidecar 不支持独立字体链实例，请重新构建')
-        if ready.get('mixed_font_schema') != 1:
-            self.abort(reason='Skia mixed font handshake failed')
-            raise NativeRendererError('Skia sidecar 不支持单元内混合字体，请重新构建')
-        if not has_cell_glyph_schema(ready):
-            self.abort(reason='Skia cell glyph policy handshake failed')
-            raise NativeRendererError(CELL_GLYPH_ERROR)
-        if not has_kana_mark_schema(ready):
-            self.abort(reason='Skia kana mark policy handshake failed')
-            raise NativeRendererError('Skia sidecar 不支持假名浊音字形策略，请重新构建')
-        if not has_vertical_metrics_schema(ready):
-            self.abort(reason='Skia vertical metrics handshake failed')
-            raise NativeRendererError(VERTICAL_METRICS_ERROR)
-        if not has_empty_cell_schema(ready):
-            self.abort(reason='Skia empty cell handshake failed')
-            raise NativeRendererError(EMPTY_CELL_ERROR)
-        return ready
-
     def measure(self, fonts: dict, runs: list[dict]) -> list[dict]:
-        self._send({"cmd": "measure_text", "metrics_schema": 1, "cell_glyph_schema": CELL_GLYPH_SCHEMA, "kana_mark_schema": 1,
-                    "vertical_metrics_schema": 1, "fonts": fonts, "runs": runs})
+        self._send({"cmd": "measure_text", "skia_protocol": SKIA_PROTOCOL, "fonts": fonts, "runs": runs})
         out = self._expect_ok(self._read_until_event("text_measured", timeout_s=self.configure_timeout_s,
                                                     heartbeat_lease_s=heartbeat_lease_s()))
         if out.get("gpu_initialized") is not False or out.get("execution_target") != "cpu_metrics":
             raise NativeRendererError("Skia 规范度量意外创建了 GPU session")
-        if not has_cell_glyph_schema(out):
-            raise NativeRendererError(CELL_GLYPH_ERROR)
-        if not has_kana_mark_schema(out):
-            raise NativeRendererError('Skia 度量响应缺少假名浊音字形策略')
-        if not has_vertical_metrics_schema(out):
-            raise NativeRendererError(VERTICAL_METRICS_ERROR)
         return out["runs"]

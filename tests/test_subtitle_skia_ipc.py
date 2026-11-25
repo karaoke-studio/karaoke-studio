@@ -102,13 +102,3 @@ def test_release_cannot_unlink_an_unowned_name(binary):
     finally:
         memory.detach(); cleanup.cleanup()
 
-
-def test_old_sidecar_without_ring_lifecycle_is_rejected(binary,monkeypatch):
-    from krok_helper.subtitle_render.native.backend import NativeRendererProcess,NativeRendererError
-    process=SkiaRendererProcess(binary,selection=selection('raster'))
-    try: ready=NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready.pop('shared_memory_lifecycle_schema')
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda _:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    with pytest.raises(NativeRendererError,match='共享帧所有权'): SkiaRendererProcess(binary).start()

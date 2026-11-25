@@ -166,16 +166,6 @@ def test_smart_gpu_raster_and_seek_share_final_geometry(binary,smart,semantics,m
     assert delta.mean()<.15 and np.mean(np.max(delta,axis=-1)>16)<.003
 
 
-def test_old_sidecar_without_smart_capability_is_rejected(monkeypatch,tmp_path):
-    executable=tmp_path/'old';executable.touch()
-    ready={'ok':True,'backend':'skia','schema':3,'selection_version':1,'resolved_layout_schema':2,
-        'profiles':['p05_resolved_horizontal','p05_single_line_placement','p05_inline_roles','p05_fixed_row_grid','p05_page_collisions'],
-        'execution_targets':['raster']}
-    monkeypatch.setattr(NativeRendererProcess,'start',lambda self:ready)
-    monkeypatch.setattr(SkiaRendererProcess,'abort',lambda *a,**k:None)
-    with pytest.raises(NativeRendererError,match='智能水平'):SkiaRendererProcess(executable).start()
-
-
 @pytest.mark.skipif(sys.platform!='win32',reason='Direct2D GPU comparison')
 @pytest.mark.parametrize('semantics',['legacy','n3_1074'])
 @pytest.mark.parametrize('mode',['center_position','equal_margins'])

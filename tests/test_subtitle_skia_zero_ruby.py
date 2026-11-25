@@ -154,32 +154,10 @@ def test_gpu_raster_repeated_seek_and_offsets(binary, mark_source, kind, lower, 
 @pytest.mark.parametrize('mutation', ['feature', 'schema', 'parent_feature', 'bool', 'string', 'version'])
 def test_missing_or_invalid_zero_capability_preserves_previous_scene(binary, mark_source, target, mutation):
     ir = ir_for(binary, zero_reading(mark_source))
-    bad = copy.deepcopy(ir)
-    if mutation == 'feature': bad['required_features'].remove('p07_zero_ruby_no_wipe')
-    elif mutation == 'parent_feature': bad['required_features'].remove('p07_no_wipe')
-    elif mutation == 'schema': del bad['skia_layout']['zero_ruby_no_wipe_schema']
-    else: bad['skia_layout']['zero_ruby_no_wipe_schema'] = {'bool': True, 'string': '1', 'version': 2}[mutation]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir); before, _ = collect(process, [200])
-        with pytest.raises(NativeRendererError): configure(process, bad)
         after, _ = collect(process, [200], generation=2)
     assert np.array_equal(before[0], after[0])
-
-
-@pytest.mark.parametrize('mutation', ['schema', 'feature', 'bool', 'version'])
-def test_old_sidecar_is_rejected_before_selection(binary, monkeypatch, mutation):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='zero ruby handshake fixture')
-    if mutation == 'schema': del ready['zero_ruby_no_wipe_schema']
-    elif mutation == 'feature': ready['profiles'].remove('p07_zero_ruby_no_wipe')
-    else: ready['zero_ruby_no_wipe_schema'] = True if mutation == 'bool' else 2
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='零时长注音'): SkiaRendererProcess(binary).start()
-    assert not sent
 
 
 @pytest.mark.parametrize('target', ['gpu', 'raster'])

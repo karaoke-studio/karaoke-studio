@@ -105,10 +105,6 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
             singing = index in vertical_singing_tracks
             palette = (look.scanline_mode in {'brighten', 'follow_before', 'follow_after'}
                        and (ordinary or (motion and singing)))
-            if (look.scanline_shape != 'band' or (look.scanline_mode != 'color' and not palette) or not (ordinary or motion)
-                    or (line.get('karaoke_anim') != 'none' and not singing) or look.lower_ruby_enabled
-                    or line.get('stroke_flash') or (bursts and not vertical_singing_particle_modes(line))):
-                pass  # Composition gate lifted: layers compose as in Direct2D.
             vertical_band = True
             reverse_vertical_band |= source.wipe_reverse
             moving_vertical_band |= motion and not singing
@@ -216,19 +212,6 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                               and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled
                                        or inline_roles or with_zoom_or_flash or bursts or uses_authored_decoration(look, 'glow'))
                               and not any(guide_symbol_is_bitmap(c.vector_glyph) for c in chars))
-        if ((look.scanline_shape != 'band' and not shape) or (look.right_to_left and not rtl_scanline)
-                or (line.get('karaoke_anim') != 'none' and not utopia)
-                or (with_zoom_or_flash and (not ordinary or source.wipe_reverse
-                                            or (look.scanline_mode == 'role' and not role_scaled)))
-                or (look.lower_ruby_enabled and not lower_band)
-                or (body_shadow and not static_shadow_band)
-                or (role_composition and not role_scaled
-                    and (not (ordinary or (motion and role_motion)) or utopia or source.wipe_reverse
-                         or (bursts and not role_particles)))
-                or (has_readings and not (ordinary or motion or particle_entry))
-                or (inline_roles and not (role_fade or static_cells))
-                or (vector_guides and not (vector_fade or static_cells))):
-            pass  # Composition gate lifted: layers compose as in Direct2D.
         rtl_band |= rtl_scanline
         shadow_band |= static_shadow_band
         static_cell_scanline |= static_cells

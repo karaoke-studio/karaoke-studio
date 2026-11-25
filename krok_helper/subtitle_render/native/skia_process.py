@@ -27,9 +27,23 @@ def resolve_skia_renderer_path() -> Path:
     raise NativeRendererError("未找到 Skia 字幕 sidecar，请先用 --qt-root 构建或设置 KROK_SUBTITLE_SKIA_RENDERER")
 
 
+# The sidecar and this client ship from one source tree. Any change to the IR,
+# measurement or frame protocol bumps this single version on both sides.
+SKIA_PROTOCOL = 1
+
+
 class SkiaSidecarProcess(NativeRendererProcess):
     def __init__(self, executable_path=None, **kwargs):
         super().__init__(executable_path or resolve_skia_renderer_path(), **kwargs)
+
+    def start(self):
+        if self.is_running:
+            return {"ok": True, "event": "already_running"}
+        ready = super().start()
+        if ready.get("backend") != "skia" or ready.get("skia_protocol") != SKIA_PROTOCOL:
+            self.abort(reason="Skia protocol handshake failed")
+            raise NativeRendererError("Skia sidecar 的协议版本与当前程序不一致，请重新构建")
+        return ready
 
     def _launch_environment(self):
         env = super()._launch_environment() or os.environ.copy()

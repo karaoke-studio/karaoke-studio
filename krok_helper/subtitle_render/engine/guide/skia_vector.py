@@ -98,8 +98,6 @@ def validate_vector_guides(track, style):
         if any(guide_symbol_is_bitmap(c.vector_glyph) or not c.vector_glyph.path_commands for c in cells):
             raise ValueError('Skia 导唱符当前仅支持矢量轮廓')
         if any(c.role_label in appearance.custom_style_schemes for c in cells):
-            if appearance.vertical:
-                pass  # Composition gate lifted: layers compose as in Direct2D.
             role_guides |= effective_karaoke_animation(appearance) == 'utopia'
     return role_guides
 
@@ -168,13 +166,8 @@ def compose_vector_guides(plan_lines, ir):
             required.add('p06_vertical_vector_guide_decoration')
         if lower_reading:
             allowed_modes = {'none', 'utopia', 'no_wipe'} if forward else {'none'}
-            if (look.vertical or line.wipe_reverse or not plain_effects or not ordinary_line_animation(source)
-                    or source.get('karaoke_anim') not in allowed_modes):
-                pass  # Composition gate lifted: layers compose as in Direct2D.
         if has_shadow and not (look.vertical or line.wipe_reverse or upper_reading or source.get('scanline')
                                or 'p05_role_vector_guides' in features):
-            if not (forward and whole_line) or any(c.role_label is not None for c in chars):
-                pass  # Composition gate lifted: layers compose as in Direct2D.
             required.add('p06_vector_guide_shadow')
             if not stationary:
                 required.add('p07_horizontal_shadow_line_animation')

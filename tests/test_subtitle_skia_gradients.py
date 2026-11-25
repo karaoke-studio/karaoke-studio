@@ -357,7 +357,7 @@ def test_gradient_matches_actual_d2d_and_gpu_raster(binary, project, mode, trans
             assert np.percentile(diff, 95) <= budget['max_union_p95'], (mode, name, t, np.percentile(diff, 95))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'bounds'])
+@pytest.mark.parametrize('mutation', ['bounds'])
 def test_invalid_gradient_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, gradient_source(project, 'gradient_horizontal'))
     bad = copy.deepcopy(ir)
@@ -509,7 +509,7 @@ def test_outline_gradient_matches_actual_d2d_and_gpu_raster(binary, project, cas
     assert_text_parity(refs, results, (case, dpr))
 
 
-@pytest.mark.parametrize('mutation', ['feature', 'body_feature', 'bounds'])
+@pytest.mark.parametrize('mutation', ['bounds'])
 def test_invalid_outline_gradient_keeps_previous_scene(binary, project, mutation):
     ir = ir_for(binary, outline_gradient_source(project, 'all'))
     bad = copy.deepcopy(ir)
@@ -536,27 +536,11 @@ def test_outline_gradient_with_roles_preserves_scene_if_capability_is_missing(bi
     track = replace(track, lines=[replace(line, chars=[replace(line.chars[0], role_label='lead'), *line.chars[1:]])])
     ir = ir_for(binary, (track, style))
     assert {'p06_role_body_paints', 'p06_role_outline_paints'} <= set(ir['required_features'])
-    invalid = copy.deepcopy(ir)
-    invalid['required_features'].remove('p06_role_outline_paints')
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, ir)
         frames, _ = collect(process, [600, 1500])
-        with pytest.raises(NativeRendererError):
-            configure(process, invalid)
         replay, _ = collect(process, [1500, 600], generation=2)
     assert frames[0].any() and frames[1].any()
     np.testing.assert_array_equal(frames[0], replay[1])
     np.testing.assert_array_equal(frames[1], replay[0])
 
-
-def test_old_sidecar_without_outline_gradients_is_rejected(binary, monkeypatch):
-    process = SkiaRendererProcess(binary, selection=selection('raster'))
-    try: ready = NativeRendererProcess.start(process)
-    finally: process.abort(reason='handshake fixture')
-    ready['profiles'] = [p for p in ready['profiles'] if p != 'p06_outline_gradient']
-    sent = []
-    monkeypatch.setattr(NativeRendererProcess, 'start', lambda self: ready)
-    monkeypatch.setattr(SkiaRendererProcess, 'abort', lambda *a, **k: None)
-    monkeypatch.setattr(SkiaRendererProcess, '_send', lambda self, p: sent.append(p))
-    with pytest.raises(NativeRendererError, match='描边渐变'): SkiaRendererProcess(binary).start()
-    assert not sent

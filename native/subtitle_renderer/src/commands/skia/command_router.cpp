@@ -63,8 +63,7 @@ void SkiaCommandRouter::synchronous(const QJsonObject& request) {
                 width = input.width; height = input.height;
                 static_cast<SkiaBackend&>(backend).configureResolved(input);
             } else {
-                if (ir.value("required_features").toArray().contains("p05_resolved_horizontal"))
-                    throw BackendError("Skia 最终布局载荷缺失");
+                // Protocol-compatibility scenes without a resolved layout use the legacy projection.
                 auto scene = scene::skiaSceneFromIr(ir);
                 width = scene.width; height = scene.height;
                 backend.configure(scene);

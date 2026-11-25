@@ -160,11 +160,6 @@ void validateStandaloneMark(const QString& text, const QJsonObject& cell, const 
     const auto code = text.toUcs4().front();
     if (!QChar::isMark(code)) return;
     const auto layout = ir.value("skia_layout").toObject();
-    if (!ir.value("required_features").toArray().contains("p05_standalone_marks")
-        || layout.value("standalone_mark_schema").toDouble(-1) != 1
-        || !ir.value("required_features").toArray().contains("p05_ruby_units")
-        || layout.value("ruby_unit_schema").toDouble(-1) != 1)
-        throw BackendError("Skia 独立组合标记缺少版本化能力声明");
     if (text.size() != 1 || QChar::category(code) != QChar::Mark_NonSpacing
         || !((code >= 0x300 && code <= 0x36f && code != 0x34f && !(code >= 0x35c && code <= 0x362))
              || code == 0x3099 || code == 0x309a))
@@ -185,10 +180,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const RolePaintBounds* roleBounds, RubyDecorationMotion decorationMotion, std::size_t& totalCells,
         std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
-    if (!ir.value("required_features").toArray().contains("p05_resolved_ruby")
-        || ir.value("skia_layout").toObject().value("ruby_schema").toDouble(-1) != 1
-        || !source.value("ruby_groups").isArray())
-        throw BackendError("Skia 注音最终布局缺少版本或能力声明");
+    if (!source.value("ruby_groups").isArray())
+        throw BackendError("Skia 注音最终布局缺少逐行注音组");
     std::vector<::subtitle::skia::ResolvedRubyGroup> groups;
     const auto& line = scene.lines[lineIndex];
     const bool vertical = scene.lineStyles[lineIndex].vertical;
@@ -286,12 +279,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool overlapping = source.contains("vertical_overlapping_ruby");
     if (overlapping && (!source.value("vertical_overlapping_ruby").isBool()
         || !source.value("vertical_overlapping_ruby").toBool()
-        || !multipleVertical || !features.contains("p05_vertical_overlapping_ruby")
+        || !multipleVertical
         || !staticLine || line.karaokeAnimation != "none" || line.scanlineEnabled
         || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()))
         throw BackendError("Skia 竖排重叠注音缺少布局能力或走字模式无效");
-    if (multipleVertical && allowVerticalOutlines && !features.contains("p06_vertical_ruby_group_paint"))
-        (void)0 /* composition gate lifted */;
     int previousSpanEnd = 0;
     std::optional<::subtitle::skia::StaticGlow> lowerGlowSpec;
     double previousInkBottom = -std::numeric_limits<double>::infinity();
@@ -302,9 +293,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 注音组无效或总数超限");
         const auto object = value.toObject();
         const bool lower = object.value("lower").toBool();
-        if (rtl && lower && (!features.contains("p05_rtl_lower_ruby") || !staticLine
-                || line.karaokeAnimation != "none" || object.contains("lower_glow") || object.contains("lower_shadow")))
-            (void)0 /* composition gate lifted */;
         const bool utopiaExit = transition == RubyTransition::UtopiaExit && object.contains("utopia_exit_owner");
         // The IR names the transition owner; lower readings follow it like upper ones (as in D2D).
         // A Utopia exit reading still follows its owner through the entry.
@@ -363,10 +351,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float x = paint.rubyShadowOffsetXForState(after), y = paint.rubyShadowOffsetYForState(after);
             const bool imagePaint = decor.mode == "image";
-            if (!allowShadow || kind != "shadow"
-                || !(imagePaint ? allowShadowImage : supportsSkiaShadowPaint(decor, allowShadowGradient))
-                || !std::isfinite(x) || !std::isfinite(y))
-                (void)0 /* composition gate lifted */;
             ::subtitle::skia::ShadowState state{true, x, y, (imagePaint || decor.mode == "solid") ? argb(decor.color) : 0u};
             if (imagePaint) state.image = imageCache.fill(decor, scene.layoutReferenceScale);
             return state;
@@ -377,15 +361,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             if (lower || paint.rubyDecorationKindForState(after) != "glow") return {};
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
-            if (!allowGlow || !supportsSkiaGlowPaint(decor, glowPaints) || !std::isfinite(radius) || radius > 532.f)
-                (void)0 /* composition gate lifted */;
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
         };
         ::subtitle::skia::StaticGlow glow{
             glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
         const auto lowerGradients = object.value("fill_gradient").toObject();
-        if (object.contains("fill_gradient") && (!lower || !lowerScanlineParticles
-            || !features.contains("p06_lower_ruby_fill_gradient") || !validPhases(lowerGradients)))
+        if (object.contains("fill_gradient") && (!lower || !validPhases(lowerGradients)))
             throw BackendError("Skia 下方注音渐变缺少对应画笔能力");
         const auto staticLowerGradients = object.value("static_fill_gradient").toObject();
         const auto shareLowerGradient = object.value("fill_gradient_with_main");
@@ -417,17 +398,11 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             && features.contains("p06_independent_ruby_fill");
         const bool allowGradientFill = allowFillPaint;
         const bool allowImageFill = allowFillPaint;
-        const auto validFill = [&](const auto& fill) {
-            return fill.mode == "solid" || (allowGradientFill && rubyFillGradientMode(fill))
-                || (roleFadedScanline && allowRoleFill && fill.mode == "gradient_vertical")
-                || ((fadedScanlineGradient || brightenedScanlineGradient || decorationMotion.singingGradient)
-                    && scene.charStyles.empty()
-                    && features.contains("p06_ruby_fill_gradient")
-                    && fill.mode == "gradient_vertical")
-                || (allowImageFill && fill.mode == "image");
+        const auto validFill = [](const auto& fill) {
+            return fill.mode == "solid" || rubyFillGradientMode(fill) || fill.mode == "image";
         };
         if (!lower && (!validFill(paint.rubyBeforeFillPaint) || !validFill(paint.rubyAfterFillPaint)))
-            throw BackendError("Skia 注音最终绘制缺少对应画笔能力");
+            throw BackendError("Skia 注音填充画笔模式无效");
         const auto fill = object.value("paint").toObject();
         const auto before = lower ? rgbaPaint(fill.value("before")) : argb(paint.rubyBeforeFillPaint.color);
         const auto after = lower ? rgbaPaint(fill.value("after")) : argb(paint.rubyAfterFillPaint.color);
@@ -444,9 +419,9 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             || (totalCells += units.toArray().size()) > 65536)
             throw BackendError("Skia 注音最终单元数量无效或超限");
         const auto outlines = object.value("outlines").toObject();
-        if (object.contains("outlines") && (!allowOutlines || (vertical && !allowVerticalOutlines) || outlines.isEmpty()
+        if (object.contains("outlines") && (outlines.isEmpty()
             || outlines.size() != int(outlines.contains("stroke")) + int(outlines.contains("stroke2"))))
-                throw BackendError("Skia 注音描边要求有效的实色描边能力");
+                throw BackendError("Skia 注音描边格式无效");
         const auto primary = outlinePaint(outlines, "stroke");
         const auto secondary = outlinePaint(outlines, "stroke2");
         if (!lower) {
@@ -457,19 +432,19 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const float width = latin ? paint.rubyLatinStrokeWidth : paint.rubyStrokeWidth;
             const float width2 = latin ? paint.rubyLatinStroke2Width : paint.rubyStroke2Width;
             if (!matchesOutline(primary, paint.rubyBeforeStrokePaint, paint.rubyAfterStrokePaint,
-                                width, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, true)
+                                width, glyphs.dpr, true, true, true)
                 || !matchesOutline(secondary, paint.rubyBeforeStroke2Paint, paint.rubyAfterStroke2Paint,
-                                   width2, glyphs.dpr, allowOutlineGradient, allowHorizontalOutline, true))
-                throw BackendError("Skia 上注音描边与样式或画笔能力不一致");
+                                   width2, glyphs.dpr, true, true, true))
+                throw BackendError("Skia 上注音描边与样式不一致");
         }
         using ::subtitle::skia::paintNeedsBodyProtection;
         // Lower readings outline with their own stroke fills, as in the GPU.
         const auto lowerOutlineGradients = object.value("lower_outline_gradient").toObject();
         if (object.contains("lower_outline_gradient")
-            && (!lower || lowerOutlineGradients.isEmpty() || !features.contains("p06_lower_ruby_outline_gradient")
+            && (!lower || lowerOutlineGradients.isEmpty()
                 || lowerOutlineGradients.size() != int(lowerOutlineGradients.contains("stroke"))
                     + int(lowerOutlineGradients.contains("stroke2"))))
-            throw BackendError("Skia 下方注音渐变描边缺少能力声明或格式无效");
+            throw BackendError("Skia 下方注音渐变描边格式无效");
         const auto lowerOutlinePaint = [&](const char* layer, const char* phase) {
             const auto authored = lowerOutlineGradients.value(layer).toObject();
             if (lowerOutlineGradients.contains(layer) && !validPhases(authored))
@@ -497,8 +472,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 throw BackendError("Skia 下方注音实色光晕缺少对应布局能力");
             glow = {lowerGlowState(lowerGlow, "before", glyphs.dpr),
                     lowerGlowState(lowerGlow, "after", glyphs.dpr), outerWidth};
-            if (lowerGlowSpec && *lowerGlowSpec != glow)
-                (void)0 /* composition gate lifted */;
             lowerGlowSpec = glow;
         }
         const auto lowerShadow = object.value("lower_shadow").toObject();
@@ -513,7 +486,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto lowerShadowGradients = object.value("lower_shadow_gradient").toObject();
         if (object.contains("lower_shadow_image")) {
             const auto images = object.value("lower_shadow_image").toObject();
-            if (!lower || !features.contains("p06_lower_ruby_shadow_image") || !validPhases(images))
+            if (!lower || !validPhases(images))
                 throw BackendError("Skia 下方注音图片阴影缺少对应布局或画笔能力");
             const auto prepareImage = [&](auto& state, const char* phase) {
                 if (!images.contains(phase)) return;
@@ -526,8 +499,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         }
         const auto shadowWithMain = object.value("shadow_gradient_with_main");
         if (object.contains("lower_shadow_gradient")
-            && (!lower || !roleBounds
-                || !features.contains("p06_lower_ruby_shadow_gradient") || !validPhases(lowerShadowGradients)
+            && (!lower || !roleBounds || !validPhases(lowerShadowGradients)
                 || !shadowWithMain.isBool()
                 || (lowerShadowGradients.contains("before") && !lowerShadow.contains("before"))
                 || (lowerShadowGradients.contains("after") && !lowerShadow.contains("after"))))
@@ -556,20 +528,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             QString drawingText = text.toString();
             if (cell.contains("glyph_text")) {
                 const auto glyphText = cell.value("glyph_text");
-                if (!ir.value("required_features").toArray().contains("p05_ruby_units")
-                    || ir.value("skia_layout").toObject().value("ruby_unit_schema").toDouble(-1) != 1
-                    || !glyphText.isString() || glyphText.toString() != drawingText.normalized(QString::NormalizationForm_C))
-                    throw BackendError("Skia 注音字形文本缺少能力声明或不是来源单元的 NFC");
+                if (!glyphText.isString() || glyphText.toString() != drawingText.normalized(QString::NormalizationForm_C))
+                    throw BackendError("Skia 注音字形文本不是来源单元的 NFC");
                 drawingText = glyphText.toString();
             }
             validateStandaloneMark(drawingText, cell, ir);
             const auto interval = times.toArray();
             const int start = integer(interval[0], -86400000, 86400000);
             const int end = integer(interval[1], start, 86400000);
-            if (start == end && line.karaokeAnimation == "no_wipe"
-                && (!ir.value("required_features").toArray().contains("p07_zero_ruby_no_wipe")
-                    || ir.value("skia_layout").toObject().value("zero_ruby_no_wipe_schema").toDouble(-1) != 1))
-                throw BackendError("Skia 零时长注音整字变色缺少版本化能力声明");
             const auto shiftedStart = std::int64_t(start) + offset, shiftedEnd = std::int64_t(end) + offset;
             if (shiftedStart < -172800000 || shiftedEnd > 172800000)
                 throw BackendError("Skia 注音最终时间偏移超限");
@@ -581,8 +547,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                 glyph.pivot.centerY = affineY;
                 glyph.affinePivot = SkPoint{x, affineY};
             }
-            if (groupZoom && !cell.contains("utopia_layout_right"))
-                throw BackendError("Skia 注音单元跨度与整字放大能力不一致");
             // Utopia entry/exit poses readings around the same layout anchor as Utopia singing.
             const bool utopiaPose = line.karaokeAnimation == "utopia"
                 || ((line.entryAnimation == "utopia" || line.exitAnimation == "utopia")
@@ -603,8 +567,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             }
             if (dripComposition)
                 glyph.pivot.layoutRight = float(pivotCoordinate(cell.value("drip_layout_right")) * glyphs.dpr);
-            if (cell.contains("vertical_singing_pivot") != verticalSinging)
-                throw BackendError("Skia 竖排注音轴心与唱字放大能力不匹配");
             if (verticalSinging) {
                 const auto pivot = cell.value("vertical_singing_pivot").toArray();
                 if (pivot.size() != 2) throw BackendError("Skia 竖排注音唱字轴心无效");
@@ -628,8 +590,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                         || (scalars[0] >= 0x30a1 && scalars[0] <= 0x30fa));
                 const bool extended = features.contains("p05_vertical_ruby_extended_units")
                     && (kanaMark || (scalars.size() == 1 && (scalar == 0x30fb || isLatinText(drawingText.toStdWString()))));
-                if (!ir.value("required_features").toArray().contains("p05_vertical_ruby")
-                    || (verticalSchema != 1 && verticalSchema != 2)
+                if ((verticalSchema != 1 && verticalSchema != 2)
                     || (verticalSchema == 1 && units.toArray().size() != 1)
                     || lower || !(verticalUprightScalar(scalar) || shifted || rotated || extended)
                     || cell.contains("rotation_pivot_x") || cell.contains("vertical_rotation_pivot") != rotated
@@ -683,7 +644,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto lowerGlowWithMain = object.value("glow_gradient_with_main");
         if (object.contains("lower_glow_gradient")
             && (!lower || !object.contains("lower_glow") || !validPhases(lowerGlowGradients)
-                || !lowerGlowWithMain.isBool() || !features.contains("p06_lower_ruby_glow_gradient")))
+                || !lowerGlowWithMain.isBool()))
             throw BackendError("Skia 下方注音渐变光晕缺少对应布局或画笔能力");
         const auto lowerGlowBefore = lowerGradient(lowerGlowGradients, "before");
         const auto lowerGlowAfter = lowerGradient(lowerGlowGradients, "after");

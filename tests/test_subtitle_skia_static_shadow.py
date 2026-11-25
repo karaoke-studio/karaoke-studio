@@ -244,13 +244,9 @@ def test_shadow_palette_keeps_geometry_and_replays(binary, project, case, target
     assert 'p06_static_shadow' not in plain['required_features']
     assert ir['skia_layout']['lines'] == plain['skia_layout']['lines']
     times = [0, 750, 2200, 750]
-    bad = copy.deepcopy(ir)
-    bad['required_features'].remove('p06_static_shadow')
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         frames, _ = collect(process, times)
-        with pytest.raises(NativeRendererError):
-            configure(process, bad)
         again, _ = collect(process, [750], generation=2)
         configure(process, plain)
         baseline, _ = collect(process, times[:3], generation=3)
