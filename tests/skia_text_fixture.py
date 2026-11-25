@@ -165,3 +165,49 @@ def make_kana_font(path: Path, *, gpos=True, family='LinK P05 Kana', ps_name='Li
     fb.font.recalcTimestamp = False
     fb.font.save(path)
     return path
+
+
+# RTL multi-codepoint coverage fixture: every validated scalar family gets its
+# own rectangle with a distinct advance/height so misplaced cells change ink.
+RTL_COVERAGE_CODEPOINTS = [0x100, 0x103, 0x17e, 0x1ce, 0x219, 0x24f, 0x1ebf, 0x309d, 0x309e, 0x309f, 0x30fd,
+                           0x30fe, 0x30ff, 0xff5e, 0xff21, 0xff11, 0xff61, 0xff76, 0xff9e, 0xffe5, 0x3400, 0xf929,
+                           0x20bb7, 0x2a6b2, 0x5e9, 0x5dc, 0x633, 0x644, 0x3005, 0x3006, 0x303b, 0x2015, 0x2026,
+                           0xb7, 0xd7, 0x3042, 0x30a2, 0x91ce]
+
+
+def make_rtl_coverage_font(path: Path, *, family='LinK P05 RTL Coverage'):
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    boxes = {'.notdef': (600, [(50, 0, 550, 700)]), 'space': (250, []), 'A': (600, [(50, 0, 550, 700)]),
+             'W': (800, [(50, 0, 750, 700)]), 'a': (500, [(60, 0, 440, 480)]), 'b': (520, [(70, 0, 470, 720)]),
+             'cjk': (1000, [(80, -60, 920, 820)]), 'hangul': (1000, [(100, 0, 900, 760)]),
+             'shy': (330, [(40, 250, 290, 330)]), 'zwnj': (0, []),
+             'dblbreve': (0, [(-420, -180, 120, -100)])}
+    cmap = {32: 'space', 65: 'A', 87: 'W', 97: 'a', 98: 'b', 101: 'b', 0x5b57: 'cjk', 0xd55c: 'hangul',
+            0xad: 'shy', 0x200c: 'zwnj', 0x35c: 'dblbreve'}
+    for i, codepoint in enumerate(RTL_COVERAGE_CODEPOINTS):
+        width = 300 + (i * 137) % 700
+        boxes[f'u{codepoint:x}'] = (width, [(30 + i % 5 * 10, (i % 4) * 60, width - 30, 500 + (i * 53) % 350)])
+        cmap[codepoint] = f'u{codepoint:x}'
+    glyphs, metrics = {}, {}
+    for name, (advance, rects) in boxes.items():
+        pen = TTGlyphPen(None)
+        for x0, y0, x1, y1 in rects:
+            pen.moveTo((x0, y0)); pen.lineTo((x1, y0)); pen.lineTo((x1, y1)); pen.lineTo((x0, y1)); pen.closePath()
+        glyphs[name] = pen.glyph()
+        metrics[name] = (advance, min((r[0] for r in rects), default=0))
+    fb = FontBuilder(1000, isTTF=True)
+    fb.setupGlyphOrder(list(boxes))
+    fb.setupCharacterMap(cmap)
+    fb.setupGlyf(glyphs)
+    fb.setupHorizontalMetrics(metrics)
+    fb.setupHorizontalHeader(ascent=880, descent=-200)
+    fb.setupNameTable({'familyName': family, 'styleName': 'Regular', 'uniqueFontIdentifier': family,
+                       'fullName': family, 'psName': 'LinK-P05-RTL-Coverage', 'version': 'Version 1.0'})
+    fb.setupOS2(sTypoAscender=880, sTypoDescender=-200, usWinAscent=880, usWinDescent=200, usWeightClass=400)
+    fb.setupPost()
+    fb.setupMaxp()
+    fb.font['head'].created = fb.font['head'].modified = 3400000000
+    fb.font.recalcTimestamp = False
+    fb.font.save(path)
+    return path

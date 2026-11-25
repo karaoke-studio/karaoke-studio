@@ -58,18 +58,24 @@ from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marke
 
 # horizontal_rtl_cell_schema=1: multi-codepoint cells whose whole-cell RTL
 # placement is GPU-validated under cell_glyph_schema=1. Mirrors native
-# skia_ir_projection exactly. CGJ, ZWJ and VS16 match the GPU's whole-cell
-# placement; kana, other scripts, other variation selectors, supplementary
-# scalars and other default ignorables stay rejected.
-_RTL_CELL_RANGES = ((0x20, 0x7e), (0xa0, 0xac), (0xae, 0xff), (0x300, 0x35b), (0x363, 0x36f),
-                    (0x200d, 0x200d), (0xfe0f, 0xfe0f), (0x4e00, 0x9fff), (0xac00, 0xd7a3))
+# skia_ir_projection exactly. Covers Latin (incl. Extended-A/B/Additional,
+# double diacritics), soft hyphen, ZWNJ/ZWJ/CGJ/VS16, general punctuation,
+# CJK (incl. Extension A, compatibility and supplementary ideographs),
+# Hangul syllables, fullwidth/halfwidth forms and unpointed Hebrew/Arabic
+# letters (nominal glyphs, as the GPU draws them). Hebrew points, Arabic
+# harakat, emoji, other variation selectors and other scripts stay rejected:
+# their mark positioning or colour glyphs differ from the GPU.
+_RTL_CELL_RANGES = ((0x20, 0x7e), (0xa0, 0x24f), (0x300, 0x36f), (0x5d0, 0x5ea), (0x621, 0x64a),
+                    (0x1e00, 0x1eff), (0x200c, 0x200d), (0x2010, 0x2027), (0x2030, 0x205e), (0x3400, 0x4dbf),
+                    (0x4e00, 0x9fff), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe0f, 0xfe0f), (0xff01, 0xffee),
+                    (0x20000, 0x323af))
 
 
-# horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from
-# nominal glyphs. Combining U+3099/U+309A stay rejected: the existing GPU
-# neither composes them nor applies fallback mark positioning.
-_RTL_KANA_RANGES = ((0x3000, 0x3002), (0x300c, 0x300f), (0x301c, 0x301c), (0x3041, 0x3096), (0x309b, 0x309c),
-                    (0x30a1, 0x30fc), (0xff01, 0xff01), (0xff1f, 0xff1f))
+# horizontal_rtl_kana_schema=1: kana, iteration marks and Japanese punctuation
+# drawn from nominal glyphs. Combining U+3099/U+309A follow kana_mark_schema=1
+# (isolated, repeated and non-kana-base marks also match the GPU).
+_RTL_KANA_RANGES = ((0x3000, 0x3029), (0x3030, 0x303f), (0x3041, 0x3096), (0x309b, 0x309f),
+                    (0x30a0, 0x30ff))
 
 
 def _in(ranges, c):
@@ -77,15 +83,7 @@ def _in(ranges, c):
 
 
 def _validated_rtl_cell(text):
-    for i, c in enumerate(text):
-        if c in '\u3099\u309a':
-            # One authored mark following one kana base; repeated/isolated marks
-            # and other mixed-script attachments need their own calibration.
-            if i == 0 or not (0x3041 <= ord(text[i-1]) <= 0x3096 or 0x30a1 <= ord(text[i-1]) <= 0x30fa):
-                return False
-        elif not (_in(_RTL_CELL_RANGES, c) or _in(_RTL_KANA_RANGES, c)):
-            return False
-    return True
+    return all(c in '\u3099\u309a' or _in(_RTL_CELL_RANGES, c) or _in(_RTL_KANA_RANGES, c) for c in text)
 
 
 def _rtl_kana_cell(text):

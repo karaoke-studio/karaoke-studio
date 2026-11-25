@@ -15,7 +15,7 @@ from test_subtitle_skia_protocol import collect, selection
 from test_subtitle_skia_protocol import test_actual_g5_preview_uses_skia_even_when_gpu_off as run_preview
 from test_subtitle_skia_protocol import test_product_export_short_mp4_uses_skia as run_mp4
 from test_subtitle_skia_grid import grid
-from skia_text_fixture import make_kana_font
+from skia_text_fixture import make_kana_font, make_rtl_coverage_font
 from PyQt6.QtGui import QFontDatabase
 from krok_helper.subtitle_render.engine.text.font_weight import clear_font_weight_cache
 from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
@@ -510,13 +510,57 @@ def rtl_cell_source(project,kind='cells',*,reverse=False,effect='none'):
     return replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,texts)])]),style
 
 
-@pytest.mark.parametrize('text',['\u3099か','か\u3099\u309a','A\u3099','ゝあ','A\uff5e','שׁל','سل','A\u200cA','\U0001F469\U0001F4BB',
-                                 'a\u035cb','a\u00adb','\u0103a'])
+@pytest.mark.parametrize('text',['\u05e9\u05c1\u05dc','\u0633\u064e\u0644','\U0001F469\U0001F4BB','A\U0001F469',
+                                 'A\ufe0e','\u0e01\u0e01','a\u20dd','a\u2028b','\u0915\u094d'])
 def test_unvalidated_rtl_multicodepoint_cells_stay_gated(binary,project,text):
     track,style=rtl_source(project)
     line=track.lines[0]
     track=replace(track,lines=[replace(line,chars=[replace(line.chars[0],text=text),*line.chars[1:]])])
     with pytest.raises(ValueError,match='未验证'):ir_for(binary,(track,style))
+
+
+@pytest.fixture
+def coverage(tmp_path,application):
+    handle=QFontDatabase.addApplicationFont(str(make_rtl_coverage_font(tmp_path/'rtl-coverage.ttf')))
+    assert handle>=0
+    clear_font_weight_cache()
+    try:yield QFontDatabase.applicationFontFamilies(handle)[0]
+    finally:
+        QFontDatabase.removeApplicationFont(handle)
+        clear_font_weight_cache()
+
+
+# Extended Latin, kana iteration marks, fullwidth/halfwidth forms, rare and
+# supplementary CJK, ZWNJ/soft hyphen with glyphs, double diacritics, CJK
+# symbols, punctuation and unpointed Hebrew/Arabic letters.
+COVERAGE_TEXTS=['\u0103a','\u0100\u0103','\u017e\u01ce','\u0219\u024f','e\u1ebf','\u309d\u3042',
+                '\u30a2\u30fd\u30fe','\u3042\u309e\u309f\u30ff','A\uff5e','\uff21\uff11','\uff76\uff9e',
+                '\uff61\uffe5','\u3400\uf929','A\u200cA','a\u00adb','a\u035cb','\U00020bb7\u91ce',
+                '\u5b57\U0002a6b2','\u05e9\u05dc','\u0633\u0644','\u3005\u3006\u303b','A\u2015\u2026',
+                'a\u00b7\u00d7b']
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('reverse,dpr',[(False,1),(True,1.5)])
+@pytest.mark.parametrize('text',COVERAGE_TEXTS)
+def test_rtl_cells_with_extended_scalars_match_gpu(binary,project,coverage,text,reverse,dpr):
+    track,style=rtl_source(project,reverse=reverse)
+    line=track.lines[0]
+    track=replace(track,lines=[replace(line,chars=[replace(line.chars[0],text=text),*line.chars[1:]])])
+    style=replace(style,font_family=coverage)
+    assert 'p05_horizontal_rtl_cells' in ir_for(binary,(track,style))['required_features']
+    assert_gpu_parity(binary,track,style,dpr,('coverage',text,reverse,dpr))
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('kana',[True,False],indirect=True,ids=['gpos','nominal'])
+@pytest.mark.parametrize('reverse',[False,True])
+@pytest.mark.parametrize('text',['\u3099\u304b','\u304b\u3099\u309a','A\u3099'])
+def test_rtl_isolated_and_repeated_kana_marks_match_gpu(binary,project,kana,text,reverse):
+    """Marks without a kana base, or stacked, keep the GPU's nominal/GPOS placement."""
+    track,style=kana_source(project,kana,[text,'\u304d\u3083','\u304c\u3063','\u30d1\u30a1'],reverse=reverse)
+    assert 'p05_horizontal_rtl_kana_marks' in ir_for(binary,(track,style))['required_features']
+    assert_gpu_parity(binary,track,style,1,('kana-mark',text,reverse))
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')

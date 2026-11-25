@@ -459,7 +459,7 @@ git submodule status
    `render/skia_direction_ir` 只投影一次。native 验证后按时间序准备，公共 `wipeRightToLeft` 只改物理裁剪方向。
    不得翻转 HarfBuzz 文本方向来实现反向演唱。§14.35 的正向限制由本子集扩展，竖排和其他特效仍拒绝。
    正文右至左单元排列子集见 §14.42：`p05_horizontal_rtl` / `horizontal_rtl_schema=1`，
-   多码点单元见 §14.44：`p05_horizontal_rtl_cells` / `horizontal_rtl_cell_schema=1`，仅接受 Python/native 同表的已验证码位，
+   多码点单元见 §14.44：`p05_horizontal_rtl_cells` / `horizontal_rtl_cell_schema=1`，仅接受 Python/native 同表的已验证码位（2026-11-25 扩至扩展拉丁、补充平面 CJK、全/半角、假名重复符等），
    上下注音与竖排继续明确拒绝；负字距多码点 RTL 行已由 §14.45 层序修复验证后开放。
    假名/日文标点单元见 §14.46：`p05_horizontal_rtl_kana_cells` / `horizontal_rtl_kana_schema=1`，仅 nominal 字形子集；
    组合浊点/半浊点 U+3099/U+309A 在 LTR 也与 GPU 不同（GPU 不合成、无回退定位），RTL 继续拒绝并保留严格预期失败。
@@ -499,7 +499,7 @@ git submodule status
 
    分解式假名浊音见 §14.47。`kana_mark_schema=1` 在 ready 和度量请求/响应中协商；字体几何身份为 v5。
    U+3099/U+309A 保留基字与标记，使用字体 GPOS；缺 GPOS 时不使用 HB 合成的标记位置。
-   `p05_horizontal_rtl_kana_marks` 要求基础假名能力。RTL 多码点只接收直接跟随假名基字的单个浊音符。
+   `p05_horizontal_rtl_kana_marks` 要求基础假名能力。RTL 多码点的浊音符已按实际 GPU 放开孤立、连续和非假名基字的写法（实施计划第六轮）。
    字素保持不可拆分，不能为复现定位把浊音符切到另一字体、改写源文字或改变时钟。
 
    Skia POSIX 共享帧所有权见 §14.31：Qt detach 在 Linux/macOS 不会自动 unlink。

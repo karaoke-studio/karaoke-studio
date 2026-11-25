@@ -118,7 +118,7 @@ def test_kana_mark_forged_layout_preserves_previous_scene(binary, project, kana,
     elif mutation == 'schema':
         bad['skia_layout']['kana_mark_schema'] = True
     else:
-        bad['track']['lines'][0]['chars'][0]['text'] = 'か\u3099\u309a'
+        bad['track']['lines'][0]['chars'][0]['text'] = 'か\u064e'
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         configure(process, ir)
         before, _ = collect(process, [750])

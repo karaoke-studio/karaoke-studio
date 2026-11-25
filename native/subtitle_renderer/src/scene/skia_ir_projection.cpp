@@ -17,19 +17,22 @@ namespace {
 // horizontal_rtl_cell_schema=1: multi-codepoint cells whose whole-cell RTL
 // placement is GPU-validated. Mirrors engine/render/skia_ir.py exactly.
 bool validatedRightToLeftScalar(char32_t c) {
-    // CGJ, ZWJ and VS16 draw nothing of their own and keep the cell's GPU placement.
-    return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff && c != 0xad)
-        || (c >= 0x300 && c <= 0x36f && (c < 0x35c || c > 0x362))
-        || c == 0x200d || c == 0xfe0f
-        || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7a3);
+    // Latin incl. extensions and double diacritics, soft hyphen, ZWNJ/ZWJ/CGJ/
+    // VS16, punctuation, CJK incl. extension/compatibility/supplementary
+    // ideographs, Hangul, fullwidth/halfwidth forms and unpointed Hebrew/Arabic
+    // letters. Hebrew points, harakat and emoji keep different GPU placement.
+    return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0x24f) || (c >= 0x300 && c <= 0x36f)
+        || (c >= 0x5d0 && c <= 0x5ea) || (c >= 0x621 && c <= 0x64a) || (c >= 0x1e00 && c <= 0x1eff)
+        || c == 0x200c || c == 0x200d || (c >= 0x2010 && c <= 0x2027) || (c >= 0x2030 && c <= 0x205e)
+        || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7a3)
+        || (c >= 0xf900 && c <= 0xfaff) || c == 0xfe0f || (c >= 0xff01 && c <= 0xffee)
+        || (c >= 0x20000 && c <= 0x323af);
 }
-// horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from
-// nominal glyphs. Combining U+3099/U+309A are excluded (the GPU neither
-// composes them nor applies fallback mark positioning).
+// horizontal_rtl_kana_schema=1: kana, iteration marks and Japanese punctuation
+// drawn from nominal glyphs. Combining U+3099/U+309A use kana_mark_schema=1.
 bool validatedRightToLeftKana(char32_t c) {
-    return c == 0x3000 || c == 0x3001 || c == 0x3002 || (c >= 0x300c && c <= 0x300f) || c == 0x301c
-        || (c >= 0x3041 && c <= 0x3096) || c == 0x309b || c == 0x309c || (c >= 0x30a1 && c <= 0x30fc)
-        || c == 0xff01 || c == 0xff1f;
+    return (c >= 0x3000 && c <= 0x3029) || (c >= 0x3030 && c <= 0x303f) || (c >= 0x3041 && c <= 0x3096)
+        || (c >= 0x309b && c <= 0x309f) || (c >= 0x30a0 && c <= 0x30ff);
 }
 
 }
@@ -634,16 +637,12 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 throw BackendError("Skia 竖排单元包含尚未支持的行内角色");
             if (cfg.rightToLeft && cell.text.toUcs4().size() > 1) {
                 bool valid = features.contains("p05_horizontal_rtl_cells");
-                char32_t previous = 0;
                 for (const auto c : cell.text.toUcs4()) {
-                    const bool voice = c == 0x3099 || c == 0x309a;
-                    const bool base = (previous >= 0x3041 && previous <= 0x3096)
-                        || (previous >= 0x30a1 && previous <= 0x30fa);
-                    valid = valid && (voice
-                        ? (base && features.contains("p05_horizontal_rtl_kana_marks"))
+                    // Isolated, repeated and non-kana-base marks also keep GPU placement.
+                    valid = valid && ((c == 0x3099 || c == 0x309a)
+                        ? features.contains("p05_horizontal_rtl_kana_marks")
                         : (validatedRightToLeftScalar(c)
                             || (validatedRightToLeftKana(c) && features.contains("p05_horizontal_rtl_kana_cells"))));
-                    previous = c;
                 }
                 if (!valid) throw BackendError("Skia 右至左多码点单元缺少版本化能力或包含未验证字符");
             }
