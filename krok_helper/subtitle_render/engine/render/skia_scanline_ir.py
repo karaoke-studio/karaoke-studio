@@ -153,8 +153,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                       and line.get('karaoke_anim') == 'utopia' and line.get('zoom_pulse')
                       and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled or bursts))
         solid_shape = (shape_style and (not source.wipe_reverse or image_reverse or reverse_procedural)
-                       and (not line.get('zoom_pulse') or zoom_shape) and not line.get('stroke_flash')
-                       and (not bursts or shape_with_singing))
+                       and (not line.get('zoom_pulse') or zoom_shape) and not line.get('stroke_flash'))
         faded_band = faded_band_singing_particles(line, look)
         motion = (not ordinary and ordinary_line_animation(line)
                   and (look.scanline_shape == 'band' or solid_shape) and (look.scanline_mode != 'role' or role_motion)
@@ -162,7 +161,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                   and not source.wipe_reverse
                   and not (line.get('zoom_pulse') or line.get('stroke_flash'))
                   and (not bursts or faded_band))
-        shape = solid_shape and (ordinary or motion or image_during_transition)
+        # Like the GPU, a shaped scanline draws through any entry, exit or singing particles.
+        shape = solid_shape
         entering_utopia = not has_readings and utopia_entry_band(line, look)
         utopia_entry_bands |= entering_utopia
         reverse_singing = not has_readings and reverse_singing_scale(line, look)

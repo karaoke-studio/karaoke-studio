@@ -273,9 +273,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool particleScanlineImage = noteExit && source.entryAnimation == "petal"
             && resolved.scanlineShape == "image" && features.contains("p07_ruby_petal_scanline_image");
-        const bool shapedSinging = features.contains("p07_shaped_scanline_singing_particles")
-            && (staticScanline || particleScanlineImage)
-            && std::ranges::none_of(source.fxBursts, [](const auto& burst) { return burst.kind == "scanline"; });
         const bool shapePalette = features.contains("p07_scanline_shape_palette") && staticScanline
             && !cfg.vertical && !cfg.rightToLeft && !hasLowerReading
             && (!rubyScanline || resolved.scanlineMode != "role")
@@ -298,8 +295,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
             && (resolved.scanlineMode == "color" || shapePalette || originalImagePalette)
             && (!source.wipeReverse || reverseImage || reverseProceduralShape)
-            && (!source.zoomPulseEnabled || zoomScanlineShape) && !source.strokeFlashEnabled
-            && (source.fxBursts.empty() || shapedSinging);
+            && (!source.zoomPulseEnabled || zoomScanlineShape) && !source.strokeFlashEnabled;
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
         const bool movingVerticalSingingScanline = cfg.vertical && utopiaSinging
             && features.contains("p07_vertical_singing_scanline_line_animation");
@@ -334,7 +330,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
                 || (cfg.vertical && features.contains("p07_vertical_reverse_scanline_singing")))
             && (staticScanline || movingScanline || particleScanline || utopiaEntryScanline);
         // Shaped scanlines use a solid palette and the line's own front.
-        const bool scanlineShape = solidShape && (staticScanline || movingScanline || particleScanlineImage);
+        // Like the GPU, a shaped scanline draws through any entry, exit or singing particles.
+        const bool scanlineShape = solidShape;
         const bool lowerScanline = features.contains("p07_lower_ruby_scanline")
             && (staticScanline || (movingScanline && features.contains("p07_lower_ruby_scanline_line_animation")))
             && resolved.scanlineShape == "band" && resolved.scanlineMode != "role"

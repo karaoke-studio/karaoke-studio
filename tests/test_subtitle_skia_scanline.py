@@ -1897,3 +1897,22 @@ def test_palette_scanline_shapes_compose_with_singing_like_actual_gpu(binary, pr
     track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
     case = SimpleNamespace(track=track, style=style, case_id=f'palette-{shape}-{mode}-{zoom}')
     assert_ruby_transition_gpu_parity(binary, case, (250, 400, 650, 950, 1250, 1600))
+
+
+# A flame or bubble scanline keeps drawing through character entries and
+# singing particles, as in Direct2D (the shape was skipped unless the line was
+# static or used a plain fade/slide).
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape', ['flame', 'bubble'])
+@pytest.mark.parametrize('extra', [{'entry_anim': 'spin_flip'}, {'entry_anim': 'sparkle'}, {'sing_fx': 'petal'}],
+                         ids=['spin_flip', 'sparkle', 'petal'])
+def test_shaped_scanlines_draw_through_transitions_and_particles_like_actual_gpu(binary, project, shape, extra):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = rtl_source(project)
+    style = replace(band(style), right_to_left=False, scanline_shape=shape, karaoke_anim='none',
+                    reverse_karaoke_anim='inherit', entry_lead_ms=500, **extra)
+    track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
+    case = SimpleNamespace(track=track, style=style, case_id=f'shape-{shape}-{"-".join(extra.values())}')
+    assert_ruby_transition_gpu_parity(binary, case, (250, 400, 650, 950, 1250, 1600))
