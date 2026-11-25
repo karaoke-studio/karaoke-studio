@@ -127,9 +127,9 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
                        and line.get('karaoke_anim') == 'none' and not look.lower_ruby_enabled)
         palette_shape = False
         procedural = (ordinary and look.scanline_shape in {'flame', 'bubble'} and not (
-            look.lower_ruby_enabled or bursts or line.get('karaoke_anim') != 'none'
-            or line.get('zoom_pulse') or line.get('stroke_flash')))
-        reverse_procedural = procedural and source.wipe_reverse and not (look.right_to_left or has_readings)
+            look.lower_ruby_enabled or bursts or line.get('stroke_flash')))
+        reverse_procedural = procedural and source.wipe_reverse and not (
+            look.right_to_left or has_readings or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse'))
         if procedural and (not source.wipe_reverse or reverse_procedural):
             colors = effective_karaoke_colors(look)
             palette_shape = (look.scanline_mode == 'default'
@@ -149,7 +149,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         image_during_transition = particle_entry and look.scanline_shape == 'image'
         shape_with_singing = (shape_style and (ordinary or image_during_transition) and has_readings and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
-        zoom_shape = (ordinary and look.scanline_shape == 'flame' and look.scanline_mode == 'color'
+        zoom_shape = (ordinary and look.scanline_shape in {'flame', 'bubble'} and shape_style
                       and line.get('karaoke_anim') == 'utopia' and line.get('zoom_pulse')
                       and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled or bursts))
         solid_shape = (shape_style and (not source.wipe_reverse or image_reverse or reverse_procedural)

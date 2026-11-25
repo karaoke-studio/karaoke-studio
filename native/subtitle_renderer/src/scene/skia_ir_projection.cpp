@@ -279,7 +279,6 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool shapePalette = features.contains("p07_scanline_shape_palette") && staticScanline
             && !cfg.vertical && !cfg.rightToLeft && !hasLowerReading
             && (!rubyScanline || resolved.scanlineMode != "role")
-            && source.karaokeAnimation == "none" && source.fxBursts.empty()
             && (resolved.scanlineShape == "bubble" || resolved.scanlineShape == "flame");
         const bool basicImage = staticScanline && !cfg.vertical && !cfg.rightToLeft && rubyGroups.isEmpty()
             && source.karaokeAnimation == "none" && source.fxBursts.empty()
@@ -293,7 +292,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble");
         const bool zoomScanlineShape = features.contains("p07_zoom_scanline_shape") && utopiaSinging && staticScanline
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !hasLowerReading
-            && resolved.scanlineShape == "flame" && resolved.scanlineMode == "color" && source.fxBursts.empty();
+            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble") && source.fxBursts.empty();
         const bool solidShape = features.contains("p07_scanline_shape")
             && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
                 || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))

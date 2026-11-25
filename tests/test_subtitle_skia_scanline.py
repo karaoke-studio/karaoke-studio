@@ -1876,3 +1876,24 @@ def test_scanline_image_replays_and_missing_asset_restores_band(binary, project,
         (tmp_path / 'scanline-image-layout.json').write_text(json.dumps({
             'features': valid['required_features'], 'line': valid['skia_layout']['lines'][0],
         }, sort_keys=True), encoding='utf-8')
+
+
+# Palette-coloured flame and bubble scanlines keep drawing their shape while
+# the line sings (Utopia) or pulses, as in Direct2D; the palette condition no
+# longer requires a static singing animation.
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape', ['flame', 'bubble'])
+@pytest.mark.parametrize('mode', ['role', 'brighten'])
+@pytest.mark.parametrize('zoom', [False, True])
+def test_palette_scanline_shapes_compose_with_singing_like_actual_gpu(binary, project, shape, mode, zoom):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = rtl_source(project)
+    style = replace(band(style), right_to_left=False, scanline_shape=shape, scanline_mode=mode,
+                    scanline_role_name='lead' if mode == 'role' else None,
+                    custom_style_schemes={'lead': SubtitleStyleScheme(font_size_px=style.font_size_px)},
+                    karaoke_anim='zoom_pulse' if zoom else 'utopia', reverse_karaoke_anim='inherit')
+    track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
+    case = SimpleNamespace(track=track, style=style, case_id=f'palette-{shape}-{mode}-{zoom}')
+    assert_ruby_transition_gpu_parity(binary, case, (250, 400, 650, 950, 1250, 1600))
