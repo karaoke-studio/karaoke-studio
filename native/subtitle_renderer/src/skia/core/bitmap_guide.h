@@ -36,12 +36,14 @@ struct BitmapGuide {
     bool useLineFront = false;
     std::array<ShadowState, 2> shadow;
     GlowGradients glowGradients{};
+    // The GPU wipes whenever an after path is set, even if its file is missing.
+    bool wipes = false;
 };
 
 class PreparedBitmapGuide {
 public:
     PreparedBitmapGuide(const BitmapGuide&, std::size_t& remainingHaloBytes);
-    bool wipes() const { return bool(after_); }
+    bool wipes() const { return wipes_; }
     const SkRect& box() const { return box_; }
     float clipPad() const { return clipPad_; }
     bool usesLineFront() const { return useLineFront_; }
@@ -55,6 +57,7 @@ private:
     std::vector<Halo> prepareHalo(const SkImage&, const GlowState&, const sk_sp<SkShader>& gradient,
                                   std::size_t& remainingBytes) const;
     sk_sp<SkImage> before_, after_;
+    bool wipes_;
     SkRect box_;
     float clipPad_;
     bool useLineFront_;

@@ -163,13 +163,14 @@ def test_nonfinite_control_point_is_rejected():
         vector_guide_ink(glyph, 50)
 
 
-def test_missing_bitmap_guide_image_is_explicit(binary, project):
+def test_missing_bitmap_guide_image_keeps_the_gpu_placeholder_box(binary, project):
     track, style = guide_source(project)
     line = track.lines[0]
     bitmap = replace(SQUARE, kind='bitmap', path_commands=(), bitmap_before_path='missing.png')
     track = replace(track, lines=[replace(line, guide_symbol=bitmap)])
-    with pytest.raises(ValueError, match='无法读取图片'):
-        ir_for(binary, (track, style))
+    ir = ir_for(binary, (track, style))
+    guide = ir['skia_layout']['lines'][0]['cells'][0]['metrics']
+    assert guide['bitmap_guide'] and guide['advance'] == 1.0  # 1 x font-size box, nothing drawn
 
 
 def missing_vector_guide_role(project):

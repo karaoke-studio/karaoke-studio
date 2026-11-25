@@ -93,7 +93,11 @@ def uses_inline_bitmap_guides(plan_lines):
 
 
 def validate_bitmap_guides(track, *, static_title=False):
-    """Validate bitmap guide assets and placement."""
+    """Report whether any bitmap guide image is animated.
+
+    A missing or unreadable image is not an error: the existing GPU keeps its
+    1 x font-size box and draws nothing, and Skia follows it.
+    """
     animated = False
     for line in track.lines:
         rendered = render_line_with_guide_symbols(line)
@@ -104,8 +108,6 @@ def validate_bitmap_guides(track, *, static_title=False):
         paths = {path for image in images for path in (image.bitmap_before_path, image.bitmap_after_path) if path}
         for path in sorted(paths):
             animated |= QImageReader(path).imageCount() > 1
-            if bitmap_guide_image(path) is None:
-                raise ValueError('Skia 图片导唱符无法读取图片')
     return animated
 
 

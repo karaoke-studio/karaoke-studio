@@ -37,7 +37,6 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
     std::array<std::shared_ptr<const ::subtitle::skia::BitmapGuideAnimation>, 2> animations;
     const auto imageFor = [&](const std::wstring& path, auto modified, auto size, bool afterPhase) {
         if (!animated(path)) return images.staticImage(path, modified, size);
-        if (!allowAnimation) throw BackendError("Skia 图片导唱符动图缺少对应能力");
         auto& animation = animations[afterPhase];
         animation = images.animatedGuide(path, modified, size);
         if (!animation) throw BackendError("Skia 图片导唱符动图无法解码或超过场景图片预算");
@@ -45,23 +44,24 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
     };
     const auto beforeImage = imageFor(guide.beforePath, guide.beforeModifiedMs, guide.beforeSize, false);
     const auto afterImage = imageFor(guide.afterPath, guide.afterModifiedMs, guide.afterSize, true);
-    if ((!guide.beforePath.empty() && !beforeImage) || (!guide.afterPath.empty() && !afterImage)
-        || (!beforeImage && !afterImage))
-        throw BackendError("Skia 图片导唱符无法解码图片");
     const auto metrics = cell.value("metrics").toObject();
     const auto inkValue = metrics.value("ink").toArray();
     if (!metrics.value("bitmap_guide").toBool() || !metrics.value("glyphs").isArray()
         || !metrics.value("glyphs").toArray().isEmpty() || inkValue.size() != 4
         || !metrics.value("font_identity").toString().startsWith(QStringLiteral("bitmap:")))
         throw BackendError("Skia 图片导唱符缺少版本化度量");
-    // Size by the after image first, exactly like the existing GPU.
+    // Size by the after image first, exactly like the existing GPU. A missing
+    // or undecodable file keeps the GPU's 1 x font-size box and draws nothing.
     const auto& sizing = afterImage ? afterImage : beforeImage;
     const int unit = std::max(int(std::lround(style.fontSize / dpr)), 1);
-    const double imageW = std::max(sizing->width(), 1), imageH = std::max(sizing->height(), 1);
-    double contentW = imageW, contentH = imageH;
-    if (!guide.fixSize) {
-        contentH = std::max(unit * std::max(int(guide.zoomPercent), 1) / 100, 1);
-        contentW = std::max(contentH * imageW / imageH, 1.0);
+    double contentW = 1.0, contentH = unit;
+    if (sizing) {
+        const double imageW = std::max(sizing->width(), 1), imageH = std::max(sizing->height(), 1);
+        contentW = imageW, contentH = imageH;
+        if (!guide.fixSize) {
+            contentH = std::max(unit * std::max(int(guide.zoomPercent), 1) / 100, 1);
+            contentW = std::max(contentH * imageW / imageH, 1.0);
+        }
     }
     const double ascent = finite(metrics, "ascent"), descent = finite(metrics, "descent");
     if (ascent < 0 || descent < 0 || ascent + descent <= 0) throw BackendError("Skia 图片导唱符字体纵向度量无效");
@@ -85,7 +85,8 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
                          float((x + ink[2]) * dpr), float((y + ink[3]) * dpr)),
         skiaStaticGlow(style), !guide.noDecor,
         std::max(style.strokeWidth + style.stroke2Width, 2.f) + 4.f, std::move(animations), guide.animAnchorMs,
-        std::abs(double(guide.marginBottom)) >= contentH, {shadow.before, shadow.after}};
+        std::abs(double(guide.marginBottom)) >= contentH, {shadow.before, shadow.after}, {},
+        !guide.afterPath.empty()};
     return out;
 }
 }

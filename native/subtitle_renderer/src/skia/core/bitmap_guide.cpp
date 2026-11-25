@@ -12,11 +12,10 @@
 
 namespace subtitle::skia {
 PreparedBitmapGuide::PreparedBitmapGuide(const BitmapGuide& guide, std::size_t& remainingHaloBytes)
-    : before_(guide.before), after_(guide.after), box_(guide.box), clipPad_(guide.clipPad),
+    : before_(guide.before), after_(guide.after), wipes_(guide.wipes || guide.after), box_(guide.box), clipPad_(guide.clipPad),
       useLineFront_(guide.useLineFront), animations_(guide.animations), animationAnchorMs_(guide.animationAnchorMs),
       shadow_(guide.shadow) {
-    if (!box_.isFinite() || box_.isEmpty() || !std::isfinite(clipPad_) || clipPad_ < 0
-        || (!before_ && !after_))
+    if (!box_.isFinite() || box_.isEmpty() || !std::isfinite(clipPad_) || clipPad_ < 0)
         throw std::runtime_error("Skia 图片导唱符的图片或绘制框无效");
     if (!guide.decorate) return;
     for (const bool after : {false, true}) {

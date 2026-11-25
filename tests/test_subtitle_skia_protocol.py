@@ -762,9 +762,8 @@ def test_animated_title_guides_follow_media_time_and_seek(binary, tmp_path, targ
         process._send({'cmd': 'configure', 'ir': ir})
         process._expect_ok(process._read_until_event('configured'))
         frames, _ = collect(process, [499, 500, 599, 600, 750, 1000, 1500, 1600, 500])
-        process._send({'cmd': 'configure', 'ir': forged})
-        with pytest.raises(NativeRendererError, match='动图'):
-            process._expect_ok(process._read_until_event('configured'))
+        process._send({'cmd': 'configure', 'ir': forged})  # A missing declaration no longer refuses the scene.
+        process._expect_ok(process._read_until_event('configured'))
         replay, _ = collect(process, [600], generation=2)
     assert all(np.array_equal(frames[1], frames[i]) for i in (2, 4, 6, 8))
     assert np.array_equal(frames[3], frames[7]) and np.array_equal(frames[3], replay[0])

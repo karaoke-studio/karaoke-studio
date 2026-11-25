@@ -143,12 +143,25 @@ def test_p00_bitmap_guide_ir_and_forgeries_keep_scene(binary, project, tmp_path,
     assert np.array_equal(before[0], replay[0])
 
 
-def test_missing_bitmap_guide_resource_stays_gated(binary, project, tmp_path):
-    case, track = p00_guide(tmp_path, family=project[1].font_family)
-    style, line = case.style, track.lines[0]
-    line = replace(line, guide_symbol=replace(line.guide_symbol, bitmap_after_path=str(tmp_path / 'missing.png')))
-    with pytest.raises(ValueError):
-        ir_for(binary, (replace(track, lines=[line]), style))
+MISSING_GUIDE_IMAGES = {
+    'after': lambda missing: dict(bitmap_after_path=missing),
+    'both': lambda missing: dict(bitmap_before_path=missing, bitmap_after_path=missing),
+    # The N3 colour-separation placeholder: before-only, undecorated, pulls the lyric back over itself.
+    'placeholder': lambda missing: dict(bitmap_before_path=missing, bitmap_after_path=None,
+                                        bitmap_margin_right_px=-9999, bitmap_no_decor=True),
+}
+
+
+@GPU
+@pytest.mark.parametrize('missing', list(MISSING_GUIDE_IMAGES))
+def test_missing_bitmap_guide_images_keep_the_box_and_draw_nothing_like_actual_d2d_gpu(
+        binary, application, tmp_path, missing):
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    changes = MISSING_GUIDE_IMAGES[missing](str(tmp_path / 'missing.png'))
+    case, track = p00_guide(tmp_path, **changes)
+    case = replace(case, track=track, case_id=f'missing_{missing}_bitmap_guide')
+    assert_ruby_transition_gpu_parity(binary, case, (1400, 1700, 2600, 3830))
 
 
 def decorated_inline_guide(tmp_path, family=None):
@@ -217,8 +230,7 @@ def test_animated_lyric_guides_follow_authored_anchor_and_seek(binary, project, 
         configure(process, ir)
         frames, _ = collect(process, times)
         before, before_tail, during, _, after, after_tail, after_next = frames
-        with pytest.raises(NativeRendererError, match='动图'):
-            configure(process, bad)
+        configure(process, bad)  # The declaration only names a mode; animation still follows the image.
         replay, _ = collect(process, times[::-1], generation=2)
     assert np.array_equal(frames, replay[::-1])
     assert before.any()
