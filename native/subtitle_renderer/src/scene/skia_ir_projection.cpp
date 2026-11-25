@@ -17,8 +17,10 @@ namespace {
 // horizontal_rtl_cell_schema=1: multi-codepoint cells whose whole-cell RTL
 // placement is GPU-validated. Mirrors engine/render/skia_ir.py exactly.
 bool validatedRightToLeftScalar(char32_t c) {
+    // CGJ, ZWJ and VS16 draw nothing of their own and keep the cell's GPU placement.
     return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff && c != 0xad)
-        || (c >= 0x300 && c <= 0x36f && c != 0x34f && (c < 0x35c || c > 0x362))
+        || (c >= 0x300 && c <= 0x36f && (c < 0x35c || c > 0x362))
+        || c == 0x200d || c == 0xfe0f
         || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7a3);
 }
 // horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from

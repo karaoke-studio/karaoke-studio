@@ -510,14 +510,24 @@ def rtl_cell_source(project,kind='cells',*,reverse=False,effect='none'):
     return replace(track,lines=[replace(line,chars=[replace(c,text=t) for c,t in zip(line.chars,texts)])]),style
 
 
-@pytest.mark.parametrize('text',['\u3099か','か\u3099\u309a','A\u3099','ゝあ','A\uff5e','שׁל','سل','A\u200dA','A\u200cA','A\ufe0f','\U0001F469\U0001F4BB',
-                                 'a\u034f','a\u035cb','a\u00adb','\u0103a'])
+@pytest.mark.parametrize('text',['\u3099か','か\u3099\u309a','A\u3099','ゝあ','A\uff5e','שׁל','سل','A\u200cA','\U0001F469\U0001F4BB',
+                                 'a\u035cb','a\u00adb','\u0103a'])
 def test_unvalidated_rtl_multicodepoint_cells_stay_gated(binary,project,text):
     track,style=rtl_source(project)
     line=track.lines[0]
     track=replace(track,lines=[replace(line,chars=[replace(line.chars[0],text=text),*line.chars[1:]])])
     with pytest.raises(ValueError,match='未验证'):ir_for(binary,(track,style))
 
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('text',['A\u200dA','A\ufe0f','a\u034f'])
+def test_rtl_cells_with_invisible_joiners_match_gpu(binary,project,text):
+    """CGJ, ZWJ and VS16 draw nothing and keep the whole cell's GPU placement."""
+    track,style=rtl_source(project)
+    line=track.lines[0]
+    track=replace(track,lines=[replace(line,chars=[replace(line.chars[0],text=text),*line.chars[1:]])])
+    assert 'p05_horizontal_rtl_cells' in ir_for(binary,(track,style))['required_features']
+    assert_gpu_parity(binary,track,style,1,('joiner',text))
 
 @pytest.mark.parametrize('reverse',[False,True])
 def test_rtl_multicodepoint_cells_are_versioned_whole_cells(binary,project,reverse,tmp_path):

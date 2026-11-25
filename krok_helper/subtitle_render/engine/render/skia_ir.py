@@ -58,10 +58,11 @@ from krok_helper.subtitle_render.engine.ruby.timing import is_utopia_group_marke
 
 # horizontal_rtl_cell_schema=1: multi-codepoint cells whose whole-cell RTL
 # placement is GPU-validated under cell_glyph_schema=1. Mirrors native
-# skia_ir_projection exactly. Kana, other scripts, ZWJ/variation selectors,
-# supplementary scalars and default ignorables stay rejected.
-_RTL_CELL_RANGES = ((0x20, 0x7e), (0xa0, 0xac), (0xae, 0xff), (0x300, 0x34e), (0x350, 0x35b), (0x363, 0x36f),
-                    (0x4e00, 0x9fff), (0xac00, 0xd7a3))
+# skia_ir_projection exactly. CGJ, ZWJ and VS16 match the GPU's whole-cell
+# placement; kana, other scripts, other variation selectors, supplementary
+# scalars and other default ignorables stay rejected.
+_RTL_CELL_RANGES = ((0x20, 0x7e), (0xa0, 0xac), (0xae, 0xff), (0x300, 0x35b), (0x363, 0x36f),
+                    (0x200d, 0x200d), (0xfe0f, 0xfe0f), (0x4e00, 0x9fff), (0xac00, 0xd7a3))
 
 
 # horizontal_rtl_kana_schema=1: kana and Japanese punctuation drawn from
