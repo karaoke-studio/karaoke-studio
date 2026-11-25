@@ -4562,6 +4562,14 @@ def test_preview_player_window_backend_indicator(qapp, monkeypatch, confirmed):
         assert window._backend_label.text() == "GPU渲染中"
         window._backend_label.click()
         assert len(confirmations) == 1
+        long_widths = []
+        for long_label in ("Vulkan GPU", "Skia GPU 直画"):
+            window._set_render_backend_label(long_label)
+            badge = window._backend_label
+            assert badge.width() >= badge.fontMetrics().horizontalAdvance(badge.text()) + 8
+            long_widths.append(badge.width())
+        window._set_render_backend_label("GPU")
+        assert 76 <= window._backend_label.width() < min(long_widths)
 
         window._collapse_window()
         assert window._backend_label.isHidden()

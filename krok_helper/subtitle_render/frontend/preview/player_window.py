@@ -362,6 +362,8 @@ class PreviewPlayerWindow(QWidget):
                 """
             ),
         )
+        # 样式表在首次设置后端指示之后才挂上，字体变化后按新字体重新量宽。
+        self._fit_backend_label()
         self._preview_frame.lower()
         self.show_controls()
         self.apply_workspace_geometry()
@@ -534,7 +536,6 @@ class PreviewPlayerWindow(QWidget):
             ("CPU渲染中\n建议开启 GPU 渲染" if can_request_gpu else
              "CPU渲染中\n字幕 GPU 暂不可用") if is_cpu else f"{label}渲染中"
         )
-        self._backend_label.setFixedSize(144 if is_cpu else 76, 34 if is_cpu else 28)
         self._backend_label.setToolTip(
             "当前平台尚未提供正式 GPU 字幕渲染后端，正在使用 CPU 绘制。"
             "可降低预览质量以改善流畅度。"
@@ -553,7 +554,27 @@ class PreviewPlayerWindow(QWidget):
             style.unpolish(self._backend_label)
             style.polish(self._backend_label)
             self._backend_label.update()
+        self._fit_backend_label()
         self._update_quality_label_visibility()
+
+    _BACKEND_LABEL_MIN_WIDTH = 76
+    _BACKEND_LABEL_PADDING = 10
+
+    def _fit_backend_label(self) -> None:
+        """按样式表字体实测文字宽度，避免「Vulkan GPU渲染中」等长后端名被截断。"""
+        label = self._backend_label
+        if label.property("renderBackend") == "CPU":
+            label.setFixedSize(144, 34)
+            return
+        label.ensurePolished()
+        text_width = max(
+            (label.fontMetrics().horizontalAdvance(line) for line in label.text().split("\n")),
+            default=0,
+        )
+        label.setFixedSize(
+            max(self._BACKEND_LABEL_MIN_WIDTH, text_width + 2 * self._BACKEND_LABEL_PADDING),
+            28,
+        )
 
     def _confirm_gpu_preview(self) -> None:
         if (self._backend_label.property("renderBackend") != "CPU"
