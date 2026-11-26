@@ -3,6 +3,9 @@
 from dataclasses import replace
 import copy
 import json
+import os
+from pathlib import Path
+import re
 import sys
 
 import numpy as np
@@ -142,6 +145,22 @@ def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, tar
 
 
 def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, *, check_p00_edges=False):
+    try:
+        _assert_glow_parity(times, refs, gpu_frames, raster_frames, case, check_p00_edges)
+    except AssertionError:
+        # Hosted runners cannot be inspected; keep the failing frames for offline diagnosis.
+        if folder := os.environ.get('KROK_TEST_PARITY_DUMP_DIR'):
+            path = Path(folder)
+            path.mkdir(parents=True, exist_ok=True)
+            name = re.sub(r'[^0-9A-Za-z_.-]+', '_', os.environ.get('PYTEST_CURRENT_TEST', str(case)).split(' ')[0])
+            arrays = {'times': np.asarray(times), 'gpu': np.stack(gpu_frames), 'raster': np.stack(raster_frames)}
+            if refs is not None:
+                arrays['d2d'] = np.stack(refs)
+            np.savez_compressed(path / f'{name[-150:]}.npz', **arrays)
+        raise
+
+
+def _assert_glow_parity(times, refs, gpu_frames, raster_frames, case, check_p00_edges):
     budget = COMPARISON_BUDGETS['image_categories']['decorated_text']
     comparisons = [('Raster', gpu_frames, raster_frames)]
     if refs is not None:
