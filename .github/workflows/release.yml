@@ -102,8 +102,9 @@ jobs:
           path: ~/.cache/krok-helper/skia-deps
           key: skia-m150-windows-x64-${{ hashFiles('native/subtitle_renderer/skia.lock.json', 'scripts/skia_build/configuration.py') }}
 
-      # skia.lock.json 记录的 MSVC/SDK 只约束构建机（用户只需随包的 VC++ 运行时）。
-      # runner 没有该精确版本时改用已安装的最新工具集（不低于 14.50），选择记录进构建指纹。
+      # Skia 用锁定的 clang-cl 21 编译，但用 MSVC 的 STL 头：14.52 起 STL 要求 Clang 22，
+      # 因此构建机必须用 14.50 LTS 工具集（用户只需随包的 VC++ 运行时）。runner 没有时
+      # 安装 v14.50 并列组件；只有同为 14.50 的服务版本时显式改用它，并记录进构建指纹。
       - name: Select MSVC toolset and Windows SDK for Skia
         if: inputs.reuse_windows_run_id == ''
         shell: powershell
@@ -114,9 +115,21 @@ jobs:
           $roots = & $vswhere -all -products * -property installationPath
           $versions = @(foreach ($root in $roots) { Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object Name })
           Write-Host "Installed MSVC toolsets: $($versions -join ', ')"
+          if (-not ($versions | Where-Object { $_ -like '14.50.*' })) {
+            $installPath = & $vswhere -latest -property installationPath
+            $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+            Write-Host "Installing MSVC v14.50 build tools into $installPath ..."
+            $process = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+              'modify', '--installPath', "`"$installPath`"",
+              '--add', 'Microsoft.VisualStudio.Component.VC.14.50.18.0.x86.x64',
+              '--quiet', '--norestart', '--nocache')
+            Write-Host "vs_installer exit code: $($process.ExitCode)"
+            $versions = @(foreach ($root in $roots) { Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object Name })
+            Write-Host "MSVC toolsets after install: $($versions -join ', ')"
+          }
           if ($versions -notcontains $spec.msvc) {
-            $candidate = $versions | Where-Object { [version]$_ -ge [version]'14.50' } | Sort-Object { [version]$_ } | Select-Object -Last 1
-            if (-not $candidate) { throw "No MSVC toolset 14.50 or newer is available on this runner." }
+            $candidate = $versions | Where-Object { $_ -like '14.50.*' } | Sort-Object { [version]$_ } | Select-Object -Last 1
+            if (-not $candidate) { throw "MSVC 14.50 toolset is not available on this runner." }
             "KROK_SKIA_MSVC_VERSION=$candidate" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
             Write-Host "::warning::Pinned MSVC $($spec.msvc) missing; building Skia with $candidate"
           }
@@ -265,7 +278,8 @@ jobs:
 
       # clang 21.1.8 is pinned by skia.lock.json; GCC 12's libstdc++ provides
       # C++20 while matching the runtime Ubuntu 22.04 already ships.
-      # Qt6Gui's CMake package (Skia sidecar) needs the OpenGL/EGL development files.
+      # Qt6Gui/GuiPrivate's CMake packages (Skia sidecar) need the OpenGL, EGL, XKB and
+      # Vulkan development files.
       - name: Install build toolchain and runtime libraries
         run: |
           sudo apt-get update
@@ -273,7 +287,7 @@ jobs:
             libegl1 libgl1 libfontconfig1 libdbus-1-3 libxkbcommon0 libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libnss3 libxcomposite1 \
             libxdamage1 libxrandr2 libxtst6 libvulkan1 \
-            libgl-dev libegl-dev
+            libgl-dev libegl-dev libxkbcommon-dev libvulkan-dev
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
           echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
           sudo apt-get update
