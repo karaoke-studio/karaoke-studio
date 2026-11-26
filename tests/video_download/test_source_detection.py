@@ -84,6 +84,51 @@ def _extract_multipart(monkeypatch, part_titles: list[str]) -> list[str]:
     return [info.title for info in service.extract_infos("BV1tR5g6jE6Y")]
 
 
+def _extract_single(monkeypatch, url: str, raw: dict) -> str:
+    service = YtDlpService()
+    monkeypatch.setattr(
+        service, "_extract_info_with_best_backend",
+        lambda url, cookie_file, *, allow_playlist: (dict(raw), ""),
+    )
+    infos = service.extract_infos(url)
+    assert len(infos) == 1
+    return infos[0].title
+
+
+def test_single_part_link_appends_part_number_from_ytdlp_id(monkeypatch) -> None:
+    # yt-dlp resolves "?p=N" to that part alone (no entries) with id "<BV>_pN"
+    # and the shared parent title, so P1/P2 parsed separately must still differ.
+    titles = [
+        _extract_single(
+            monkeypatch,
+            f"https://www.bilibili.com/video/BV1tR5g6jE6Y/?p={part}",
+            {"id": f"BV1tR5g6jE6Y_p{part}", "title": "【直播回放】单人卡拉OK",
+             "webpage_url": f"https://www.bilibili.com/video/BV1tR5g6jE6Y/?p={part}"},
+        )
+        for part in (1, 2)
+    ]
+
+    assert titles == ["【直播回放】单人卡拉OK - P1", "【直播回放】单人卡拉OK - P2"]
+
+
+def test_link_without_part_keeps_plain_title(monkeypatch) -> None:
+    title = _extract_single(
+        monkeypatch, "https://www.bilibili.com/video/BV1tR5g6jE6Y/",
+        {"id": "BV1tR5g6jE6Y", "title": "普通视频"},
+    )
+
+    assert title == "普通视频"
+
+
+def test_youtube_id_resembling_part_suffix_is_not_numbered(monkeypatch) -> None:
+    title = _extract_single(
+        monkeypatch, "https://www.youtube.com/watch?v=BVabc_p2",
+        {"id": "BVabc_p2", "title": "YouTube 视频"},
+    )
+
+    assert title == "YouTube 视频"
+
+
 def test_multipart_parts_sharing_parent_title_get_distinct_part_numbers(monkeypatch) -> None:
     titles = _extract_multipart(monkeypatch, ["【直播回放】单人卡拉OK", "【直播回放】单人卡拉OK"])
 

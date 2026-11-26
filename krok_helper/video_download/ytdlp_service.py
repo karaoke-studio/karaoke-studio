@@ -363,7 +363,21 @@ class YtDlpService:
                 )
                 for index, entry in enumerate(entries)
             ]
-        return [self._build_video_info(self._unwrap_info(raw_info), url, extractor_args_hint)]
+        single = self._unwrap_info(raw_info)
+        info = self._build_video_info(single, url, extractor_args_hint)
+        part_index = self._bilibili_single_part_index(single) if source == SOURCE_BILIBILI else 0
+        if part_index:
+            # A "?p=N" link resolves to that one part only, and every part of a
+            # live replay shares the parent title; without the number, parsing
+            # P1 and P2 separately yields one output file name for both.
+            info.title = f"{info.title} - P{part_index}"
+        return [info]
+
+    @staticmethod
+    def _bilibili_single_part_index(info: dict[str, Any]) -> int:
+        """Part number yt-dlp encodes as "<BV>_p<N>" when the link selects a part."""
+        match = re.fullmatch(r"BV\w+_p(\d+)", str(info.get("id") or ""), flags=re.IGNORECASE)
+        return int(match.group(1)) if match else 0
 
     def _hydrate_playlist_entry(
         self,
