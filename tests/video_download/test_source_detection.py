@@ -67,3 +67,36 @@ def test_extract_infos_expands_bv_before_backend_and_keeps_canonical_url(monkeyp
     assert len(infos) == 1
     assert infos[0].url == infos[0].webpage_url == canonical
     assert infos[0].source == SOURCE_BILIBILI
+
+
+def _extract_multipart(monkeypatch, part_titles: list[str]) -> list[str]:
+    service = YtDlpService()
+    parent = "【直播回放】单人卡拉OK"
+    entries = [
+        {"title": part_title, "formats": [{"format_id": "1"}],
+         "webpage_url": f"https://www.bilibili.com/video/BV1tR5g6jE6Y/?p={index}"}
+        for index, part_title in enumerate(part_titles, 1)
+    ]
+    monkeypatch.setattr(
+        service, "_extract_info_with_best_backend",
+        lambda url, cookie_file, *, allow_playlist: ({"title": parent, "entries": entries}, ""),
+    )
+    return [info.title for info in service.extract_infos("BV1tR5g6jE6Y")]
+
+
+def test_multipart_parts_sharing_parent_title_get_distinct_part_numbers(monkeypatch) -> None:
+    titles = _extract_multipart(monkeypatch, ["【直播回放】单人卡拉OK", "【直播回放】单人卡拉OK"])
+
+    assert titles == ["【直播回放】单人卡拉OK - P1", "【直播回放】单人卡拉OK - P2"]
+
+
+def test_multipart_parts_with_own_titles_keep_part_prefix(monkeypatch) -> None:
+    titles = _extract_multipart(monkeypatch, ["上半场", "下半场"])
+
+    assert titles == ["【直播回放】单人卡拉OK - P1 上半场", "【直播回放】单人卡拉OK - P2 下半场"]
+
+
+def test_multipart_parts_with_identical_own_titles_stay_distinct(monkeypatch) -> None:
+    titles = _extract_multipart(monkeypatch, ["直播", "直播"])
+
+    assert titles == ["【直播回放】单人卡拉OK - P1 直播", "【直播回放】单人卡拉OK - P2 直播"]

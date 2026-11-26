@@ -406,9 +406,15 @@ class YtDlpService:
         thumbnail_url = self._pick_thumbnail_url(info)
         webpage_url = self._coerce_webpage_url(info, fallback_url)
         title = str(info.get("title") or "未命名视频")
+        is_multipart = part_total > 1 and part_index > 0
         if parent_title and title and title != parent_title:
-            prefix = f"P{part_index} " if part_total > 1 and part_index > 0 else ""
+            prefix = f"P{part_index} " if is_multipart else ""
             title = f"{parent_title} - {prefix}{title}".strip()
+        elif is_multipart:
+            # Parts that reuse the parent title must still differ: the title is
+            # the output file stem, and concurrent parts sharing one .part file
+            # corrupt each other and fail the final rename (WinError 32).
+            title = f"{parent_title or title} - P{part_index}"
         return VideoInfo(
             url=webpage_url,
             source=source,
