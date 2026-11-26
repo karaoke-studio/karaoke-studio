@@ -1,5 +1,6 @@
 """The two karaoke states use the authored multi-pass glow source."""
 
+from contextlib import contextmanager
 from dataclasses import replace
 import copy
 import json
@@ -144,11 +145,12 @@ def test_vertical_static_glow_splits_the_two_paints_along_y(binary, project, tar
         assert diff.mean() < .15 and np.mean(diff.max(axis=-1) > 16) < .003
 
 
-def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, *, check_p00_edges=False):
+@contextmanager
+def keep_frames_on_failure(times, refs, gpu_frames, raster_frames, case):
+    """Hosted runners cannot be inspected; keep failing frames for offline diagnosis."""
     try:
-        _assert_glow_parity(times, refs, gpu_frames, raster_frames, case, check_p00_edges)
+        yield
     except AssertionError:
-        # Hosted runners cannot be inspected; keep the failing frames for offline diagnosis.
         if folder := os.environ.get('KROK_TEST_PARITY_DUMP_DIR'):
             path = Path(folder)
             path.mkdir(parents=True, exist_ok=True)
@@ -158,6 +160,11 @@ def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, *, check_p0
                 arrays['d2d'] = np.stack(refs)
             np.savez_compressed(path / f'{name[-150:]}.npz', **arrays)
         raise
+
+
+def assert_glow_parity(times, refs, gpu_frames, raster_frames, case, *, check_p00_edges=False):
+    with keep_frames_on_failure(times, refs, gpu_frames, raster_frames, case):
+        _assert_glow_parity(times, refs, gpu_frames, raster_frames, case, check_p00_edges)
 
 
 def _assert_glow_parity(times, refs, gpu_frames, raster_frames, case, check_p00_edges):

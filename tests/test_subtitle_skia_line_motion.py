@@ -1483,7 +1483,7 @@ def test_volume_utopia_exit_uses_the_columns_own_singing_intervals(binary, proje
 
 def _assert_signal_entry(binary, project, signal, entry):
     from test_subtitle_skia_outline_ruby import render_skia
-    from test_subtitle_skia_static_glow import assert_glow_parity
+    from test_subtitle_skia_static_glow import assert_glow_parity, keep_frames_on_failure
 
     track, style = project
     line, = track.lines
@@ -1515,7 +1515,11 @@ def _assert_signal_entry(binary, project, signal, entry):
         assert ir['track']['lines'][0]['entry_duration_ms'] == 600
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, reference, gpu, raster, ('signal_unit_entry', signal), check_p00_edges=True)
+    with keep_frames_on_failure(times, reference, gpu, raster, ('signal_unit_entry', signal)):
+        _assert_signal_entry_extents(gpu, raster, entry)
 
+
+def _assert_signal_entry_extents(gpu, raster, entry):
     def signal_pixels(frame):
         return (frame[..., 0] > 245) & (frame[..., 1] < 10) & (frame[..., 2] > 245) & (frame[..., 3] > 20)
 
