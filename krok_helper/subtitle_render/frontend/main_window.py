@@ -4198,13 +4198,14 @@ class SubtitleRenderWindow(QWidget):
 
     def _make_export_tab(self) -> QWidget:
         from krok_helper.subtitle_render.native.backend import skia_requested
+        self._restore_skia_backend_choice()
         page = ExportWorkspaceView(
             fps_options=SCREEN_FPS_OPTIONS,
             render_worker_options=RENDER_WORKER_OPTIONS,
             gpu_preview_checked=gpu_preview_enabled(),
             gpu_controls_visible=sys.platform == "win32" or skia_requested(),
             gpu_direct_present_checked=self._load_direct_present_preference(),
-            skia_backend_visible=not getattr(sys, "frozen", False),
+            skia_backend_visible=True,
             skia_backend_checked=skia_requested(),
         )
         page.locationSettingsRequested.connect(
@@ -9703,7 +9704,26 @@ class SubtitleRenderWindow(QWidget):
             }
         )
 
+    def _restore_skia_backend_choice(self) -> None:
+        """打包版恢复上次的「使用 Skia 后端」；显式环境变量与源码运行不受影响。"""
+        from krok_helper.subtitle_render.native.backend_selection import (
+            RENDER_BACKEND_ENV,
+            set_session_skia_backend,
+        )
+
+        if not getattr(sys, "frozen", False) or os.environ.get(RENDER_BACKEND_ENV):
+            return
+        try:
+            data = self._settings_store.load()
+            output = data.get("output") if isinstance(data.get("output"), dict) else {}
+        except Exception:
+            return
+        if output.get("use_skia_backend") is False:
+            set_session_skia_backend(False)
+
     def _on_skia_backend_changed(self, enabled: bool) -> None:
+        from krok_helper.subtitle_render.native.backend_selection import set_session_skia_backend
+
         if enabled:
             from krok_helper.subtitle_render.native.backend import NativeRendererError
             from krok_helper.subtitle_render.native.skia_process import resolve_skia_renderer_path
@@ -9718,6 +9738,7 @@ class SubtitleRenderWindow(QWidget):
                     self._skia_backend_check.blockSignals(previous)
                 self._show_gpu_preview_fallback(str(error))
                 return
+        set_session_skia_backend(enabled)
         self._property_panel.set_skia_backend_enabled(enabled)
         gpu_controls_visible = sys.platform == "win32" or enabled
         self._gpu_preview_check.setVisible(gpu_controls_visible)
@@ -9727,6 +9748,7 @@ class SubtitleRenderWindow(QWidget):
             enabled, gpu_enabled=gpu_controls_visible and self._gpu_preview_check.isChecked()
         ) and enabled:
             self._show_gpu_preview_fallback("当前预览模式不支持 Skia，导出仍可使用 Skia。")
+        self._save_persisted_state()
 
     def _on_gpu_preview_changed(self, enabled: bool) -> None:
         """Apply and persist the experimental subtitle-preview backend."""
@@ -11729,6 +11751,7 @@ class SubtitleRenderWindow(QWidget):
                 gpu_export_enabled=self._gpu_export_check.isChecked(),
                 gpu_export_default_version=GPU_EXPORT_DEFAULT_VERSION,
                 gpu_direct_present=self._gpu_direct_check.isChecked(),
+                use_skia_backend=self._skia_backend_check.isChecked(),
                 directory_mode=self._export_dir_mode,
                 custom_directory=self._export_custom_dir,
                 name_template=self._export_name_template,

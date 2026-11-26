@@ -68,6 +68,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Skia sidecar（4.5.0 起随包且默认启用）。链接与 PyQt6 同版本的 aqt Qt SDK，
+REM 该 SDK 由上一步 run_native_renderer_smoke.ps1 安装（含 qtdeclarative）。
+echo Building Skia subtitle renderer...
+set "SKIA_QT_ROOT=%LOCALAPPDATA%\krok-helper\qt\%PYQT6_QT_VERSION%\msvc2022_64"
+set "SKIA_NATIVE_DIR=%USERPROFILE%\.cache\krok-helper\skia-deps\native\windows-x64-vulkan"
+%PYTHON_BIN% scripts\build_skia_renderer.py --platform windows --arch x64 --gpu-api vulkan --qt-root "%SKIA_QT_ROOT%"
+if errorlevel 1 (
+    echo.
+    echo Skia subtitle renderer build failed.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 echo Building GUI Updater.exe...
 %PYTHON_BIN% krok_helper\updater_app\build_updater.py
 if errorlevel 1 (
@@ -162,13 +175,6 @@ echo Building Windows package...
     --hidden-import colorsys ^
     --hidden-import sudachipy ^
     --hidden-import sudachidict_small ^
-    --exclude-module krok_helper.subtitle_render.native.skia_backend ^
-    --exclude-module krok_helper.subtitle_render.native.skia_process ^
-    --exclude-module krok_helper.subtitle_render.native.skia_text ^
-    --exclude-module krok_helper.subtitle_render.native.skia_fonts ^
-    --exclude-module krok_helper.subtitle_render.frontend.preview.skia_async ^
-    --exclude-module krok_helper.subtitle_render.engine.render.skia_ir ^
-    --exclude-module krok_helper.subtitle_render.engine.render.skia_ruby_ir ^
     --exclude-module krok_helper.updater.macos_controller ^
     --exclude-module krok_helper.updater.macos_transport ^
     --exclude-module krok_helper.updater.macos_sparkle ^
@@ -349,11 +355,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$targetDir = Resolve-Path '%APP_DIST%';" ^
     "$updater = Resolve-Path 'krok_helper\updater_app\dist\Updater.exe';" ^
     "$renderer = Resolve-Path 'build\native-renderer\krok_subtitle_renderer.exe';" ^
+    "$skiaDir = Resolve-Path '%SKIA_NATIVE_DIR%';" ^
     "Copy-Item -LiteralPath $updater -Destination (Join-Path $targetDir 'Updater.exe') -Force;" ^
-    "Copy-Item -LiteralPath $renderer -Destination (Join-Path $targetDir 'krok_subtitle_renderer.exe') -Force"
+    "Copy-Item -LiteralPath $renderer -Destination (Join-Path $targetDir 'krok_subtitle_renderer.exe') -Force;" ^
+    "Copy-Item -LiteralPath (Join-Path $skiaDir 'krok_skia_subtitle_renderer.exe') -Destination (Join-Path $targetDir 'krok_skia_subtitle_renderer.exe') -Force;" ^
+    "Copy-Item -LiteralPath (Join-Path $skiaDir 'icudtl.dat') -Destination (Join-Path $targetDir 'icudtl.dat') -Force"
 if errorlevel 1 (
     echo.
-    echo Failed to copy Updater.exe or the Direct2D subtitle renderer.
+    echo Failed to copy Updater.exe or the subtitle renderers.
     if not defined IS_CI pause
     exit /b 1
 )
@@ -417,9 +426,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'strange_uta_game\bass\x64\bass_fx.dll'," ^
     "  'Updater.exe'," ^
     "  'krok_subtitle_renderer.exe'," ^
+    "  'krok_skia_subtitle_renderer.exe'," ^
+    "  'icudtl.dat'," ^
     "  '%APP_NAME%.exe'" ^
     ") + $legacyFiles;" ^
-    "$rootLevel = @('Updater.exe','krok_subtitle_renderer.exe','%APP_NAME%.exe') + $legacyFiles;" ^
+    "$rootLevel = @('Updater.exe','krok_subtitle_renderer.exe','krok_skia_subtitle_renderer.exe','icudtl.dat','%APP_NAME%.exe') + $legacyFiles;" ^
     "$missing = @();" ^
     "foreach ($rel in $required) { $base = if ($rel -in $rootLevel) { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
     "$multimediaRequired = @('QtMultimedia.pyd','QtMultimediaWidgets.pyd','Qt6Multimedia.dll','Qt6MultimediaWidgets.dll','ffmpegmediaplugin.dll');" ^
@@ -462,6 +473,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 if errorlevel 1 (
     echo.
     echo Packaged Direct2D subtitle renderer validation failed.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
+echo Validating packaged Skia subtitle renderer...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$exe = Resolve-Path '%APP_DIST%\%APP_NAME%.exe';" ^
+    "$process = Start-Process -FilePath $exe -ArgumentList '--package-skia-smoke' -WindowStyle Hidden -Wait -PassThru;" ^
+    "if ($process.ExitCode -ne 0) { Write-Host ('Packaged Skia subtitle smoke failed with exit code ' + $process.ExitCode); exit 1 };" ^
+    "Write-Host 'Packaged Skia subtitle renderer passed.'"
+if errorlevel 1 (
+    echo.
+    echo Packaged Skia subtitle renderer validation failed.
     if not defined IS_CI pause
     exit /b 1
 )

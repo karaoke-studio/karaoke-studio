@@ -40,6 +40,10 @@ class SkiaGpuDeviceError(NativeRendererError):
         self.raster_allowed = raster_allowed
 
 
+class SkiaSceneUnsupportedError(NativeRendererError):
+    """Skia could not configure this project; callers fall back to the old renderer."""
+
+
 class SkiaRendererProcess(SkiaSidecarProcess):
     def __init__(self, executable_path=None, *, selection: SkiaSelection | None = None, on_backend_info=None, **kwargs) -> None:
         self._posix_rings = OwnedPosixRings()
@@ -68,12 +72,20 @@ class SkiaRendererProcess(SkiaSidecarProcess):
     def configure(self, track, style, *, progress=None, **kwargs):
         from .skia_scene import prepare_skia_scene_ir
 
-        ir = prepare_skia_scene_ir(track, style, executable=self.executable_path, **kwargs)
+        try:
+            ir = prepare_skia_scene_ir(track, style, executable=self.executable_path, **kwargs)
+        except (ValueError, NotImplementedError) as exc:
+            raise SkiaSceneUnsupportedError(f"Skia 暂不支持当前工程：{exc}") from exc
         if progress is not None:
             progress()
         self._send({"cmd": "configure", "ir": ir})
-        out = self._expect_ok(self._read_until_event("configured", timeout_s=self.configure_timeout_s,
-                                                    heartbeat_lease_s=heartbeat_lease_s()))
+        try:
+            out = self._expect_ok(self._read_until_event("configured", timeout_s=self.configure_timeout_s,
+                                                        heartbeat_lease_s=heartbeat_lease_s()))
+        except SkiaGpuDeviceError:
+            raise
+        except NativeRendererError as exc:
+            raise SkiaSceneUnsupportedError(f"Skia 无法配置当前工程：{exc}") from exc
         if out.get('metrics_identity') != ir['skia_layout']['metrics_identity']:
             raise NativeRendererError('Skia 场景未确认规范度量快照')
         self.skia_info = out.get("backend_info", {})

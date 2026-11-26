@@ -5422,10 +5422,24 @@ def test_font_preparation_resolves_other_slots_before_reporting_failure(monkeypa
 
 
 @pytest.mark.parametrize("frozen", [False, True])
-@pytest.mark.parametrize("requested", ["", "d2d", "skia", " SKIA "])
-def test_experimental_skia_selection_is_source_only(monkeypatch, frozen, requested):
+@pytest.mark.parametrize("bundled", [False, True])
+@pytest.mark.parametrize("requested", ["", "native", "skia", " SKIA "])
+def test_skia_selection_defaults_on_only_for_packaged_sidecars(monkeypatch, tmp_path, frozen, bundled, requested):
+    from krok_helper.subtitle_render.native import backend_selection
     from krok_helper.subtitle_render.native.backend import skia_requested
 
+    executable = tmp_path / ("Lin-K Lyrics.exe" if sys.platform == "win32" else "Lin-K Lyrics")
+    executable.write_bytes(b"")
+    if bundled:
+        name = "krok_skia_subtitle_renderer" + (".exe" if sys.platform == "win32" else "")
+        (tmp_path / name).write_bytes(b"")
     monkeypatch.setattr(sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", requested)
-    assert skia_requested() is (not frozen and requested.strip().lower() == "skia")
+    choice = requested.strip().lower()
+    # An explicit choice wins; otherwise only a packaged build with its sidecar defaults to Skia.
+    expected = choice == "skia" if choice else (frozen and bundled)
+    assert skia_requested() is expected
+    assert skia_requested(True) is True and skia_requested(False) is False
+    backend_selection.set_session_skia_backend(not expected)
+    assert skia_requested() is (not expected)

@@ -77,6 +77,10 @@ LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
 FIRST_LEGACY_FREE_VERSION = (4, 4, 0)
 UPDATER_EXE_NAME = "Updater.exe"
 NATIVE_RENDERER_EXE_NAME = "krok_subtitle_renderer.exe"
+# Skia sidecar（4.5.0 起随包、默认启用）与它运行时读取的 ICU 数据；两者都随源码
+# 每版重编，属于 app part。
+SKIA_RENDERER_EXE_NAME = "krok_skia_subtitle_renderer.exe"
+SKIA_ICU_DATA_NAME = "icudtl.dat"
 # 资产名刻意保持改名前的 "KaraokeStudio-" 前缀：存量 Updater 硬编码全量 zip 名，
 # 且从 zip 名派生 manifest 名。改了会甩掉整个存量安装基数。
 ASSET_BASE = "KaraokeStudio-windows"
@@ -137,6 +141,8 @@ APP_TARGETS = [
     *([LEGACY_APP_EXE_NAME] if SHIP_LEGACY_APP_EXE else []),
     UPDATER_EXE_NAME,
     NATIVE_RENDERER_EXE_NAME,
+    SKIA_RENDERER_EXE_NAME,
+    SKIA_ICU_DATA_NAME,
     "_internal/krok_helper",
     "_internal/strange_uta_game",
 ]

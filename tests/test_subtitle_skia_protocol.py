@@ -1378,11 +1378,14 @@ def test_product_export_retry_only_for_gpu_device_failure(binary, monkeypatch, t
         assert len(actual) == len(expected) == 72
         assert [path.read_bytes() for path in actual] == [path.read_bytes() for path in expected]
     else:
-        with pytest.raises(ProcessingError, match='synthetic failure'):
-            render(job)
-        assert len(processes) == 2 and processes[-1] is None and processes[0].poll() is not None
-        assert progress == list(range(1, 13))
-        assert not job.output_path.exists()
+        # 4.5.0: any other Skia failure restarts the whole export on the old
+        # renderer (D2D GPU here) after removing the partial Skia output.
+        output = render(job)
+        assert progress[:12] == list(range(1, 13)) and progress[12:] == list(range(1, 73))
+        # The restart happens inside the failed call: Skia's ffmpeg is gone first.
+        assert processes[0].poll() is not None and processes[-1] is None
+        assert any('Skia 字幕导出失败，已自动回退到旧渲染器' in line and 'synthetic failure' in line for line in logs)
+        assert len(sorted(output.glob('*.png'))) == 72
     assert injected
 
 
@@ -1437,17 +1440,22 @@ def test_product_export_cleans_earlier_frames_after_sidecar_interruption(
     monkeypatch.setattr(SkiaRendererProcess, 'start_render_range', start_or_interrupt)
     ffmpeg = export_ffmpeg(tmp_path)
     job = transparent_sequence_job(tmp_path, supported_project, gpu=True)
-    progress, processes = [], []
+    progress, processes, logs = [], [], []
     try:
-        with pytest.raises(ProcessingError, match='native 字幕渲染器导出失败') as failure:
-            render_subtitle_video(job, ffmpeg_dir=ffmpeg.parent,
-                                  on_progress=lambda done, total: progress.append(done), on_process_started=processes.append)
+        # 4.5.0: the interrupted Skia export is cleaned up and redone from frame
+        # 0 on the old renderer instead of failing.
+        output = render_subtitle_video(job, ffmpeg_dir=ffmpeg.parent, logger=logs.append,
+                                       on_progress=lambda done, total: progress.append(done),
+                                       on_process_started=processes.append)
+        fallback = [line for line in logs if 'Skia 字幕导出失败，已自动回退到旧渲染器' in line]
+        assert len(fallback) == 1
         if fault == 'timeout':
-            assert 'timed out' in str(failure.value)
+            assert 'timed out' in fallback[0]
         assert len(interrupted) == 1 and interrupted[0].poll() not in (None, 0)
-        assert progress == list(range(1, 13))
-        assert len(processes) == 2 and processes[-1] is None and processes[0].poll() is not None
-        assert not job.output_path.exists()
+        assert progress[:12] == list(range(1, 13)) and progress[12:] == list(range(1, 73))
+        # The restart happens inside the failed call: Skia's ffmpeg is gone first.
+        assert processes[0].poll() is not None and processes[-1] is None
+        assert len(sorted(output.glob('*.png'))) == 72
     finally:
         for child in interrupted:
             if child.poll() is None:
@@ -1455,15 +1463,13 @@ def test_product_export_cleans_earlier_frames_after_sidecar_interruption(
                 child.wait(timeout=5)
 
 
-def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monkeypatch, tmp_path, supported_project):
-    from krok_helper.errors import ProcessingError
+def test_unsupported_product_export_falls_back_to_the_old_renderer(binary, monkeypatch, tmp_path, supported_project):
     from krok_helper.subtitle_render.engine import renderer
     from krok_helper.subtitle_render.engine.export.render_job import RenderJob
     from krok_helper.subtitle_render.domain.background import BackgroundSource
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg: pytest.skip("Covered by the MP4 fixture on hosts without a system ffmpeg")
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "skia")
-    monkeypatch.setattr(renderer, "paint_frame", lambda *a, **k: pytest.fail("subtitle QPainter fallback was called"))
     track, style = supported_project
     # A right-to-left multi-codepoint cell outside the GPU-validated scripts stays unsupported.
     line = track.lines[0]
@@ -1473,6 +1479,8 @@ def test_unsupported_product_export_fails_and_cleans_partial_output(binary, monk
                     tmp_path / "unused", tmp_path / "unsupported.mp4",
                     background_source=BackgroundSource(kind="solid"), width=640, height=360, fps=60,
                     duration_ms=1500, include_audio=False, gpu_export_enabled=False)
-    with pytest.raises(ProcessingError):
-        renderer.render_subtitle_video(job, ffmpeg_dir=Path(ffmpeg).parent)
-    assert not job.output_path.exists()
+    logs = []
+    # Skia rejects the scene; with GPU export off the old renderer is the CPU Painter.
+    output = renderer.render_subtitle_video(job, ffmpeg_dir=Path(ffmpeg).parent, logger=logs.append)
+    assert output.is_file() and output.stat().st_size > 0
+    assert any('Skia 字幕导出失败，已自动回退到旧渲染器' in line for line in logs)

@@ -639,6 +639,29 @@ def _render_subtitle_video_prepared(
             )
         if skia_active and isinstance(exc, SkiaGpuDeviceError) and exc.raster_allowed:
             retry_skia_raster_reason = str(exc)
+        elif skia_active:
+            # 用户选定的口径：Skia 不支持或失败时自动回退旧渲染器从头导出
+            # （Windows 走 D2D GPU，其余平台走 CPU Painter）。
+            reason = " ".join(str(exc).split())
+            if len(reason) > 300:
+                reason = reason[:297] + "..."
+            logger(
+                "Skia 字幕导出失败，已自动回退到旧渲染器从头渲染"
+                f"（进度会重新从 0 开始计数，导出仍会正常完成），原因：{reason}"
+            )
+            if monitor is not None:
+                monitor.clear_stall_action()
+                monitor.note_retry("Skia 回退旧渲染器")
+            return render_subtitle_video(
+                replace(job, use_skia_backend=False),
+                ffmpeg_dir=ffmpeg_dir,
+                logger=logger,
+                should_cancel=should_cancel,
+                on_process_started=on_process_started,
+                on_progress=on_progress,
+                preview_image_path=preview_image_path,
+                preview_width=preview_width,
+            )
         else:
             raise ProcessingError(f"native 字幕渲染器导出失败: {exc}") from exc
     except (BrokenPipeError, OSError) as exc:

@@ -699,6 +699,16 @@ class PreviewGraphicsView(QGraphicsView):
         if self.sender() is not None and self.sender() is not self._async_renderer:
             return
         self._note_frame_delivered()
+        if self._use_skia_backend:
+            # Skia 不支持当前工程（或 sidecar 故障）：预览自动改用旧渲染器，
+            # Windows 保持 GPU（D2D），其他平台回到 CPU Painter。
+            selection = getattr(self._async_renderer, "selection", None)
+            gpu = os.name == "nt" and getattr(selection, "target", "gpu") == "gpu"
+            self.set_skia_backend_enabled(False, gpu_enabled=gpu)
+            reason = (
+                "Skia 暂不支持当前工程，预览已自动改用旧渲染器，导出也会自动回退。"
+                "重新勾选「使用 Skia 后端」可再次尝试。原因：" + str(reason)
+            )
         self.renderBackendChanged.emit(self.render_backend_label())
         self.gpuFallback.emit(reason)
 

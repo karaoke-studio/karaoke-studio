@@ -3508,3 +3508,37 @@ def test_title_ir_carries_layout_space_width_and_biting() -> None:
     for role_payload in payload["role_styles"].values():
         assert role_payload["space_width_percent"] == 80
         assert role_payload["allow_biting"] is True
+
+
+def test_render_falls_back_to_the_old_renderer_when_skia_rejects_the_project(monkeypatch, tmp_path):
+    from krok_helper.subtitle_render.native import skia_backend
+
+    job = replace(_job(tmp_path), width=2, height=2, fps=2, duration_ms=1000, use_skia_backend=True)
+    processes = []
+    writes = []
+    logs = []
+
+    def popen(*_args, **_kwargs):
+        processes.append(_FakeRenderProcess(job.output_path))
+        return processes[-1]
+
+    def reject(*_args, **_kwargs):
+        raise skia_backend.SkiaSceneUnsupportedError("Skia 暂不支持当前工程：测试")
+
+    def fake_write_frames_single(process, _job, strip_top, render_h, total_frames, should_cancel, on_progress):
+        assert _job.use_skia_backend is False
+        writes.append(total_frames)
+        process.stdin.write(b"p" * (_job.width * render_h * 4 * total_frames))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(skia_backend, "resolve_skia_renderer_path", lambda: tmp_path / "skia-sidecar")
+    monkeypatch.setattr(renderer, "_write_frames_native", reject)
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_write_frames_single)
+    monkeypatch.setattr(renderer.subprocess, "Popen", popen)
+
+    render_subtitle_video(job, logger=logs.append)
+
+    assert writes == [2]
+    assert len(processes) == 2
+    assert any("Skia 字幕导出失败，已自动回退到旧渲染器" in line and "测试" in line for line in logs)

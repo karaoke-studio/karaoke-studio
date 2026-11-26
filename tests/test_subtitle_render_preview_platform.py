@@ -18,7 +18,8 @@ def qapp():
 @pytest.mark.parametrize('platform_name,skia,frozen,expected', [
     ('posix', False, False, False),
     ('posix', True, False, True),
-    ('posix', True, True, False),
+    # Packaged builds ship Skia (4.5.0); an explicit choice now works there too.
+    ('posix', True, True, True),
     ('nt', False, False, True),
     ('nt', False, True, True),
 ])
@@ -86,3 +87,27 @@ def test_unsupported_player_does_not_offer_gpu_retry(qapp, monkeypatch):
         window.deleteLater()
         owner.deleteLater()
         qapp.processEvents()
+
+
+@pytest.mark.parametrize("platform,target,expected_gpu", [
+    ("nt", "gpu", True), ("nt", "raster", False), ("posix", "gpu", False),
+])
+def test_skia_preview_error_falls_back_to_the_old_renderer(monkeypatch, platform, target, expected_gpu):
+    """Skia 预览失败时自动改用旧渲染器：Windows 保持 GPU（D2D），其他平台回到 Painter。"""
+    from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
+
+    calls, emitted = [], []
+    view = SimpleNamespace(
+        _use_skia_backend=True,
+        _async_renderer=SimpleNamespace(selection=SimpleNamespace(target=target)),
+        sender=lambda: None,
+        _note_frame_delivered=lambda: None,
+        set_skia_backend_enabled=lambda enabled, *, gpu_enabled: calls.append((enabled, gpu_enabled)),
+        render_backend_label=lambda: "label",
+        renderBackendChanged=SimpleNamespace(emit=lambda _label: None),
+        gpuFallback=SimpleNamespace(emit=emitted.append),
+    )
+    monkeypatch.setattr(pg.os, "name", platform)
+    pg.PreviewGraphicsView._on_skia_error(view, "原因")
+    assert calls == [(False, expected_gpu)]
+    assert emitted and "已自动改用旧渲染器" in emitted[0] and "原因" in emitted[0]

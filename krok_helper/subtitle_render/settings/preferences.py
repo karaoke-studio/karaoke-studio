@@ -256,6 +256,8 @@ class AppOutputPreferenceValues:
     output_format: str = "mp4"
     gpu_direct_present: bool = True
     bitrate_mbps: object = DEFAULT_VIDEO_BITRATE_MBPS
+    use_skia_backend: Optional[bool] = None
+    """导出页「使用 Skia 后端」；仅打包版启动时据此恢复（显式环境变量优先）。"""
 
 
 @dataclass(frozen=True)
@@ -717,6 +719,7 @@ def update_app_output_preferences(
     allowed_render_workers: tuple[int, ...],
     output_format: str = "mp4",
     bitrate_mbps: object = DEFAULT_VIDEO_BITRATE_MBPS,
+    use_skia_backend: Optional[bool] = None,
 ) -> dict:
     """Return the app-local output settings while preserving unknown keys."""
     from krok_helper.subtitle_render.engine.export.render_job import OUTPUT_FORMATS
@@ -752,6 +755,8 @@ def update_app_output_preferences(
             ),
         }
     )
+    if use_skia_backend is not None:
+        output["use_skia_backend"] = bool(use_skia_backend)
     return output
 
 
@@ -888,6 +893,7 @@ def prepare_app_preferences(
             render_workers=output.render_workers,
             allowed_render_workers=output.allowed_render_workers,
             output_format=output.output_format,
+            use_skia_backend=output.use_skia_backend,
         )
     return PreparedAppPreferences(
         data=data,

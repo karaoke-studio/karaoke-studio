@@ -94,6 +94,41 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Error 'Failed to download previous runtime zip.'; exit 1 }
           Write-Host 'Previous manifest + runtime zip ready for reuse check.'
 
+      # Skia sidecar（4.5.0 起随包）：依赖与 LLVM 按锁文件缓存。
+      - name: Cache Skia dependencies
+        if: inputs.reuse_windows_run_id == ''
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/krok-helper/skia-deps
+          key: skia-m150-windows-x64-${{ hashFiles('native/subtitle_renderer/skia.lock.json', 'scripts/skia_build/configuration.py') }}
+
+      # skia.lock.json 固定 MSVC/SDK 版本；runner 只带同一工具集的更新服务版本时
+      # 显式改用它（记录进构建指纹），找不到 14.50 工具集则直接失败。
+      - name: Select MSVC toolset and Windows SDK for Skia
+        if: inputs.reuse_windows_run_id == ''
+        shell: powershell
+        run: |
+          $lock = Get-Content native/subtitle_renderer/skia.lock.json -Raw | ConvertFrom-Json
+          $spec = $lock.toolchains.'windows-x64'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $roots = & $vswhere -all -products * -property installationPath
+          $versions = @(foreach ($root in $roots) { Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object Name })
+          Write-Host "Installed MSVC toolsets: $($versions -join ', ')"
+          if ($versions -notcontains $spec.msvc) {
+            $candidate = $versions | Where-Object { $_ -like '14.50.*' } | Sort-Object { [version]$_ } | Select-Object -Last 1
+            if (-not $candidate) { throw "MSVC 14.50 toolset is not available on this runner." }
+            "KROK_SKIA_MSVC_VERSION=$candidate" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            Write-Host "::warning::Pinned MSVC $($spec.msvc) missing; building Skia with $candidate"
+          }
+          $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\Include"
+          $sdks = @(Get-ChildItem $kits -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'um\Windows.h') } | ForEach-Object Name)
+          Write-Host "Installed Windows SDKs: $($sdks -join ', ')"
+          if ($sdks -notcontains $spec.sdk) {
+            $sdk = $sdks | Sort-Object { [version]$_ } | Select-Object -Last 1
+            "KROK_SKIA_WINDOWS_SDK=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            Write-Host "::warning::Pinned Windows SDK $($spec.sdk) missing; building Skia with $sdk"
+          }
+
       - name: Build Windows package
         if: inputs.reuse_windows_run_id == ''
         shell: cmd
@@ -157,9 +192,30 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pyinstaller cryptography
+          python3 -m pip install pyinstaller cryptography cmake "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643"
+
+      - name: Cache Qt SDK for the Skia sidecar
+        uses: actions/cache@v4
+        with:
+          path: ~/qt-krok
+          key: qt-6.11.0-macos-qtbase-qtdeclarative-v1
+
+      - name: Install Qt 6.11.0 SDK for the Skia sidecar
+        run: |
+          if [ ! -f ~/qt-krok/6.11.0/macos/lib/cmake/Qt6Quick/Qt6QuickConfig.cmake ]; then
+            python3 -m aqt install-qt mac desktop 6.11.0 clang_64 --archives qtbase qtdeclarative --outputdir ~/qt-krok
+          fi
+
+      - name: Cache Skia dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/krok-helper/skia-deps
+          key: skia-m150-macos-arm64-${{ hashFiles('native/subtitle_renderer/skia.lock.json', 'scripts/skia_build/configuration.py') }}
 
       - name: Build macOS package
+        env:
+          # skia.lock.json pins the Xcode used for the Skia sidecar.
+          DEVELOPER_DIR: /Applications/Xcode_26.1.1.app/Contents/Developer
         run: bash ./scripts/build_macos.command
 
       - name: Archive macOS package
@@ -189,11 +245,81 @@ jobs:
             KaraokeStudio-macos-appcast.xml
             KaraokeStudio-macos-deltas.zip
 
+  build-linux:
+    name: Build Linux
+    # Oldest supported glibc (2.35); the package runs on this release or newer.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # clang 21.1.8 is pinned by skia.lock.json; GCC 12's libstdc++ provides
+      # C++20 while matching the runtime Ubuntu 22.04 already ships.
+      - name: Install build toolchain and runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-12 ninja-build libportaudio2 libasound2 \
+            libegl1 libgl1 libfontconfig1 libdbus-1-3 libxkbcommon0 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libnss3 libxcomposite1 \
+            libxdamage1 libxrandr2 libxtst6 libvulkan1
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          sudo apt-get update
+          sudo apt-get install -y clang-21 lld-21
+          clang++-21 --version
+
+      - name: Install Python build tools
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyinstaller cmake "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643"
+
+      - name: Cache Qt SDK for the Skia sidecar
+        uses: actions/cache@v4
+        with:
+          path: ~/qt-krok
+          key: qt-6.11.0-linux-qtbase-qtdeclarative-v1
+
+      - name: Install Qt 6.11.0 SDK for the Skia sidecar
+        run: |
+          if [ ! -f ~/qt-krok/6.11.0/gcc_64/lib/cmake/Qt6Quick/Qt6QuickConfig.cmake ]; then
+            python3 -m aqt install-qt linux desktop 6.11.0 linux_gcc_64 --archives qtbase qtdeclarative --outputdir ~/qt-krok
+          fi
+
+      - name: Cache Skia dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/krok-helper/skia-deps
+          key: skia-m150-linux-x64-${{ hashFiles('native/subtitle_renderer/skia.lock.json', 'scripts/skia_build/configuration.py') }}
+
+      - name: Build Linux package
+        env:
+          CI: "1"
+        run: bash ./scripts/build_linux.sh
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KaraokeStudio-linux
+          path: |
+            dist/KaraokeStudio-linux.zip
+            dist/KaraokeStudio-linux.zip.sha256
+
   release:
     name: Publish Release
     needs:
       - build-windows
       - build-macos
+      - build-linux
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
 
@@ -234,6 +360,12 @@ jobs:
           name: KaraokeStudio-macos
           path: release-assets/macos
 
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: KaraokeStudio-linux
+          path: release-assets/linux
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -250,3 +382,5 @@ jobs:
             release-assets/macos/KaraokeStudio-macos.zip
             release-assets/macos/KaraokeStudio-macos-appcast.xml
             release-assets/macos/KaraokeStudio-macos-deltas.zip
+            release-assets/linux/KaraokeStudio-linux.zip
+            release-assets/linux/KaraokeStudio-linux.zip.sha256

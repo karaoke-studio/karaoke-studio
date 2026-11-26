@@ -18,15 +18,16 @@ SUG_VERSION_FILE="$SUG_PACKAGE/__version__.py"
 SUG_VERSION_BACKUP=""
 PYQT6_BINDING_VERSION="6.11.0"
 PYQT6_QT_VERSION="6.11.0"
+case "$(uname -m)" in
+  arm64) SKIA_ARCH="arm64" ;;
+  *) SKIA_ARCH="x64" ;;
+esac
+# Skia sidecar（4.5.0 起随包且默认启用）链接与 PyQt6 同版本的 Qt SDK
+# （aqt：clang_64，含 qtbase + qtdeclarative）。
+SKIA_QT_ROOT="${SKIA_QT_ROOT:-$HOME/qt-krok/$PYQT6_QT_VERSION/macos}"
+SKIA_NATIVE_DIR="$HOME/.cache/krok-helper/skia-deps/native/macos-$SKIA_ARCH-metal"
 
 EXCLUDED_MODULES=(
-  krok_helper.subtitle_render.native.skia_backend
-  krok_helper.subtitle_render.native.skia_process
-  krok_helper.subtitle_render.native.skia_text
-  krok_helper.subtitle_render.native.skia_fonts
-  krok_helper.subtitle_render.frontend.preview.skia_async
-  krok_helper.subtitle_render.engine.render.skia_ir
-  krok_helper.subtitle_render.engine.render.skia_ruby_ir
   PySide6
   PyQt5
   PyQt6.Qt3DAnimation
@@ -415,6 +416,20 @@ if [ -n "$warn_file" ]; then
 fi
 echo "Package content validation passed."
 
+echo "Building Skia subtitle renderer..."
+if [ ! -f "$SKIA_QT_ROOT/lib/cmake/Qt6Quick/Qt6QuickConfig.cmake" ]; then
+  echo "Qt $PYQT6_QT_VERSION SDK not found at $SKIA_QT_ROOT (set SKIA_QT_ROOT)."
+  exit 1
+fi
+if ! "$PYTHON_BIN" "$PROJECT_ROOT/scripts/build_skia_renderer.py" --platform macos --arch "$SKIA_ARCH"     --gpu-api metal --qt-root "$SKIA_QT_ROOT"; then
+  echo "Skia subtitle renderer build failed."
+  exit 1
+fi
+# The app looks for the sidecar next to its own executable; copy it before
+# the bundle is signed inside out below.
+cp -f "$SKIA_NATIVE_DIR/krok_skia_subtitle_renderer" "$APP_DIST/Contents/MacOS/krok_skia_subtitle_renderer"
+chmod +x "$APP_DIST/Contents/MacOS/krok_skia_subtitle_renderer"
+
 echo "Updating macOS package version and language metadata..."
 "$PYTHON_BIN" "$PROJECT_ROOT/scripts/update_macos_version.py" "$APP_DIST/Contents/Info.plist"
 
@@ -429,6 +444,13 @@ if ! "$APP_DIST/Contents/MacOS/$APP_NAME" --package-spawn-smoke; then
   exit 1
 fi
 echo "Packaged multiprocessing spawn passed."
+
+echo "Validating packaged Skia subtitle renderer..."
+if ! "$APP_DIST/Contents/MacOS/$APP_NAME" --package-skia-smoke; then
+  echo "Packaged Skia subtitle renderer validation failed."
+  exit 1
+fi
+echo "Packaged Skia subtitle renderer passed."
 
 if [ -n "$KROK_SPARKLE_PUBLIC_ED_KEY" ]; then
   echo "Validating packaged Sparkle loading..."

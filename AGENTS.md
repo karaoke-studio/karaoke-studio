@@ -14,6 +14,7 @@
 4. **构建/验证时允许关闭本应用**（2026-11-14 用户授权）：若运行中的 Lin-K 应用或本项目 sidecar 阻挡构建、替换或验证，可直接关闭，无需重复询问。优先正常退出；需要结束残留进程时核对项目路径，不关闭 VS Code 或无关应用。
 
 5. **生产默认后端不得自行切换**（2026-11-16 用户明令）：除非用户后续主动、明确要求更改生产默认后端，否则永久保持现有生产默认；Skia 开发、迁移、测试、全部验收通过或计划中的切换任务均不构成授权。不得自行修改默认后端选择、GPU 默认偏好、发布打包默认或通过回退策略间接切换。相关计划的自动切换条款也必须等待用户明确指令。
+   **2026-11-26 用户明确指令（4.5.0）**：Skia 随三平台安装包分发，打包版在 sidecar 存在时默认使用 Skia（导出页「使用 Skia 后端」默认勾选，用户选择持久化）；源码运行仍需显式 `KROK_SUBTITLE_RENDER_BACKEND=skia`。Skia 不支持或失败的工程自动回退旧渲染器（Windows→D2D GPU，Linux/macOS→CPU Painter），预览与导出同口径。此后再改默认后端或回退策略，仍须用户明确指令。
 
 6. **仅在用户明确指定时使用 Claude**（2026-11-20 用户要求）：默认由当前 agent 实施和验收。用户明确指定 Claude 时，沿用已有上下文并简述目标、边界和验收条件。等待 CLI 退出或结构化完成事件后检查最终 diff 和结果，避免反复读取日志和 CI 状态。
 
@@ -127,6 +128,7 @@ git submodule status
 - [`krok_helper/updater_app/`](krok_helper/updater_app/)：独立 GUI `Updater.exe`（复用 SUG `updater_app` 的 PyQt6 界面与增量更新逻辑），主程序退出后由它显示进度、替换文件并重启，不弹控制台。由 [`build_updater.py`](krok_helper/updater_app/build_updater.py) 单独打包。
 - **增量更新**：[`scripts/build_parts.py`](scripts/build_parts.py) 产出 `KaraokeStudio-windows.json`（manifest）+ `-app.zip` + `-runtime.zip`；Updater 按 manifest diff 只下变化的 part，失败自动回退全量 zip。依赖未变时 CI 复用上一版 runtime zip 原文件（`--require-runtime-reuse` 安全闸）。完整机制、配置与失败矩阵见 [`docs/auto_update.md`](docs/auto_update.md)；设计取舍见 [`docs/工作台更新器完善计划.md`](docs/工作台更新器完善计划.md)。
 - 资产命名是硬编码的：`KaraokeStudio-windows.zip` / `KaraokeStudio-macos.zip`（见 `worker.current_asset_name()`）。**manifest 名 `KaraokeStudio-windows.json` 由存量客户端从 zip 名派生，全都不可改** —— 应用 2026-08 已更名为 Lin-K Lyrics，但这套 `KaraokeStudio-*` 资产名刻意保持原样。
+- **Linux 包（4.5.0 起）**：`KaraokeStudio-linux.zip`（x86_64，ubuntu-22.04 构建，`scripts/build_linux.sh`）。可执行文件无 `.exe` 后缀；zip 用 `krok_helper/updater/posix_zip.py` 记录 Unix 权限与包内相对符号链接，Updater 在 Linux 上以同一模块解压（`ZipFile.extractall` 会丢失两者）。首版只有全量包、无增量 manifest；旧版本没有 Linux 资产时更新检查不回落到其他平台的 zip。PortAudio 随包（`libportaudio.so.2`），系统已装 `libportaudio2` 时优先用系统库（`scripts/linux_portaudio_rthook.py`）。
 - **macOS 走 Sparkle**：CI 额外产出 `KaraokeStudio-macos-appcast.xml` 与 `KaraokeStudio-macos-deltas.zip`，机制见 [`docs/auto_update.md`](docs/auto_update.md) §2.1。
 - **旧名 EXE 已停发（自 4.4.0）**：包里主程序是 `Lin-K Lyrics.exe`；同内容的旧名副本 `Karaoke Studio.exe` 只随 4.3.x 及更早版本分发，自 4.4.0 起由版本闸 `build_parts.FIRST_LEGACY_FREE_VERSION = (4,4,0)` 自动停发（`SHIP_LEGACY_APP_EXE` 同时驱动 `APP_TARGETS`、`main()` 护栏与 `build_windows.bat` 的复制步骤）。以下配套**长期保留，不要当过期代码清理**：Updater 的 `_cleanup_legacy_main_exe`（新版本成功拉起后迁移旧名快捷方式、回收旧名副本）、`installer.find_app_exe_name()` 固定返回新名、`release.py` 自 4.4.0 起在 release body 头部自动加的老版本手动更新提示（`MANUAL_UPDATE_NOTICE`）、护栏 `tests/test_rename_release_invariants.py`。原理与失败矩阵见 [docs/auto_update.md §8.1](docs/auto_update.md)。
 
@@ -306,7 +308,7 @@ git submodule status
    `KROK_SUBTITLE_RENDER_BACKEND=skia` 才启用；`KROK_SUBTITLE_SKIA_TARGET=gpu|raster`、
    `KROK_SUBTITLE_SKIA_FALLBACK=none|raster`、`KROK_SUBTITLE_SKIA_REQUIRE_HARDWARE=1|0`
    控制目标和回退，`KROK_SUBTITLE_SKIA_RENDERER` 可指定新 sidecar。关闭 GPU 仍走
-   Skia Raster；不支持的功能显式失败，不能回落 QPainter。当前产品配置使用 P05
+   Skia Raster；不支持的功能在 Skia 内显式失败、不得在 Skia 内部近似（4.5.0 起产品层整工程回退旧渲染器，见 §0 第 5 条）。当前产品配置使用 P05
    `p05_resolved_horizontal`：legacy / n3_1074 横排，左/中/右与顶/中/底定位、
    主字/英数及行内角色字体实例、逐字实色配色和基础走字，已支持显式字体的 Unicode 塑形单元；
    多行网格已接入共享分页、碰撞时间压缩、整页平移、段内填充及两种智能水平布局。

@@ -134,3 +134,74 @@ def run_gpu_subtitle_smoke() -> int:
     ):
         return 8
     return 0
+
+
+def run_skia_subtitle_smoke() -> int:
+    """Render one frame through the bundled Skia sidecar on Skia Raster.
+
+    Build machines may have no GPU, so this checks the packaged sidecar, its
+    Qt runtime, ``icudtl.dat`` and the shared-memory frame path on the CPU
+    target that every user falls back to.
+    """
+    from functools import partial
+
+    from PyQt6.QtGui import QFontDatabase
+    from PyQt6.QtWidgets import QApplication
+
+    from krok_helper.subtitle_render.domain.models import (
+        Style,
+        TimingChar,
+        TimingLine,
+        TimingTrack,
+    )
+    from krok_helper.subtitle_render.engine.export.native_export import (
+        iter_native_rgba_frames_at_times,
+    )
+    from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
+    from krok_helper.subtitle_render.native.skia_backend import (
+        SkiaRendererProcess,
+        SkiaSelection,
+    )
+    from krok_helper.subtitle_render.native.skia_process import resolve_skia_renderer_path
+
+    app = QApplication.instance() or QApplication([])
+    family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(c, 100 * i) for i, c in enumerate("Skia")], end_ms=1_000)]
+    )
+    style = Style(
+        font_family=family,
+        font_family_latin=None,
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="none",
+        line_y_position="center",
+        line_horizontal_layout="center",
+        line_lead_in_ms=0,
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="none",
+    )
+    path = resolve_skia_renderer_path()
+    prepare_fonts(track, style, [], use_skia_backend=True)
+    factory = partial(SkiaRendererProcess, selection=SkiaSelection("raster", "none", False))
+    frames = list(iter_native_rgba_frames_at_times(
+        track, style, [500], width=320, height=180, fps=60, duration_ms=1_000,
+        renderer_path=path, process_factory=factory,
+    ))
+    app.processEvents()
+    if len(frames) != 1:
+        return 2
+    _, pixels = frames[0]
+    data = bytes(pixels)
+    if len(data) != 320 * 180 * 4:
+        return 3
+    return 0 if any(data[index] for index in range(3, len(data), 4)) else 4
+
+
+def run_audio_smoke() -> int:
+    """Load PortAudio the way SUG's playback engine does (Linux bundles it)."""
+    import sounddevice
+
+    return 0 if sounddevice.get_portaudio_version()[0] > 0 else 1

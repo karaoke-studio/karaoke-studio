@@ -33,6 +33,9 @@ def _write_release_zip(path: Path) -> str:
         # GPU sidecar 是必备根目录负载（_apply_workbench_update 前置校验），
         # 缺失的包会被当损坏包拒绝（rc=6）。
         zf.writestr("Lin-K Lyrics/krok_subtitle_renderer.exe", "new sidecar\n")
+        # 4.5.0 起 Skia sidecar 与 ICU 数据同为必备根目录负载。
+        zf.writestr("Lin-K Lyrics/krok_skia_subtitle_renderer.exe", "new skia\n")
+        zf.writestr("Lin-K Lyrics/icudtl.dat", "new icu\n")
         zf.writestr("Lin-K Lyrics/_internal/version.txt", "3.0.1\n")
         zf.writestr("Lin-K Lyrics/_internal/runtime/new.txt", "new runtime\n")
     return hashlib.sha256(path.read_bytes()).hexdigest()

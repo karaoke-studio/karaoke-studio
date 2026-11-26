@@ -56,6 +56,8 @@ def pyinstaller_args(*, clean: bool = False) -> list[str]:
         "--hidden-import=encodings.mbcs",
         "--hidden-import=hashlib",
         "--hidden-import=zipfile",
+        # Linux packages restore modes and symlinks through this helper.
+        "--hidden-import=krok_helper.updater.posix_zip",
         "--hidden-import=tempfile",
         "--hidden-import=ssl",
         "--hidden-import=_ssl",
@@ -100,9 +102,9 @@ def main() -> int:
         return 1
 
     pyinstaller.run(pyinstaller_args(clean=args.clean))
-    exe = PROJECT_ROOT / "dist" / "Updater.exe"
+    exe = PROJECT_ROOT / "dist" / ("Updater.exe" if sys.platform == "win32" else "Updater")
     if not exe.exists():
-        print("Build finished, but dist/Updater.exe was not found.", file=sys.stderr)
+        print(f"Build finished, but {exe} was not found.", file=sys.stderr)
         return 1
     # Missing imports can be warnings only; reject an unusable frozen payload.
     from PyInstaller.archive.readers import CArchiveReader

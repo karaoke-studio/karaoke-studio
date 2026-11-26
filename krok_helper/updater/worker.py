@@ -53,11 +53,20 @@ class LatestRelease:
             # The signed macOS appcast refers to this exact canonical archive.
             # Never advertise a Windows or unrelated ZIP as a macOS update.
             return next((asset for asset in self.assets if asset.name == "KaraokeStudio-macos.zip"), None)
-        platform_key = "windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else ""
+        platform_key = (
+            "windows" if sys.platform == "win32"
+            else "macos" if sys.platform == "darwin"
+            else "linux" if sys.platform.startswith("linux")
+            else ""
+        )
         if platform_key:
             for asset in self.assets:
                 if platform_key in asset.name.lower() and asset.name.lower().endswith(".zip"):
                     return asset
+        if platform_key == "linux":
+            # Releases before 4.5.0 have no Linux package; never fall back to
+            # another platform's ZIP.
+            return None
         for asset in self.assets:
             if asset.name.lower().endswith(".zip"):
                 return asset
@@ -114,6 +123,9 @@ def is_newer_version(remote: str, local: str = APP_VERSION) -> bool:
 def current_asset_name() -> str:
     if sys.platform == "darwin":
         return "KaraokeStudio-macos.zip"
+    if sys.platform.startswith("linux"):
+        # 4.5.0 起发布；与其余资产同用 ``KaraokeStudio-`` 前缀。
+        return "KaraokeStudio-linux.zip"
     return "KaraokeStudio-windows.zip"
 
 

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import krok_helper.updater.worker as worker
 from krok_helper.updater.http_client import HttpResult, SourceTrialRunner
 from krok_helper.updater.settings import UpdaterSettings
@@ -293,3 +295,24 @@ def test_source_trial_runner_stops_at_first_success() -> None:
     assert hit is not None and hit.ok
     assert [a.source_id for a in runner.attempts] == ["a", "b"]
     assert "FAIL" in runner.summary() and "OK" in runner.summary()
+
+
+def _assets(*names: str) -> list:
+    return [worker.ReleaseAsset(name, 1, f"https://example.invalid/{name}") for name in names]
+
+
+def test_linux_picks_only_the_linux_package(monkeypatch) -> None:
+    """4.5.0 起发布 Linux 包；没有 Linux 包的旧版本绝不能回落到其他平台的 zip。"""
+    monkeypatch.setattr(worker.sys, "platform", "linux")
+    assert worker.current_asset_name() == "KaraokeStudio-linux.zip"
+    with_linux = replace(_release("4.5.0"), assets=_assets(
+        "KaraokeStudio-windows.zip", "KaraokeStudio-macos.zip", "KaraokeStudio-linux.zip"))
+    assert with_linux.pick_primary_asset(worker.current_asset_name()).name == "KaraokeStudio-linux.zip"
+    older = replace(_release("4.4.0"), assets=_assets("KaraokeStudio-windows.zip", "KaraokeStudio-macos.zip"))
+    assert older.pick_primary_asset(worker.current_asset_name()) is None
+
+
+def test_windows_asset_choice_is_unchanged(monkeypatch) -> None:
+    monkeypatch.setattr(worker.sys, "platform", "win32")
+    release = replace(_release("4.5.0"), assets=_assets("KaraokeStudio-linux.zip", "KaraokeStudio-windows.zip"))
+    assert release.pick_primary_asset(worker.current_asset_name()).name == "KaraokeStudio-windows.zip"

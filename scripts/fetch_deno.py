@@ -13,6 +13,7 @@ ARCHIVES = {
     ("Windows", "AMD64"): ("x86_64-pc-windows-msvc", "1c40c73193960fcbed9341764d43bbd35e381eddbcf7d6cba7c2f3c0cabe96fb"),
     ("Darwin", "arm64"): ("aarch64-apple-darwin", "ff301a55e9f51306c02eb6da76ceba6ac98109fd11dbd7a1f5b71f5794ad725c"),
     ("Darwin", "x86_64"): ("x86_64-apple-darwin", "bda20c2edb39d614830b9dc4a7dcbfaa0043ae5c246bae2f90b82e943a735e66"),
+    ("Linux", "x86_64"): ("x86_64-unknown-linux-gnu", "8a04bb02a1dcd56ed060e55281df4b306ca4553a0d02b53b666063f465f2193a"),
 }
 
 

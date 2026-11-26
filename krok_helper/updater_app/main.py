@@ -31,6 +31,7 @@ _TERMINABLE_PROCESS_IMAGES = frozenset({
     "lin-k lyrics.exe",
     "karaoke studio.exe",
     "krok_subtitle_renderer.exe",
+    "krok_skia_subtitle_renderer.exe",
 })
 _MANAGED_DESCENDANT_PROCESS_IMAGES = _TERMINABLE_PROCESS_IMAGES | frozenset({
     "python.exe",
@@ -914,7 +915,10 @@ class _WorkbenchProductFilter(logging.Filter):
 _original_cleanup_temp_workdir = updater_main._cleanup_temp_workdir
 _original_apply_update = updater_main.apply_update
 
-PRIMARY_APP_EXE_NAME = "Lin-K Lyrics.exe"
+# Linux 包（4.5.0 起）的可执行文件没有后缀，也不带 D2D sidecar。
+_IS_WINDOWS = sys.platform == "win32"
+_EXE_SUFFIX = ".exe" if _IS_WINDOWS else ""
+PRIMARY_APP_EXE_NAME = "Lin-K Lyrics" + _EXE_SUFFIX
 # 改名前的主程序名。全量更新路径必须与新版主程序一起回写（详见
 # _apply_workbench_update），否则存量客户端的下一次更新会按旧文件名校验失败。
 LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
@@ -922,6 +926,17 @@ LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"
 # build_parts.APP_TARGETS 双保险）；前置校验缺失即按损坏包拒绝，避免静默
 # 保留旧 sidecar 重新产出混合安装。
 NATIVE_RENDERER_EXE_NAME = "krok_subtitle_renderer.exe"
+# Skia sidecar（4.5.0 起随包并默认启用），Windows 还需要旁边的 ICU 数据。
+SKIA_RENDERER_EXE_NAME = "krok_skia_subtitle_renderer" + _EXE_SUFFIX
+SKIA_ICU_DATA_NAME = "icudtl.dat"
+#: 全量包根目录里必须存在、由本函数回写的产品文件（主程序由通用逻辑回写）。
+REQUIRED_ROOT_PAYLOAD = (
+    (PRIMARY_APP_EXE_NAME, NATIVE_RENDERER_EXE_NAME, SKIA_RENDERER_EXE_NAME, SKIA_ICU_DATA_NAME)
+    if _IS_WINDOWS
+    else (PRIMARY_APP_EXE_NAME, SKIA_RENDERER_EXE_NAME)
+)
+#: 根目录里不以 .exe 结尾、但属于产品的文件。
+ROOT_DATA_FILES = frozenset({SKIA_ICU_DATA_NAME} if _IS_WINDOWS else {SKIA_RENDERER_EXE_NAME})
 
 
 def _close_logger_handlers(logger: logging.Logger) -> None:
@@ -1371,10 +1386,7 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
     # 因此不再是必备项：旧名会话（存量客户端传旧名 --app-exe）由上面的通用
     # ``new_root / app_exe`` 校验兜底拒绝，对应 docs/auto_update.md §8.1 的
     # 残余风险——该放宽必须先于首个无旧名包发布（随 4.3.0 提前发出）。
-    for required_name in (
-        PRIMARY_APP_EXE_NAME,
-        NATIVE_RENDERER_EXE_NAME,
-    ):
+    for required_name in REQUIRED_ROOT_PAYLOAD:
         if not (new_root / required_name).is_file():
             error = f"更新包中找不到 {required_name}"
             _persist_diagnostic_failure(
@@ -1432,7 +1444,7 @@ def _apply_workbench_update(app_dir, app_exe, internal_name, new_root, log):
     for entry in sorted(new_root.iterdir(), key=lambda item: item.name):
         if entry.is_dir() or entry.name in handled:
             continue
-        if not entry.name.lower().endswith(".exe"):
+        if not entry.name.lower().endswith(".exe") and entry.name not in ROOT_DATA_FILES:
             # 根目录按约定只有产品 EXE（build_windows.bat 校验）；其余文件不
             # 认识就不写，避免误覆盖将来可能出现的用户数据。
             log.warning("全量包根目录存在未识别文件，跳过: %s", entry.name)
@@ -1482,8 +1494,39 @@ def _launch_main_app_workbench(app_dir, app_exe, log) -> bool:
     return True
 
 
+def _extract_archive_posix(archive, extract_dir, log):
+    """Linux: keep the executable bits and symlinks of the PyInstaller package.
+
+    SUG's ``extract_archive`` uses ``ZipFile.extractall``, which drops both;
+    the Linux package records them as Unix ZIP attributes.
+    """
+    from krok_helper.updater import posix_zip
+
+    if extract_dir.exists():
+        shutil.rmtree(extract_dir, ignore_errors=True)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    log.info("解压: %s → %s", archive.name, extract_dir)
+    if archive.suffix.lower() != ".zip":
+        log.error("当前 Updater 仅支持 .zip 格式（收到 %s）。", archive.suffix)
+        return None
+    try:
+        posix_zip.extract(archive, extract_dir)
+    except (zipfile.BadZipFile, OSError) as exc:
+        log.error("解压失败: %s", exc)
+        return None
+    entries = [p for p in extract_dir.iterdir() if not p.name.startswith(".")]
+    if len(entries) == 1 and entries[0].is_dir():
+        log.info("检测到单一顶层目录: %s", entries[0].name)
+        return entries[0]
+    return extract_dir
+
+
 def _configure_product() -> None:
     updater_main.TMP_DIR_NAME = "KaraokeStudioUpdater"
+    if not _IS_WINDOWS:
+        updater_main.UPDATER_EXE_NAME = "Updater"
+        updater_main.UPDATER_EX_NAME = "UpdaterEx"
+        updater_main.extract_archive = _extract_archive_posix
     updater_main.DEFAULT_USER_AGENT = "KaraokeStudio-Updater/standalone"
     updater_main.setup_logger = _setup_workbench_logger
     updater_main._cleanup_temp_workdir = _cleanup_workbench_temp_workdir

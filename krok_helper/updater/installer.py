@@ -18,13 +18,15 @@ from krok_helper.config import APP_VERSION
 
 log = logging.getLogger(__name__)
 
-UPDATER_EXE_NAME = "Updater.exe"
+# Linux 包里的可执行文件没有 ``.exe`` 后缀（4.5.0 起发布 Linux 包）。
+_EXE_SUFFIX = ".exe" if sys.platform == "win32" else ""
+UPDATER_EXE_NAME = "Updater" + _EXE_SUFFIX
 UPDATE_DESCENDANTS_ENV = "KROK_UPDATE_DESCENDANTS"
 UPDATE_SOURCE_VERSION_ENV = "KROK_UPDATE_SOURCE_VERSION"
 UPDATE_BOOTSTRAP_RESULT_ENV = "KROK_UPDATE_BOOTSTRAP_RESULT"
 TMP_DIR_NAME = "KaraokeStudioUpdater"
 #: 主程序 EXE 的正式名。更新一律按它校验/回写/重启（见 :func:`find_app_exe_name`）。
-DEFAULT_APP_EXE_NAME = "Lin-K Lyrics.exe"
+DEFAULT_APP_EXE_NAME = "Lin-K Lyrics" + _EXE_SUFFIX
 #: 改名前的主程序名。存量客户端会把它当 ``--app-exe`` 传进来，发布包必须一直带着它，
 #: 直到手动关闭双名打包（见 docs/auto_update.md §8.1 的迁移与收尾清单）。
 LEGACY_APP_EXE_NAME = "Karaoke Studio.exe"

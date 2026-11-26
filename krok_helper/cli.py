@@ -58,6 +58,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--package-updater-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--package-spawn-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--package-gpu-smoke", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--package-skia-smoke", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--package-audio-smoke", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--youtube-web-login", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--youtube-login-request", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--youtube-login-mode", choices=("default", "firefox"), default="default", help=argparse.SUPPRESS)
@@ -225,6 +227,14 @@ def main() -> int:
         from krok_helper.package_smoke import run_gpu_subtitle_smoke
 
         return run_gpu_subtitle_smoke()
+    if args.package_skia_smoke:
+        from krok_helper.package_smoke import run_skia_subtitle_smoke
+
+        return run_skia_subtitle_smoke()
+    if args.package_audio_smoke:
+        from krok_helper.package_smoke import run_audio_smoke
+
+        return run_audio_smoke()
     cli_requested = args.video is not None and (args.on_audio is not None or args.off_audio is not None)
 
     if cli_requested and not args.gui:

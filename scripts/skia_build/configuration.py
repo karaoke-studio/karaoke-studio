@@ -49,21 +49,25 @@ def configure(lock: dict, root: Path, system: str, arch: str, gpu: str | None,
                 "qt_contract": lock["qt_version"]}
     spec = lock["toolchains"][f"{system}-{arch}"]
     if system == "windows":
+        # CI runners may carry a newer servicing build of the pinned toolset; an
+        # explicit override selects it and is recorded in the build identity.
+        msvc = os.environ.get("KROK_SKIA_MSVC_VERSION", "").strip() or spec["msvc"]
+        sdk_version = os.environ.get("KROK_SKIA_WINDOWS_SDK", "").strip() or spec["sdk"]
         vswhere = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / (
             "Microsoft Visual Studio/Installer/vswhere.exe")
         installations = json.loads(output([str(vswhere), "-all", "-products", "*", "-format", "json", "-utf8"]))
         vc = next((Path(i["installationPath"]) / "VC" for i in installations if (
-            Path(i["installationPath"]) / "VC/Tools/MSVC" / spec["msvc"] / "include"
+            Path(i["installationPath"]) / "VC/Tools/MSVC" / msvc / "include"
         ).exists()), None)
         if vc is None:
-            raise RuntimeError(f"MSVC {spec['msvc']} from skia.lock.json not installed")
+            raise RuntimeError(f"MSVC {msvc} from skia.lock.json not installed")
         sdk = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Windows Kits/10"
-        if not (sdk / "Include" / spec["sdk"] / "um/Windows.h").exists():
-            raise RuntimeError(f"Windows SDK {spec['sdk']} not installed")
+        if not (sdk / "Include" / sdk_version / "um/Windows.h").exists():
+            raise RuntimeError(f"Windows SDK {sdk_version} not installed")
         llvm = windows_llvm(root, spec, llvm_root)
         compiler = llvm / "bin/clang-cl.exe"
-        args |= {"win_vc": vc.as_posix(), "win_toolchain_version": spec["msvc"],
-                 "win_sdk": sdk.as_posix(), "win_sdk_version": spec["sdk"],
+        args |= {"win_vc": vc.as_posix(), "win_toolchain_version": msvc,
+                 "win_sdk": sdk.as_posix(), "win_sdk_version": sdk_version,
                  "clang_win": llvm.as_posix(), "clang_win_version": "21"}
         args["extra_cflags"] = ["/MD"] + (["/DSK_USE_VMA"] if gpu == "vulkan" else [])
         cmake |= {"CMAKE_CXX_COMPILER": compiler.as_posix(),
@@ -71,15 +75,15 @@ def configure(lock: dict, root: Path, system: str, arch: str, gpu: str | None,
                   "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL"}
         # Use the selected STL/SDK even when the calling terminal has no vcvars environment.
         os.environ["INCLUDE"] = os.pathsep.join(str(p) for p in [
-            vc / "Tools/MSVC" / spec["msvc"] / "include",
-            *[sdk / "Include" / spec["sdk"] / part for part in ("ucrt", "shared", "um", "winrt")]])
+            vc / "Tools/MSVC" / msvc / "include",
+            *[sdk / "Include" / sdk_version / part for part in ("ucrt", "shared", "um", "winrt")]])
         os.environ["LIB"] = os.pathsep.join(str(p) for p in [
-            vc / "Tools/MSVC" / spec["msvc"] / "lib/x64",
-            *[sdk / "Lib" / spec["sdk"] / part / "x64" for part in ("ucrt", "um")]])
-        os.environ["PATH"] = str(sdk / "bin" / spec["sdk"] / "x64") + os.pathsep + os.environ["PATH"]
-        identity |= {"msvc": spec["msvc"], "sdk": spec["sdk"], "crt": "MD"}
-        identity["sdk_windows_h_sha256"] = sha256(sdk / "Include" / spec["sdk"] / "um/Windows.h")
-        identity["stl_yvals_sha256"] = sha256(vc / "Tools/MSVC" / spec["msvc"] / "include/yvals_core.h")
+            vc / "Tools/MSVC" / msvc / "lib/x64",
+            *[sdk / "Lib" / sdk_version / part / "x64" for part in ("ucrt", "um")]])
+        os.environ["PATH"] = str(sdk / "bin" / sdk_version / "x64") + os.pathsep + os.environ["PATH"]
+        identity |= {"msvc": msvc, "sdk": sdk_version, "crt": "MD"}
+        identity["sdk_windows_h_sha256"] = sha256(sdk / "Include" / sdk_version / "um/Windows.h")
+        identity["stl_yvals_sha256"] = sha256(vc / "Tools/MSVC" / msvc / "include/yvals_core.h")
     else:
         compiler = (Path(output(["xcrun", "--find", "clang++"])) if system == "macos" else
                     Path(shutil.which("clang++-21") or shutil.which("clang++") or "clang++"))
