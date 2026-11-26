@@ -11,13 +11,14 @@ from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CheckBox, PushButton as FluentPushButton
 
 from krok_helper.subtitle_render.domain.models import (
-    GLOW_STRENGTH_MAX_PERCENT,
-    GLOW_STRENGTH_MIN_PERCENT,
+    GLOW_STRENGTH_MAX,
+    GLOW_STRENGTH_MIN,
 )
 
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     DynamicStackedWidget,
     WheelFocusedComboBox,
+    WheelFocusedDoubleSpinBox,
 )
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     compact_property_control,
@@ -28,6 +29,14 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
 from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
 from krok_helper.subtitle_render.frontend.properties.controls.widgets import FolderTabPanel, PillSelector
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
+
+
+def _plain_double_spin(minimum: float, maximum: float, *, decimals: int = 2):
+    spin = WheelFocusedDoubleSpinBox()
+    spin.setRange(minimum, maximum)
+    spin.setDecimals(decimals)
+    spin.setSingleStep(0.1)
+    return spin
 
 
 class RoleColorPropertyPageBuilder:
@@ -42,6 +51,7 @@ class RoleColorPropertyPageBuilder:
         fill_mode_icons_provider: Callable[[], dict[str, QIcon]],
         spin_factory: Callable[..., Any] = timing_spin,
         combo_factory: Callable[..., Any] = WheelFocusedComboBox,
+        double_spin_factory: Optional[Callable[..., Any]] = None,
     ) -> None:
         self._host = host
         self._anchored_action_factory = anchored_action_factory
@@ -49,6 +59,7 @@ class RoleColorPropertyPageBuilder:
         self._fill_mode_icons_provider = fill_mode_icons_provider
         self._spin_factory = spin_factory
         self._combo_factory = combo_factory
+        self._double_spin_factory = double_spin_factory or _plain_double_spin
 
     def make_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
@@ -292,12 +303,13 @@ class RoleColorPropertyPageBuilder:
         )
 
         # 发光强度只有 Skia 后端会绘制；非 Skia 时由面板隐藏该字段。
-        host._glow_strength_spin = self._spin_factory(
-            GLOW_STRENGTH_MIN_PERCENT, GLOW_STRENGTH_MAX_PERCENT, suffix=" %"
+        host._glow_strength_spin = self._double_spin_factory(
+            GLOW_STRENGTH_MIN, GLOW_STRENGTH_MAX, decimals=1
         )
+        host._glow_strength_spin.setPrefix("×")
         host._glow_strength_spin.setToolTip(
-            "增强靠近文字的光晕并让核心逐渐发白，光晕范围不扩大。"
-            "走字前后与注音共用；仅 Skia 渲染时生效。"
+            "×1.0 为原样；调高时靠近文字的光晕更亮、核心逐渐发白，调低时变淡，"
+            "×0 不发光。光晕范围不随之扩大。走字前后与注音共用；仅 Skia 渲染时生效。"
         )
         host._glow_strength_spin.valueChanged.connect(
             lambda value: host._update_glow_strength(value)

@@ -82,8 +82,8 @@ struct TextStyle {
     float glowAfterRadius = 10.0f;
     int glowConcentrationLevel = 0;
     int glowBeforeConcentrationLevel = 0;
-    // Skia-only glow strength (100-400 %), shared by main text and ruby.
-    int glowStrengthPercent = 100;
+    // Skia-only glow strength multiplier (0-10), shared by main text and ruby.
+    float glowStrength = 1.0f;
     float shadowOffsetX = 5.0f;
     float shadowOffsetY = 5.0f;
     float shadowBeforeOffsetX = 5.0f;

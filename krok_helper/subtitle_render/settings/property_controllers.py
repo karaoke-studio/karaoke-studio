@@ -31,7 +31,7 @@ from krok_helper.subtitle_render.domain.models import (
     migrate_title_char_role_labels,
     migrate_title_guide_symbols,
     normalize_glow_concentration_level,
-    normalize_glow_strength_percent,
+    normalize_glow_strength,
     normalize_scanline_image_layers,
     rescale_scheme_font_sizes,
     resolve_lit_bpm_timing,
@@ -91,7 +91,7 @@ SCHEME_FIELDS = frozenset(
         "glow_after_radius_px",
         "glow_concentration_level",
         "glow_before_concentration_level",
-        "glow_strength_percent",
+        "glow_strength",
         "shadow_color",
         "shadow_offset_x",
         "shadow_offset_y",
@@ -423,9 +423,9 @@ def normalize_style_changes(changes: dict[str, object]) -> dict[str, object]:
                 if normalized[field_name] is None
                 else normalize_glow_concentration_level(normalized[field_name])
             )
-    if normalized.get("glow_strength_percent") is not None:
-        normalized["glow_strength_percent"] = normalize_glow_strength_percent(
-            normalized["glow_strength_percent"]
+    if normalized.get("glow_strength") is not None:
+        normalized["glow_strength"] = normalize_glow_strength(
+            normalized["glow_strength"]
         )
     if "entry_anim" in normalized:
         normalized["entry_anim"] = normalize_entry_animation(

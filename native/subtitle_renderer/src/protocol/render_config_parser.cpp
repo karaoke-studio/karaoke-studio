@@ -7,6 +7,7 @@
 #include <QtCore/QCryptographicHash>
 
 #include <algorithm>
+#include <cmath>
 #include <bit>
 #include <cstdint>
 #include <utility>
@@ -245,6 +246,13 @@ bool hasObject(const QJsonObject &object, const QString &key) {
 
 bool hasNonNull(const QJsonObject &object, const QString &key) {
     return object.contains(key) && !object.value(key).isNull() && !object.value(key).isUndefined();
+}
+
+// Skia-only glow multiplier; non-finite or missing values keep the fallback.
+double glowStrengthValue(const QJsonObject &style, double fallback) {
+    const QJsonValue value = style.value(QStringLiteral("glow_strength"));
+    const double parsed = value.isDouble() ? value.toDouble() : fallback;
+    return std::isfinite(parsed) ? std::clamp(parsed, 0.0, 10.0) : fallback;
 }
 
 // Painter 的 legacy_after_text_fill 镜像：Style 级 fill_gradient_* 在没有显式
@@ -748,12 +756,8 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             2
         );
     }
-    if (hasNonNull(style, QStringLiteral("glow_strength_percent"))) {
-        cfg.glowStrengthPercent = std::clamp(
-            intValue(style, QStringLiteral("glow_strength_percent"), cfg.glowStrengthPercent),
-            100,
-            400
-        );
+    if (hasNonNull(style, QStringLiteral("glow_strength"))) {
+        cfg.glowStrength = glowStrengthValue(style, cfg.glowStrength);
     }
     if (hasNonNull(style, QStringLiteral("shadow_offset_x"))) {
         cfg.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX);
@@ -1424,11 +1428,7 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
             2
         );
     }
-    base.glowStrengthPercent = std::clamp(
-        intValue(style, QStringLiteral("glow_strength_percent"), base.glowStrengthPercent),
-        100,
-        400
-    );
+    base.glowStrength = glowStrengthValue(style, base.glowStrength);
     base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
     base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
     if (style.value(QStringLiteral("shadow_before_offset_x")).isDouble()) {

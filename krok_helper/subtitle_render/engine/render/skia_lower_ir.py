@@ -1,6 +1,6 @@
 """Materialize lower-reading provenance and appearance at the IR boundary."""
 from krok_helper.subtitle_render.domain.gradient_path import rgba
-from krok_helper.subtitle_render.domain.models import normalize_glow_strength_percent
+from krok_helper.subtitle_render.domain.models import normalize_glow_strength
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from krok_helper.subtitle_render.native.protocol import ruby_to_ir
 from .effects.metrics import ruby_glow_concentration_level, ruby_glow_radius
@@ -115,7 +115,7 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         if kind == 'glow':
             glow[phase] = {'radius': radius, 'color': color,
                            'concentration': ruby_glow_concentration_level(style, after=sung),
-                           'strength': normalize_glow_strength_percent(style.glow_strength_percent)}
+                           'strength': normalize_glow_strength(style.glow_strength)}
         elif kind == 'shadow':
             shadow[phase] = {'offset': [_shadow_offset(style, 'x', sung), _shadow_offset(style, 'y', sung)],
                              'color': color}

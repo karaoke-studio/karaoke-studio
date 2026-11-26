@@ -208,7 +208,7 @@ _LYRIC_LAYOUT_EXCLUDED_SCHEME_FIELDS = frozenset({
     "glow_after_radius_px",
     "glow_concentration_level",
     "glow_before_concentration_level",
-    "glow_strength_percent",
+    "glow_strength",
     "ruby_decoration_kind",
     "ruby_decoration_kind_before",
     "ruby_shadow_offset_x",

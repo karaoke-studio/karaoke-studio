@@ -1396,14 +1396,14 @@ def test_bitmap_guide_halo_follows_the_glow_strength(binary, tmp_path):
     times, dpr = (600, 1750, 3800), 2
 
     def mass(source, strength):
-        ir = ir_for(binary, (source, replace(case.style, glow_strength_percent=strength)), dpr=dpr)
+        ir = ir_for(binary, (source, replace(case.style, glow_strength=strength)), dpr=dpr)
         frames = render_skia(binary, ir, times)
         return frames, [[int(frame[..., 3].astype(np.int64).sum()) for frame in target] for target in frames]
 
-    strong, decorated_strong = mass(track, 300)
-    _, decorated = mass(track, 100)
-    _, plain_strong = mass(plain, 300)
-    _, plain_base = mass(plain, 100)
+    strong, decorated_strong = mass(track, 3.0)
+    _, decorated = mass(track, 1.0)
+    _, plain_strong = mass(plain, 3.0)
+    _, plain_base = mass(plain, 1.0)
     for target in range(2):
         for index in range(len(times)):
             guide_gain = decorated_strong[target][index] - decorated[target][index]

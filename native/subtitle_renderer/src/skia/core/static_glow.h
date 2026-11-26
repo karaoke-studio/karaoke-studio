@@ -22,8 +22,8 @@ struct GlowState {
     int radius = 0;
     int concentration = 0;
     std::uint32_t color = 0;
-    // Glow strength in percent (100-400). 100 leaves every blur pass untouched.
-    int strength = 100;
+    // Glow strength multiplier (0-10). 1 leaves every blur pass untouched.
+    float strength = 1.f;
     bool operator==(const GlowState&) const = default;
 };
 
@@ -54,8 +54,8 @@ struct GlowCompositeKey {
     bool operator==(const GlowCompositeKey&) const = default;
 };
 
-// The per-pass color filter for a glow strength percent; null at 100 %.
-sk_sp<SkColorFilter> glowStrengthFilter(int strengthPercent);
+// The per-pass color filter for a glow strength multiplier; null at 1.
+sk_sp<SkColorFilter> glowStrengthFilter(float strength);
 
 using GlowGradients = std::array<sk_sp<SkShader>, 2>;
 // Image paints draw the glow outline with the GPU's device-anchored bitmap brush.

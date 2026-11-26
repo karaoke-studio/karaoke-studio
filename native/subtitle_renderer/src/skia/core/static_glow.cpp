@@ -38,28 +38,31 @@ SkIRect alphaBounds(const SkPixmap& mask) {
 }
 }
 
-sk_sp<SkColorFilter> glowStrengthFilter(int strengthPercent) {
-    const int percent = std::clamp(strengthPercent, 100, 400);
-    if (percent == 100) return nullptr;
-    // Applied to each blurred pass. Coverage is boosted in proportion to its
-    // own alpha, so the dense halo near the glyph fills in while the faint
-    // outer tail barely moves and the visible reach stays put. The dense core
-    // also mixes toward white, like an over-exposed emissive surface.
+sk_sp<SkColorFilter> glowStrengthFilter(float strength) {
+    const float gain = std::clamp(std::isfinite(strength) ? strength : 1.f, 0.f, 10.f);
+    if (gain == 1.f) return nullptr;
+    // Applied to each blurred pass. Above x1 coverage scales by gain^alpha:
+    // dense halo near the glyph follows the multiplier while the faint outer
+    // tail (alpha near 0) barely moves, so the visible reach stays put. Mid
+    // coverage keeps brightening all the way to x10 instead of clipping
+    // early, and the dense core mixes toward white like an over-exposed
+    // emissive surface. Below x1 the whole glow fades in proportion, so x0.5
+    // reads as half the glow and x0 removes it.
     static const auto effect = SkRuntimeEffect::MakeForColorFilter(SkString(R"(
         uniform float gain;
+        uniform float whitening;
         half4 main(half4 color) {
             float alpha = color.a;
             if (alpha <= 0.0) return half4(0);
             float3 rgb = color.rgb / alpha;
-            float boosted = min(1.0, alpha * (1.0 + (gain - 1.0) * alpha));
-            float whiten = min(0.6, 0.2 * (gain - 1.0)) * boosted * boosted;
-            rgb = mix(rgb, float3(1.0), whiten);
-            return half4(rgb * boosted, boosted);
+            float scaled = gain < 1.0 ? alpha * gain : min(1.0, alpha * pow(gain, alpha));
+            rgb = mix(rgb, float3(1.0), whitening * scaled * scaled);
+            return half4(rgb * scaled, scaled);
         }
     )"));
     if (!effect.effect) throw std::runtime_error("Skia 光晕强度滤镜无法编译");
-    const float gain = float(percent) / 100.f;
-    auto filter = effect.effect->makeColorFilter(SkData::MakeWithCopy(&gain, sizeof(gain)));
+    struct { float gain, whitening; } uniforms{gain, gain > 1.f ? std::min(.6f, .26f * std::log(gain)) : 0.f};
+    auto filter = effect.effect->makeColorFilter(SkData::MakeWithCopy(&uniforms, sizeof(uniforms)));
     if (!filter) throw std::runtime_error("Skia 光晕强度滤镜初始化失败");
     return filter;
 }

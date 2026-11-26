@@ -2052,7 +2052,7 @@ def _signal_glow_source(project, signal, strength):
     glow = PaintFill(color='#2FC82A')
     palette = SubtitleStyleScheme(font_size_px=50, decoration_kind='glow', glow_before_radius_px=9,
                                   glow_after_radius_px=9, glow_concentration_level=1, stroke_width_px=0,
-                                  glow_strength_percent=strength,
+                                  glow_strength=strength,
                                   karaoke_colors=replace(neutral, before=replace(neutral.before, shadow=glow),
                                                          after=replace(neutral.after, shadow=glow)))
     style = replace(style, karaoke_colors=neutral, custom_style_schemes={'signal-glow': palette})
@@ -2072,10 +2072,10 @@ def test_signal_glow_follows_its_role_glow_strength(binary, project, signal):
 
     times = (260, 650)
     frames = {strength: render_skia(binary, ir_for(binary, _signal_glow_source(project, signal, strength), dpr=2),
-                                    times) for strength in (100, 300)}
+                                    times) for strength in (1.0, 3.0)}
     for target in range(2):
-        for base, strong in zip(frames[100][target], frames[300][target], strict=True):
+        for base, strong in zip(frames[1.0][target], frames[3.0][target], strict=True):
             before, after = base[..., 3].astype(np.int64), strong[..., 3].astype(np.int64)
             assert after.sum() - before.sum() > 20000, (signal, target, int(after.sum() - before.sum()))
             assert (before >= 4).sum() <= (after >= 4).sum() <= (before >= 4).sum() * 1.03, (signal, target)
-    assert_glow_parity(times, None, *frames[300], ('signal_glow_strength', signal))
+    assert_glow_parity(times, None, *frames[3.0], ('signal_glow_strength', signal))

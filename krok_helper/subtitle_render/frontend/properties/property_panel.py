@@ -1084,6 +1084,7 @@ class PropertyPanel(QWidget):
             fill_mode_icons_provider=_fill_mode_icons,
             spin_factory=_spin,
             combo_factory=_WheelFocusedComboBox,
+            double_spin_factory=_double_spin,
         )
         self._role_fill_pages_builder = RoleFillPagesBuilder(
             self,
@@ -2863,11 +2864,11 @@ class PropertyPanel(QWidget):
             )
         self._update_style(**shared)
 
-    def _update_glow_strength(self, value: int) -> None:
+    def _update_glow_strength(self, value: float) -> None:
         """发光强度是主文字槽位，走字前后与注音共用，不经注音路由。"""
         if self._syncing:
             return
-        self._update_style(glow_strength_percent=int(value))
+        self._update_style(glow_strength=round(float(value), 2))
 
     def _update_ruby_decoration(self, **changes) -> None:
         snapshot: dict[str, object] = {}
@@ -5501,7 +5502,7 @@ class PropertyPanel(QWidget):
                 )
             )
             self._glow_strength_spin.setValue(
-                int(self._scheme_value("glow_strength_percent"))
+                float(self._scheme_value("glow_strength"))
             )
             self._shadow_x_spin.setValue(shadow_x)
             self._shadow_y_spin.setValue(shadow_y)

@@ -450,38 +450,60 @@ def _opaque_glow(project, strength):
     colors = style.karaoke_colors
     colors = replace(colors, before=replace(colors.before, shadow=PaintFill(color='#E06010')),
                      after=replace(colors.after, shadow=PaintFill(color='#2078E0')))
-    return track, replace(style, karaoke_colors=colors, glow_strength_percent=strength)
+    return track, replace(style, karaoke_colors=colors, glow_strength=strength)
 
 
-@pytest.mark.parametrize('target', ['gpu', 'raster'])
-def test_glow_strength_fills_the_core_without_widening_the_halo(binary, project, target):
-    """Strength boosts dense glow and whitens it; the faint reach stays put."""
-    times = [0, 750, 2200]
+def _strength_frames(binary, project, strengths, target, times):
     frames = {}
-    for strength in (100, 250, 400):
+    for strength in strengths:
         ir = ir_for(binary, _opaque_glow(project, strength), dpr=1.5)
         with SkiaRendererProcess(binary, selection=selection(target)) as process:
             configure(process, ir)
             frames[strength], _ = collect(process, times)
+    return frames
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_glow_strength_fills_the_core_without_widening_the_halo(binary, project, target):
+    """The multiplier brightens dense glow up to x10 and whitens it; the reach stays put."""
+    times = [0, 750, 2200]
+    strengths = (1.0, 3.0, 10.0)
+    frames = _strength_frames(binary, project, strengths, target, times)
     for index, t in enumerate(times):
-        base, mid, high = (frames[s][index].astype(np.int64) for s in (100, 250, 400))
+        base, mid, high = (frames[s][index].astype(np.int64) for s in strengths)
         alpha = base[..., 3]
         assert alpha.any(), t
-        # Reach: the faintly lit footprint barely changes.
+        # Reach: the faintly lit footprint barely changes, even at x10.
         reach = [int((frame[..., 3] >= 4).sum()) for frame in (base, mid, high)]
         assert reach[0] <= reach[1] <= reach[2] <= reach[0] * 1.03, (t, reach)
-        # Core: half-covered glow becomes denser, monotonically with strength.
+        # Core: half-covered glow keeps getting denser all the way to x10.
         core = (alpha > 64) & (alpha < 224)
         assert core.any(), t
         means = [frame[..., 3][core].mean() for frame in (base, mid, high)]
-        assert means[0] + 20 < means[1] < means[2], (t, means)
+        assert means[0] + 20 < means[1] < means[2] - 5, (t, means)
         # Whitening lifts the weakest colour channel of the dense glow.
         dense = high[..., 3] > 200
         weakest = [frame[..., :3].min(axis=-1)[dense & (alpha > 64)].mean() for frame in (base, high)]
         assert weakest[1] > weakest[0] + 10, (t, weakest)
 
 
-@pytest.mark.parametrize('strength', [250, 400])
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_glow_strength_below_one_dims_and_zero_removes_the_glow(binary, project, target):
+    times = [750]
+    frames = _strength_frames(binary, project, (1.0, 0.5, 0.0), target, times)
+    track, style = _opaque_glow(project, 1.0)
+    plain = ir_for(binary, (track, replace(style, decoration_kind='none', decoration_kind_before='none')), dpr=1.5)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, plain)
+        unlit, _ = collect(process, times)
+    base, dim = frames[1.0][0].astype(np.int64), frames[0.5][0].astype(np.int64)
+    core = (base[..., 3] > 64) & (base[..., 3] < 224)
+    assert dim[..., 3][core].mean() < base[..., 3][core].mean() - 20
+    assert (dim[..., 3] >= 4).sum() <= (base[..., 3] >= 4).sum()
+    assert np.array_equal(frames[0.0][0], unlit[0])
+
+
+@pytest.mark.parametrize('strength', [3.0, 10.0])
 def test_glow_strength_matches_between_gpu_and_raster(binary, project, strength):
     times = [0, 750, 2200]
     ir = ir_for(binary, _opaque_glow(project, strength), dpr=1.5)

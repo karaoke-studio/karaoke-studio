@@ -97,7 +97,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
         if (radius > 0)
             prepareBrush(palette.afterDecorPaint, decoration.unitGradients.glow, decoration.images.glow);
         const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterDecorPaint.color),
-                                    palette.glowStrengthPercent};
+                                    palette.glowStrength};
         const auto join = style.litStyle == "star" ? SkPaint::kMiter_Join : SkPaint::kRound_Join;
         decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
         for (auto& layer : decoration.glow) layer.appendCell(signal.outline());
@@ -179,7 +179,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                 if (radius > 256) throw BackendError("Skia 音量柱的光晕半径超限");
                 if (radius > 0 && !supportedBrush(decor)) throw BackendError("Skia 音量柱光晕画笔不受支持");
                 (after ? glow.after : glow.before) = {int(radius), palette.glowConcentrationForState(after), argb(decor.color),
-                                                      palette.glowStrengthPercent};
+                                                      palette.glowStrength};
             }
         }
         glow.outlineWidth = signal.strokeWidth + signal.outerWidth;
