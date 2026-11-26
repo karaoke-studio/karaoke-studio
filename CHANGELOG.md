@@ -15,6 +15,42 @@
 ---
 
 
+## [4.5.0] — 2026-11-27
+
+<span style="color:#d64545"><b>Lin-K/SUG 反馈交流群 QQ 1108437280</b></span>
+
+本版起字幕预览与导出默认改用全新的 Skia 渲染后端，并首次提供 Linux 安装包；另新增 YouTube 网页登录、Linux AI 分离与 AI 打轴，修复多项问题。
+
+**更新提醒**：字幕渲染默认改用 Skia 后端是一次较大的底层改动。正在赶稿、或对现有画面效果要求很高的用户，建议先在不重要的工程上试用再正式使用；如果画面出现异常，可在「字幕视频生成 → 导出」页取消勾选「使用 Skia 后端」切回原渲染器，也欢迎到反馈群告诉我们。
+
+### 全新 Skia 渲染后端
+- **字幕预览与导出默认使用 Skia 渲染**：Skia 是 Chrome、Android 等广泛采用的成熟 2D 图形引擎。新后端在 Windows 与 Linux 上通过 Vulkan、在 macOS 上通过 Metal 调用显卡渲染，没有可用显卡时自动改用 CPU 渲染；三个平台共用同一套渲染核心，字幕效果保持一致，macOS 与 Linux 也首次获得显卡加速。[@凛夜](https://github.com/Myosotis11037)
+- **暂不支持时自动回退**：遇到 Skia 暂未支持的工程或渲染出错时，预览与导出自动改用原渲染器（Windows 为 Direct2D 显卡渲染，macOS 与 Linux 为 CPU 渲染），导出照常完成。[@凛夜](https://github.com/Myosotis11037)
+- **新增发光强度（仅 Skia）**：角色发光新增 ×0～×10 的「发光强度」，在不扩大光晕范围的前提下调亮或调淡发光，高倍数时核心逐渐发白，便于区分同色系角色。[@凛夜](https://github.com/Myosotis11037)
+
+### 新增功能
+- **提供 Linux 安装包**：新增 x86_64 Linux 版本（Ubuntu 22.04 及之后的发行版），解压即可运行，已内置 PortAudio，无需再手动安装音频库；需自行安装 FFmpeg。支持应用内自动更新。这是首个 Linux 版本，欢迎试用反馈。[@凛夜](https://github.com/Myosotis11037)
+- **YouTube 支持网页登录导入 Cookie**：可在内置浏览器窗口登录 YouTube，登录后自动导入 Cookie，用于下载需要登录才能观看的视频；同时保留所选格式对应的播放客户端，并更清楚地说明画质选项。[@longlin10086](https://github.com/longlin10086)
+- **Linux 支持 AI 分离与 AI 打轴**：Linux（含安卓 Linux 容器）可使用外部 Python 环境运行 AI 音频分离与 AI 打轴；暂不支持连接 Linux 版 PyMSS Studio。[@clannadFurukawanagisa](https://github.com/clannadFurukawanagisa)
+
+### 特性改变
+- **外部 PyMSS 环境不再限制版本号**：改为按实际能力检测兼容性，较新的 PyMSS 版本可直接使用。[@longlin10086](https://github.com/longlin10086) [@凛夜](https://github.com/Myosotis11037)
+- **保存同名样式预设前先确认**：从角色条把角色保存到预设库时，若同一分组下已有同名预设，会先询问覆盖、改名或取消，不再直接覆盖。[@凛夜](https://github.com/Myosotis11037)
+- **预览渲染标识完整显示**：预览窗口的渲染后端标识按文字长度调整宽度，不再被截断。[@凛夜](https://github.com/Myosotis11037)
+
+### 修复项目
+- **修复 B 站分 P 视频下载为同一文件**：各 P 标题相同时（例如直播回放）会互相覆盖并导致下载失败；现在每个分 P 都带 P 序号，用 `?p=N` 链接单独下载时同样编号。[@凛夜](https://github.com/Myosotis11037)
+- **修复「布局」页空格宽度对标题无效**：标题叠加层按所引用布局读取空格宽度与允许咬合，布局页的设置对标题同样生效。[@Xuan-cc](https://github.com/Xuan-cc)
+- **修复显卡渲染走字交界处的细暗线**：Direct2D 显卡渲染在走字前后颜色交界处不再出现一条半透明暗线，正文、注音、发光、导唱图与扫字线均已修正。[@Xuan-cc](https://github.com/Xuan-cc)
+- **修复套用样式预设后布局字符排版被重置**：样式预设不再携带字间距、空格宽度等布局字符排版参数，套用预设或导入为角色时不会再悄悄改掉布局设置。[@Xuan-cc](https://github.com/Xuan-cc)
+- **修复 Direct2D 渲染下图片导唱符的渐变光晕不随淡出变淡**。[@凛夜](https://github.com/Myosotis11037)
+- **修复 macOS 字幕时间轴的触控板操作**：支持双指平移与捏合缩放。[@longlin10086](https://github.com/longlin10086)
+- **修复 Linux/macOS 可能选中无法运行的 FFmpeg**：优先使用本机 FFmpeg，并跳过所选目录中无法执行的工具。[@凛夜](https://github.com/Myosotis11037)
+
+本版贡献者：凛夜（@Myosotis11037）、@Xuan-cc、@longlin10086、@clannadFurukawanagisa
+
+---
+
 ## [4.4.7] — 2026-11-17
 
 <span style="color:#d64545"><b>Lin-K/SUG 反馈交流群 QQ 1108437280</b></span>
