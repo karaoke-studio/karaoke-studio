@@ -70,7 +70,13 @@ std::vector<PreparedBitmapGuide::Halo> PreparedBitmapGuide::prepareHalo(const Sk
         auto& canvas = *surface->getCanvas();
         canvas.clear(SK_ColorTRANSPARENT);
         SkPaint paint;
-        if (sigma > 0) paint.setImageFilter(SkImageFilters::Blur(sigma, sigma, SkTileMode::kDecal, nullptr));
+        if (sigma > 0) {
+            auto blur = SkImageFilters::Blur(sigma, sigma, SkTileMode::kDecal, nullptr);
+            // Same per-pass strength curve as the text glow.
+            if (auto strength = glowStrengthFilter(state.strength))
+                blur = SkImageFilters::ColorFilter(std::move(strength), std::move(blur));
+            paint.setImageFilter(std::move(blur));
+        }
         if (tintedImage) {
             paint.setShader(tintedImage);
             canvas.drawRect(imageAtMargin, paint);

@@ -2040,3 +2040,42 @@ def test_p00_volume_signal_matches_actual_gpu(binary, application, tmp_path, cas
             frames, _ = collect(process, case.timestamps_ms)
             rendered.append(frames)
     assert_glow_parity(case.timestamps_ms, reference, *rendered, case_id, check_p00_edges=True)
+
+
+def _signal_glow_source(project, signal, strength):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from test_subtitle_skia_roles import colors
+
+    track, style = project
+    neutral = colors('#BBBBBB', '#BBBBBB')
+    glow = PaintFill(color='#2FC82A')
+    palette = SubtitleStyleScheme(font_size_px=50, decoration_kind='glow', glow_before_radius_px=9,
+                                  glow_after_radius_px=9, glow_concentration_level=1, stroke_width_px=0,
+                                  glow_strength_percent=strength,
+                                  karaoke_colors=replace(neutral, before=replace(neutral.before, shadow=glow),
+                                                         after=replace(neutral.after, shadow=glow)))
+    style = replace(style, karaoke_colors=neutral, custom_style_schemes={'signal-glow': palette})
+    if signal == 'lamp':
+        return track, replace(style, lit_enabled=True, lit_style='square', lit_appearance_mode='role',
+                              lit_role_name='signal-glow', lit_size=34, lit_number=1,
+                              lit_edge_brightness_pct=0, lit_offset_y=-42)
+    return track, replace(style, volume_enabled=True, volume_appearance_mode='role', volume_role_name='signal-glow',
+                          volume_size=55, volume_column_count=3, volume_flash_times=0)
+
+
+@pytest.mark.parametrize('signal', ['lamp', 'volume'])
+def test_signal_glow_follows_its_role_glow_strength(binary, project, signal):
+    """Only the signal's role changes, so every difference is the signal glow."""
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    times = (260, 650)
+    frames = {strength: render_skia(binary, ir_for(binary, _signal_glow_source(project, signal, strength), dpr=2),
+                                    times) for strength in (100, 300)}
+    for target in range(2):
+        for base, strong in zip(frames[100][target], frames[300][target], strict=True):
+            before, after = base[..., 3].astype(np.int64), strong[..., 3].astype(np.int64)
+            assert after.sum() - before.sum() > 20000, (signal, target, int(after.sum() - before.sum()))
+            assert (before >= 4).sum() <= (after >= 4).sum() <= (before >= 4).sum() * 1.03, (signal, target)
+    assert_glow_parity(times, None, *frames[300], ('signal_glow_strength', signal))
