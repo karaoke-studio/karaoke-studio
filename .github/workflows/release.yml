@@ -102,8 +102,8 @@ jobs:
           path: ~/.cache/krok-helper/skia-deps
           key: skia-m150-windows-x64-${{ hashFiles('native/subtitle_renderer/skia.lock.json', 'scripts/skia_build/configuration.py') }}
 
-      # skia.lock.json 固定 MSVC/SDK 版本；runner 只带同一工具集的更新服务版本时
-      # 显式改用它（记录进构建指纹），找不到 14.50 工具集则直接失败。
+      # skia.lock.json 记录的 MSVC/SDK 只约束构建机（用户只需随包的 VC++ 运行时）。
+      # runner 没有该精确版本时改用已安装的最新工具集（不低于 14.50），选择记录进构建指纹。
       - name: Select MSVC toolset and Windows SDK for Skia
         if: inputs.reuse_windows_run_id == ''
         shell: powershell
@@ -115,8 +115,8 @@ jobs:
           $versions = @(foreach ($root in $roots) { Get-ChildItem "$root\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue | ForEach-Object Name })
           Write-Host "Installed MSVC toolsets: $($versions -join ', ')"
           if ($versions -notcontains $spec.msvc) {
-            $candidate = $versions | Where-Object { $_ -like '14.50.*' } | Sort-Object { [version]$_ } | Select-Object -Last 1
-            if (-not $candidate) { throw "MSVC 14.50 toolset is not available on this runner." }
+            $candidate = $versions | Where-Object { [version]$_ -ge [version]'14.50' } | Sort-Object { [version]$_ } | Select-Object -Last 1
+            if (-not $candidate) { throw "No MSVC toolset 14.50 or newer is available on this runner." }
             "KROK_SKIA_MSVC_VERSION=$candidate" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
             Write-Host "::warning::Pinned MSVC $($spec.msvc) missing; building Skia with $candidate"
           }
