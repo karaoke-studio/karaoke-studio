@@ -680,6 +680,7 @@ from krok_helper.subtitle_render.frontend.properties.preset_manager import (
     resolve_preset_for_target,
     _RolePresetGroupDialog,
     _StylePresetDetailsDialog,
+    _confirm_preset_overwrite,
     _new_preset_id,
     _normalize_style_presets,
     _preset_ids_for_pair,
@@ -5852,20 +5853,33 @@ class PropertyPanel(QWidget):
         groups = sorted(
             {preset.group for preset in self._preset_schemes.values() if preset.group}
         )
-        dialog = _StylePresetDetailsDialog(
-            name=role_name,
-            group="",
-            groups=groups,
-            parent=self,
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        name, group = dialog.details()
-        if not name:
-            return
+        suggested_name = role_name
+        suggested_group = ""
+        while True:
+            dialog = _StylePresetDetailsDialog(
+                name=suggested_name,
+                group=suggested_group,
+                groups=groups,
+                parent=self,
+            )
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            name, group = dialog.details()
+            if not name:
+                return
+            presets = _normalize_style_presets(self._preset_schemes)
+            matching_ids = _preset_ids_for_pair(presets, name, group)
+            if not matching_ids:
+                break
+            decision = _confirm_preset_overwrite(
+                self, presets[matching_ids[0]], role_name
+            )
+            if decision == "overwrite":
+                break
+            if decision != "rename":
+                return
+            suggested_name, suggested_group = name, group
 
-        presets = _normalize_style_presets(self._preset_schemes)
-        matching_ids = _preset_ids_for_pair(presets, name, group)
         preset_id = matching_ids[0] if matching_ids else _new_preset_id(presets)
         for duplicate_id in matching_ids[1:]:
             presets.pop(duplicate_id, None)

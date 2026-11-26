@@ -272,6 +272,26 @@ def _preset_ids_for_pair(
     ]
 
 
+def _confirm_preset_overwrite(
+    parent: QWidget, existing: StylePreset, target_label: str
+) -> str:
+    """Ask how to handle a save that collides with an existing preset."""
+    group_text = existing.group or "未分组"
+    choice = fluent_choice(
+        parent,
+        "同名样式预设",
+        f"样式预设“{existing.name}”已存在，位于“{group_text}”。\n"
+        f"是否用当前目标“{target_label}”的样式覆盖它？",
+        ("覆盖现有预设", "返回修改名称", "取消"),
+        default=2,
+    )
+    if choice == 0:
+        return "overwrite"
+    if choice == 1:
+        return "rename"
+    return "cancel"
+
+
 class _StylePresetDetailsDialog(ModelessDialog):
     """Fluent form for a preset name and optional organizational group."""
 
@@ -1042,22 +1062,9 @@ class StylePresetManagerDialog(ModelessDialog):
         return dialog.details()
 
     def _confirm_overwrite(self, preset_id: str) -> str:
-        existing = self._presets[preset_id]
-        name = existing.name
-        group_text = existing.group or "未分组"
-        choice = fluent_choice(
-            self,
-            "同名样式预设",
-            f"样式预设“{name}”已存在，位于“{group_text}”。\n"
-            f"是否用当前目标“{self._target_label}”的样式覆盖它？",
-            ("覆盖现有预设", "返回修改名称", "取消"),
-            default=2,
+        return _confirm_preset_overwrite(
+            self, self._presets[preset_id], self._target_label
         )
-        if choice == 0:
-            return "overwrite"
-        if choice == 1:
-            return "rename"
-        return "cancel"
 
     def _on_apply(self) -> None:
         preset_id = self._selected_name()

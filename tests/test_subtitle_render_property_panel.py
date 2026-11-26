@@ -12132,15 +12132,87 @@ def test_save_button_writes_project_role_to_software_preset_library(
 
     monkeypatch.setattr(pp, "_StylePresetDetailsDialog", FakeDetailsDialog)
     monkeypatch.setattr(pp.InfoBar, "success", lambda *args, **kwargs: None)
+    confirmations: list[tuple[str, str]] = []
+
+    def confirm(_parent, existing, target_label):
+        confirmations.append((existing.preset_id, target_label))
+        return "overwrite"
+
+    monkeypatch.setattr(pp, "_confirm_preset_overwrite", confirm)
 
     panel._save_current_scheme()
 
+    assert confirmations == [("existing", "初音")]
     assert len(emitted) == 1
     assert list(panel.preset_schemes) == ["existing"]
     saved = next(iter(panel.preset_schemes.values()))
     assert saved.name == "初音"
     assert saved.group == "VOCALOID"
     assert saved.scheme.fill_color == "#39C5BB"
+
+
+def _panel_with_grouped_preset_for_role():
+    panel = PropertyPanel()
+    panel.set_roles(["初音"])
+    panel.set_current_scheme_key("custom:初音")
+    panel.set_style(
+        Style(
+            custom_style_schemes={
+                TITLE_SCHEME_NAME: SubtitleStyleScheme(),
+                "初音": SubtitleStyleScheme(fill_color="#39C5BB"),
+            }
+        )
+    )
+    panel.set_preset_schemes(
+        {
+            "existing": StylePreset(
+                name="初音",
+                group="VOCALOID",
+                scheme=SubtitleStyleScheme(fill_color="#000000"),
+                preset_id="existing",
+            )
+        }
+    )
+    return panel
+
+
+def test_save_button_overwrite_prompt_cancel_and_rename(qapp, monkeypatch):
+    panel = _panel_with_grouped_preset_for_role()
+    answers = iter([("初音", "VOCALOID"), ("初音 2", "VOCALOID")])
+    prompted: list[tuple[str, str]] = []
+
+    class FakeDetailsDialog:
+        def __init__(self, *, name, group, **_kwargs):
+            prompted.append((name, group))
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def details(self):
+            return next(answers)
+
+    monkeypatch.setattr(pp, "_StylePresetDetailsDialog", FakeDetailsDialog)
+    monkeypatch.setattr(pp.InfoBar, "success", lambda *args, **kwargs: None)
+    emitted: list[dict] = []
+    panel.presetSchemesChanged.connect(emitted.append)
+
+    monkeypatch.setattr(pp, "_confirm_preset_overwrite", lambda *_args: "cancel")
+    panel._save_current_scheme()
+    assert emitted == []
+    assert panel.preset_schemes["existing"].scheme.fill_color == "#000000"
+
+    answers = iter([("初音", "VOCALOID"), ("初音 2", "VOCALOID")])
+    prompted.clear()
+    monkeypatch.setattr(pp, "_confirm_preset_overwrite", lambda *_args: "rename")
+    panel._save_current_scheme()
+
+    # 「返回修改名称」带着刚填的名称/分组重新打开表单，改名后另存为新预设。
+    assert prompted == [("初音", ""), ("初音", "VOCALOID")]
+    assert panel.preset_schemes["existing"].scheme.fill_color == "#000000"
+    renamed = [p for p in panel.preset_schemes.values() if p.name == "初音 2"]
+    assert len(renamed) == 1
+    assert renamed[0].group == "VOCALOID"
+    assert renamed[0].scheme.fill_color == "#39C5BB"
 
 
 def test_role_combo_width_tracks_longest_option_with_cap(qapp):
