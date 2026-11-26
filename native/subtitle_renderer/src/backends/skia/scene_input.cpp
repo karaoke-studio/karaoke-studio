@@ -187,7 +187,8 @@ SkMatrix skiaViewport(const RenderScene& scene) {
         if (style.decorationKindForState(after) != "glow") return ::subtitle::skia::GlowState{};
         const auto& paint = after ? style.afterDecorPaint : style.beforeDecorPaint;
         const auto radius = after ? style.glowAfterRadius : style.glowBeforeRadius;
-        return ::subtitle::skia::GlowState{int(std::lround(radius)), style.glowConcentrationForState(after), argb(paint.color)};
+        return ::subtitle::skia::GlowState{int(std::lround(radius)), style.glowConcentrationForState(after), argb(paint.color),
+                                           style.glowStrengthPercent};
     };
     return {state(false), state(true), style.strokeWidth + style.stroke2Width};
 }

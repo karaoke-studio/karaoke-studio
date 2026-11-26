@@ -2,6 +2,7 @@
 #include "solid_outline.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkColorFilter.h"
+#include "include/core/SkData.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPathUtils.h"
@@ -37,20 +38,49 @@ SkIRect alphaBounds(const SkPixmap& mask) {
 }
 }
 
+sk_sp<SkColorFilter> glowStrengthFilter(int strengthPercent) {
+    const int percent = std::clamp(strengthPercent, 100, 400);
+    if (percent == 100) return nullptr;
+    // Applied to each blurred pass. Coverage is boosted in proportion to its
+    // own alpha, so the dense halo near the glyph fills in while the faint
+    // outer tail barely moves and the visible reach stays put. The dense core
+    // also mixes toward white, like an over-exposed emissive surface.
+    static const auto effect = SkRuntimeEffect::MakeForColorFilter(SkString(R"(
+        uniform float gain;
+        half4 main(half4 color) {
+            float alpha = color.a;
+            if (alpha <= 0.0) return half4(0);
+            float3 rgb = color.rgb / alpha;
+            float boosted = min(1.0, alpha * (1.0 + (gain - 1.0) * alpha));
+            float whiten = min(0.6, 0.2 * (gain - 1.0)) * boosted * boosted;
+            rgb = mix(rgb, float3(1.0), whiten);
+            return half4(rgb * boosted, boosted);
+        }
+    )"));
+    if (!effect.effect) throw std::runtime_error("Skia 光晕强度滤镜无法编译");
+    const float gain = float(percent) / 100.f;
+    auto filter = effect.effect->makeColorFilter(SkData::MakeWithCopy(&gain, sizeof(gain)));
+    if (!filter) throw std::runtime_error("Skia 光晕强度滤镜初始化失败");
+    return filter;
+}
+
 PreparedGlow::PreparedGlow(const StaticGlow& spec, const GlowState& state, std::optional<bool> phase)
     : before_(spec.before.color), after_(spec.after.color), radius_(state.radius),
       strokeWidth_(spec.outlineWidth + state.radius), join_(spec.join), phase_(phase) {
     const int passes = std::clamp(state.concentration, 0, 2) + 1;
+    const auto strength = glowStrengthFilter(state.strength);
     for (int index = 0; index < passes; ++index) {
         const float sigma = float(radius_ - index * radius_ / passes);
-        filters_.push_back(SkImageFilters::Blur(sigma, sigma, SkTileMode::kDecal, nullptr));
+        auto blur = SkImageFilters::Blur(sigma, sigma, SkTileMode::kDecal, nullptr);
+        filters_.push_back(strength ? SkImageFilters::ColorFilter(strength, std::move(blur)) : std::move(blur));
     }
 }
 
 std::vector<PreparedGlow> PreparedGlow::prepare(const StaticGlow& spec, bool mergeMatchingPhases) {
     std::vector<PreparedGlow> layers;
     if (mergeMatchingPhases && spec.before.radius == spec.after.radius
-        && spec.before.concentration == spec.after.concentration) {
+        && spec.before.concentration == spec.after.concentration
+        && spec.before.strength == spec.after.strength) {
         if (spec.before.radius > 0) layers.push_back(PreparedGlow(spec, spec.before, std::nullopt));
         return layers;
     }

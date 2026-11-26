@@ -89,6 +89,7 @@ void applyResolvedStyle(
     target.glowBeforeRadius = static_cast<float>(source.glowBeforeRadiusPx * scale);
     target.glowAfterRadius = static_cast<float>(source.glowAfterRadiusPx * scale);
     target.glowConcentrationLevel = source.glowConcentrationLevel;
+    target.glowStrengthPercent = source.glowStrengthPercent;
     target.glowBeforeConcentrationLevel =
         source.glowBeforeConcentrationLevel.value_or(
             source.glowConcentrationLevel

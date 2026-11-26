@@ -7072,6 +7072,61 @@ def test_property_panel_glow_concentration_routes_by_color_subject(qapp):
     assert panel._glow_concentration_field.isHidden()
 
 
+@pytest.mark.parametrize("skia", [False, True])
+def test_property_panel_glow_strength_is_skia_only(qapp, monkeypatch, skia):
+    """发光强度只在 Skia 后端显示；编辑写主文字槽位，注音主体下也不分流。"""
+    monkeypatch.setattr(pp, "skia_requested", lambda: skia)
+    panel = PropertyPanel()
+    panel.set_style(Style(decoration_kind="glow", decoration_kind_before="glow"))
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._color_layer_combo.setCurrentIndex(
+        panel._color_layer_combo.findData("shadow")
+    )
+    assert not panel._glow_concentration_field.isHidden()
+    assert panel._glow_strength_field.isHidden() is (not skia)
+    assert panel._glow_strength_spin.value() == 100
+
+    panel._glow_strength_spin.setValue(250)
+    assert emitted[-1].glow_strength_percent == 250
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    assert panel._glow_strength_spin.value() == 250
+    panel._glow_strength_spin.setValue(300)
+    assert emitted[-1].glow_strength_percent == 300
+    assert emitted[-1].ruby_colors_follow_main is not False
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("shadow")
+    )
+    assert panel._glow_strength_field.isHidden()
+
+
+def test_glow_strength_round_trips_and_clamps():
+    from krok_helper.subtitle_render.domain.models import (
+        normalize_glow_strength_percent,
+        style_from_dict,
+        style_to_dict,
+        subtitle_style_scheme_from_dict,
+    )
+
+    assert Style().glow_strength_percent == 100
+    assert normalize_glow_strength_percent(50) == 100
+    assert normalize_glow_strength_percent(999) == 400
+    assert normalize_glow_strength_percent("bad") == 100
+    payload = style_to_dict(Style(glow_strength_percent=275))
+    assert style_from_dict(payload).glow_strength_percent == 275
+    # 旧工程没有这个键：回落默认 100，与 D2D/旧画面一致。
+    payload.pop("glow_strength_percent")
+    assert style_from_dict(payload).glow_strength_percent == 100
+    assert subtitle_style_scheme_from_dict({}).glow_strength_percent is None
+    assert subtitle_style_scheme_from_dict(
+        {"glow_strength_percent": 1000}
+    ).glow_strength_percent == 400
+
+
 def test_property_panel_ruby_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []

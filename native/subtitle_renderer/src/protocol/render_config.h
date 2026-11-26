@@ -304,6 +304,8 @@ struct ResolvedStyle {
     int glowAfterRadiusPx = 10;
     int glowConcentrationLevel = 0;
     std::optional<int> glowBeforeConcentrationLevel;
+    // Skia-only glow strength (100-400 %); D2D ignores it.
+    int glowStrengthPercent = 100;
     int shadowOffsetX = 0;
     int shadowOffsetY = 1;
     std::optional<int> shadowBeforeOffsetX;

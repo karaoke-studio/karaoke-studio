@@ -239,6 +239,11 @@ TITLE_SCHEME_NAME = "标题"
 TITLE_LAYOUT_NAME = "タイトル左上"
 """默认标题布局名（对齐 N3 出厂布局预设 index 4）。"""
 
+GLOW_STRENGTH_DEFAULT_PERCENT = 100
+GLOW_STRENGTH_MIN_PERCENT = 100
+GLOW_STRENGTH_MAX_PERCENT = 400
+"""Skia 发光强度范围（百分比）；100 = 与旧工程及 D2D 完全一致。"""
+
 SCANLINE_GLOBAL_ROLE_KEY = "__global__"
 """``scanline_role_name`` 的保留键：全局默认来源（主样式自身配色）。
 
@@ -492,6 +497,8 @@ class SubtitleStyleScheme:
     glow_concentration_level: Optional[int] = None
     glow_before_concentration_level: Optional[int] = None
     """走字前发光浓度；``None`` = 跟随 ``glow_concentration_level``。"""
+    glow_strength_percent: Optional[int] = None
+    """发光强度（仅 Skia 后端）；``None`` 继承全局 ``Style`` 设置。"""
     shadow_color: Optional[str] = None
     shadow_offset_x: Optional[int] = None
     shadow_offset_y: Optional[int] = None
@@ -961,6 +968,13 @@ class Style:
     """-1 disables glow; NicoKaraMaker3 ``BlurLevel`` 0/1/2 = low/medium/high."""
     glow_before_concentration_level: Optional[int] = None
     """走字前发光浓度；``None`` = 跟随 ``glow_concentration_level``。"""
+    glow_strength_percent: int = GLOW_STRENGTH_DEFAULT_PERCENT
+    """发光强度百分比（100–400），走字前后与注音共用，仅 Skia 后端生效。
+
+    100 = 原样。更高时只增强靠近文字的光晕并让核心逐渐发白（类似 UE
+    自发光的过曝），外圈淡光基本不变，光晕范围不随之扩大。D2D/CPU
+    渲染忽略此项。
+    """
     shadow_color: str = "#000000"
     shadow_offset_x: int = 5
     """阴影 X 偏移。N3 阴影偏移固定为 DecorSize（双轴同值），1080 下默认 5。"""
@@ -2182,6 +2196,17 @@ def layout_display_name(style: Style, layout_id: str) -> str:
     return style.layouts[index - 1].name
 
 
+def normalize_glow_strength_percent(
+    value: object, fallback: int = GLOW_STRENGTH_DEFAULT_PERCENT
+) -> int:
+    """Clamp the Skia-only glow strength to 100–400 %."""
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        parsed = int(fallback)
+    return max(GLOW_STRENGTH_MIN_PERCENT, min(GLOW_STRENGTH_MAX_PERCENT, parsed))
+
+
 def normalize_glow_concentration_level(value: object, fallback: int = 0) -> int:
     """Normalize -1 (disabled) plus the three NicoKaraMaker3 blur levels."""
     try:
@@ -2661,6 +2686,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             ] if isinstance(value, list) else []
         elif key == "glow_concentration_level":
             changes[key] = normalize_glow_concentration_level(value)
+        elif key == "glow_strength_percent":
+            changes[key] = normalize_glow_strength_percent(value)
         elif key in {
             "glow_before_concentration_level",
             "ruby_glow_concentration_level",
@@ -4015,6 +4042,10 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
         elif key in {"glow_concentration_level", "ruby_glow_concentration_level"}:
             changes[key] = (
                 normalize_glow_concentration_level(value) if value is not None else None
+            )
+        elif key == "glow_strength_percent":
+            changes[key] = (
+                normalize_glow_strength_percent(value) if value is not None else None
             )
         elif key in {
             "glow_before_concentration_level",

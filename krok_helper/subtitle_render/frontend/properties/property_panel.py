@@ -211,6 +211,7 @@ from krok_helper.subtitle_render.frontend.properties.pages.timing import (
     TimingPropertyPageBuilder,
 )
 from krok_helper.subtitle_render.frontend import SUBTITLE_RENDER_ASSET_DIR
+from krok_helper.subtitle_render.native.backend_selection import skia_requested
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.subtitle_render.n3.font_catalog import (
     canonicalize_n3_font_family,
@@ -2862,6 +2863,12 @@ class PropertyPanel(QWidget):
             )
         self._update_style(**shared)
 
+    def _update_glow_strength(self, value: int) -> None:
+        """发光强度是主文字槽位，走字前后与注音共用，不经注音路由。"""
+        if self._syncing:
+            return
+        self._update_style(glow_strength_percent=int(value))
+
     def _update_ruby_decoration(self, **changes) -> None:
         snapshot: dict[str, object] = {}
         if bool(self._scheme_value("ruby_colors_follow_main")):
@@ -5404,6 +5411,9 @@ class PropertyPanel(QWidget):
         self._glow_radius_field.setVisible(is_decoration and is_glow)
         self._glow_after_radius_field.setVisible(is_decoration and is_glow)
         self._glow_concentration_field.setVisible(is_decoration and is_glow)
+        self._glow_strength_field.setVisible(
+            is_decoration and is_glow and skia_requested()
+        )
 
     def _sync_color_subject_style_controls(self) -> None:
         if not hasattr(self, "_decoration_type_combo"):
@@ -5480,6 +5490,9 @@ class PropertyPanel(QWidget):
                     0,
                     self._glow_concentration_combo.findData(concentration),
                 )
+            )
+            self._glow_strength_spin.setValue(
+                int(self._scheme_value("glow_strength_percent"))
             )
             self._shadow_x_spin.setValue(shadow_x)
             self._shadow_y_spin.setValue(shadow_y)

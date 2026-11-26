@@ -57,6 +57,7 @@ SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "glow_after_radius_px",
     "glow_concentration_level",
     "glow_before_concentration_level",
+    "glow_strength_percent",
     "shadow_color",
     "shadow_offset_x",
     "shadow_offset_y",

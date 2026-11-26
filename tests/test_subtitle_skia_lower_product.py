@@ -90,8 +90,8 @@ def test_independent_lower_glow_tracks_its_own_phase(binary, glowing_lower, targ
     groups = ir['skia_layout']['lines'][0]['ruby_groups']
     lower = [g for g in groups if g.get('lower')]
     assert len(lower) == 3 and 'lower_glow' not in groups[0]
-    expected = {'before': {'radius': 3, 'color': [255, 0, 255, 255], 'concentration': 0},
-                'after': {'radius': 7, 'color': [0, 255, 255, 255], 'concentration': 2}}
+    expected = {'before': {'radius': 3, 'color': [255, 0, 255, 255], 'concentration': 0, 'strength': 100},
+                'after': {'radius': 7, 'color': [0, 255, 255, 255], 'concentration': 2, 'strength': 100}}
     assert all(g['lower_glow'] == expected for g in lower)
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
         track, style, _ = glowing_lower

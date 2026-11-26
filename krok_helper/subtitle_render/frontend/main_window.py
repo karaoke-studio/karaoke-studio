@@ -856,6 +856,7 @@ _PAINT_ONLY_SCHEME_FIELDS: frozenset[str] = frozenset({
     "shadow_before_offset_x", "shadow_before_offset_y",
     "glow_radius_px", "glow_before_radius_px", "glow_after_radius_px",
     "glow_concentration_level", "glow_before_concentration_level",
+    "glow_strength_percent",
     "ruby_decoration_kind", "ruby_shadow_offset_x", "ruby_shadow_offset_y",
     "ruby_decoration_kind_before", "ruby_shadow_before_offset_x",
     "ruby_shadow_before_offset_y",

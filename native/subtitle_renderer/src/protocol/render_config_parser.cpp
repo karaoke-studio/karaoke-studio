@@ -748,6 +748,13 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             2
         );
     }
+    if (hasNonNull(style, QStringLiteral("glow_strength_percent"))) {
+        cfg.glowStrengthPercent = std::clamp(
+            intValue(style, QStringLiteral("glow_strength_percent"), cfg.glowStrengthPercent),
+            100,
+            400
+        );
+    }
     if (hasNonNull(style, QStringLiteral("shadow_offset_x"))) {
         cfg.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX);
     }
@@ -1417,6 +1424,11 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
             2
         );
     }
+    base.glowStrengthPercent = std::clamp(
+        intValue(style, QStringLiteral("glow_strength_percent"), base.glowStrengthPercent),
+        100,
+        400
+    );
     base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
     base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
     if (style.value(QStringLiteral("shadow_before_offset_x")).isDouble()) {

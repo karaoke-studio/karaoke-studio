@@ -443,3 +443,52 @@ def test_p00_glow_matches_actual_d2d_and_gpu_raster(binary, application, case_id
         raster.configure(case.track, case.style, width=1920, height=1080, fps=60)
         raster_frames, _ = collect(raster, case.timestamps_ms)
     assert_glow_parity(case.timestamps_ms, refs, gpu_frames, raster_frames, case.case_id, check_p00_edges=True)
+
+
+def _opaque_glow(project, strength):
+    track, style = glow_source(project, 'three_passes')
+    colors = style.karaoke_colors
+    colors = replace(colors, before=replace(colors.before, shadow=PaintFill(color='#E06010')),
+                     after=replace(colors.after, shadow=PaintFill(color='#2078E0')))
+    return track, replace(style, karaoke_colors=colors, glow_strength_percent=strength)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_glow_strength_fills_the_core_without_widening_the_halo(binary, project, target):
+    """Strength boosts dense glow and whitens it; the faint reach stays put."""
+    times = [0, 750, 2200]
+    frames = {}
+    for strength in (100, 250, 400):
+        ir = ir_for(binary, _opaque_glow(project, strength), dpr=1.5)
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames[strength], _ = collect(process, times)
+    for index, t in enumerate(times):
+        base, mid, high = (frames[s][index].astype(np.int64) for s in (100, 250, 400))
+        alpha = base[..., 3]
+        assert alpha.any(), t
+        # Reach: the faintly lit footprint barely changes.
+        reach = [int((frame[..., 3] >= 4).sum()) for frame in (base, mid, high)]
+        assert reach[0] <= reach[1] <= reach[2] <= reach[0] * 1.03, (t, reach)
+        # Core: half-covered glow becomes denser, monotonically with strength.
+        core = (alpha > 64) & (alpha < 224)
+        assert core.any(), t
+        means = [frame[..., 3][core].mean() for frame in (base, mid, high)]
+        assert means[0] + 20 < means[1] < means[2], (t, means)
+        # Whitening lifts the weakest colour channel of the dense glow.
+        dense = high[..., 3] > 200
+        weakest = [frame[..., :3].min(axis=-1)[dense & (alpha > 64)].mean() for frame in (base, high)]
+        assert weakest[1] > weakest[0] + 10, (t, weakest)
+
+
+@pytest.mark.parametrize('strength', [250, 400])
+def test_glow_strength_matches_between_gpu_and_raster(binary, project, strength):
+    times = [0, 750, 2200]
+    ir = ir_for(binary, _opaque_glow(project, strength), dpr=1.5)
+    draws = []
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+        draws.append(frames)
+    assert_glow_parity(times, None, *draws, ('strength', strength))

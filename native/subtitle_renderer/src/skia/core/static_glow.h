@@ -1,6 +1,7 @@
 #pragma once
 
 #include "include/core/SkImage.h"
+#include "include/core/SkColorFilter.h"
 #include "include/core/SkImageFilter.h"
 #include "include/core/SkRect.h"
 #include "include/core/SkMatrix.h"
@@ -21,6 +22,8 @@ struct GlowState {
     int radius = 0;
     int concentration = 0;
     std::uint32_t color = 0;
+    // Glow strength in percent (100-400). 100 leaves every blur pass untouched.
+    int strength = 100;
     bool operator==(const GlowState&) const = default;
 };
 
@@ -50,6 +53,9 @@ struct GlowCompositeKey {
     SkRect transitionBounds = SkRect::MakeEmpty();
     bool operator==(const GlowCompositeKey&) const = default;
 };
+
+// The per-pass color filter for a glow strength percent; null at 100 %.
+sk_sp<SkColorFilter> glowStrengthFilter(int strengthPercent);
 
 using GlowGradients = std::array<sk_sp<SkShader>, 2>;
 // Image paints draw the glow outline with the GPU's device-anchored bitmap brush.

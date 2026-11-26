@@ -10,6 +10,11 @@ from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CheckBox, PushButton as FluentPushButton
 
+from krok_helper.subtitle_render.domain.models import (
+    GLOW_STRENGTH_MAX_PERCENT,
+    GLOW_STRENGTH_MIN_PERCENT,
+)
+
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     DynamicStackedWidget,
     WheelFocusedComboBox,
@@ -286,6 +291,21 @@ class RoleColorPropertyPageBuilder:
             "发光浓度", host._glow_concentration_combo
         )
 
+        # 发光强度只有 Skia 后端会绘制；非 Skia 时由面板隐藏该字段。
+        host._glow_strength_spin = self._spin_factory(
+            GLOW_STRENGTH_MIN_PERCENT, GLOW_STRENGTH_MAX_PERCENT, suffix=" %"
+        )
+        host._glow_strength_spin.setToolTip(
+            "增强靠近文字的光晕并让核心逐渐发白，光晕范围不扩大。"
+            "走字前后与注音共用；仅 Skia 渲染时生效。"
+        )
+        host._glow_strength_spin.valueChanged.connect(
+            lambda value: host._update_glow_strength(value)
+        )
+        host._glow_strength_field = property_field(
+            "发光强度", host._glow_strength_spin
+        )
+
         # 发光的三个参数共享一行，顺序与预览语义一致：走字前、走字后、浓度。
         host._glow_controls_row = QWidget(detail_grid)
         glow_row_layout = QHBoxLayout(host._glow_controls_row)
@@ -294,6 +314,7 @@ class RoleColorPropertyPageBuilder:
         glow_row_layout.addWidget(host._glow_radius_field, 1)
         glow_row_layout.addWidget(host._glow_after_radius_field, 1)
         glow_row_layout.addWidget(host._glow_concentration_field, 1)
+        glow_row_layout.addWidget(host._glow_strength_field, 1)
         detail_layout.addWidget(host._glow_controls_row, 1, 0, 1, 2)
 
         detail_layout.setColumnStretch(0, 1)

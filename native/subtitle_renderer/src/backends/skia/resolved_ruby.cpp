@@ -143,11 +143,12 @@ PaintStyle lowerImage(const QJsonObject& payload, const char* phase) {
 ::subtitle::skia::GlowState lowerGlowState(const QJsonObject& glow, const char* phase, double dpr) {
     if (!glow.contains(phase)) return {};
     const auto state = glow.value(phase).toObject();
-    if (state.size() != 3)
+    if (state.size() != 4)
         throw BackendError("Skia 下方注音实色光晕参数无效");
     const double radius = integer(state.value("radius"), 1, 532) * dpr;
     if (radius > 532.) throw BackendError("Skia 下方注音实色光晕半径超限");
-    return {int(std::lround(radius)), integer(state.value("concentration"), 0, 2), rgbaPaint(state.value("color"))};
+    return {int(std::lround(radius)), integer(state.value("concentration"), 0, 2), rgbaPaint(state.value("color")),
+            integer(state.value("strength"), 100, 400)};
 }
 ::subtitle::skia::ShadowState lowerShadowState(const QJsonObject& shadow, const char* phase, double dpr) {
     if (!shadow.contains(phase)) return {};
@@ -363,7 +364,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             if (lower || paint.rubyDecorationKindForState(after) != "glow") return {};
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
-            return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color)};
+            return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color),
+                    paint.glowStrengthPercent};
         };
         ::subtitle::skia::StaticGlow glow{
             glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
