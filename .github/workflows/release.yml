@@ -303,12 +303,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/qt-krok
-          key: qt-6.11.0-linux-qtbase-qtdeclarative-v1
+          key: qt-6.11.0-linux-qtbase-qtdeclarative-icu-v2
 
       - name: Install Qt 6.11.0 SDK for the Skia sidecar
         run: |
-          if [ ! -f ~/qt-krok/6.11.0/gcc_64/lib/cmake/Qt6Quick/Qt6QuickConfig.cmake ]; then
-            python3 -m aqt install-qt linux desktop 6.11.0 linux_gcc_64 --archives qtbase qtdeclarative --outputdir ~/qt-krok
+          # Qt's own tools (qtpaths) need the ICU libraries shipped as the separate icu archive.
+          if [ ! -f ~/qt-krok/6.11.0/gcc_64/lib/libicui18n.so.73 ]; then
+            python3 -m aqt install-qt linux desktop 6.11.0 linux_gcc_64 --archives qtbase qtdeclarative icu --outputdir ~/qt-krok
           fi
 
       - name: Cache Skia dependencies
