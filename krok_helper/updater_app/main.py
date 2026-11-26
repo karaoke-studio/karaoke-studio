@@ -929,14 +929,25 @@ NATIVE_RENDERER_EXE_NAME = "krok_subtitle_renderer.exe"
 # Skia sidecar（4.5.0 起随包并默认启用），Windows 还需要旁边的 ICU 数据。
 SKIA_RENDERER_EXE_NAME = "krok_skia_subtitle_renderer" + _EXE_SUFFIX
 SKIA_ICU_DATA_NAME = "icudtl.dat"
+# 根目录 app-local VC++ 运行时（4.5.0 起），sidecar 优先加载它们而非系统旧版本。
+ROOT_VC_RUNTIME_NAMES = (
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+)
 #: 全量包根目录里必须存在、由本函数回写的产品文件（主程序由通用逻辑回写）。
 REQUIRED_ROOT_PAYLOAD = (
-    (PRIMARY_APP_EXE_NAME, NATIVE_RENDERER_EXE_NAME, SKIA_RENDERER_EXE_NAME, SKIA_ICU_DATA_NAME)
+    (PRIMARY_APP_EXE_NAME, NATIVE_RENDERER_EXE_NAME, SKIA_RENDERER_EXE_NAME, SKIA_ICU_DATA_NAME,
+     *ROOT_VC_RUNTIME_NAMES)
     if _IS_WINDOWS
     else (PRIMARY_APP_EXE_NAME, SKIA_RENDERER_EXE_NAME)
 )
 #: 根目录里不以 .exe 结尾、但属于产品的文件。
-ROOT_DATA_FILES = frozenset({SKIA_ICU_DATA_NAME} if _IS_WINDOWS else {SKIA_RENDERER_EXE_NAME})
+ROOT_DATA_FILES = frozenset(
+    {SKIA_ICU_DATA_NAME, *ROOT_VC_RUNTIME_NAMES} if _IS_WINDOWS else {SKIA_RENDERER_EXE_NAME}
+)
 
 
 def _close_logger_handlers(logger: logging.Logger) -> None:

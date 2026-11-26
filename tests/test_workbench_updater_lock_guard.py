@@ -624,6 +624,8 @@ def test_full_update_stops_when_old_backup_cannot_be_removed(
     (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
     (new_root / "icudtl.dat").write_bytes(b"new-icu")
+    for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+        (new_root / runtime).write_bytes(b"new-runtime")
     called = False
 
     def fail_rmtree(*args, **kwargs):
@@ -671,6 +673,8 @@ def test_full_update_removes_stale_backups_before_generic_apply(
     (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
     (new_root / "icudtl.dat").write_bytes(b"new-icu")
+    for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+        (new_root / runtime).write_bytes(b"new-runtime")
 
     def generic_apply(app_dir, app_exe, _internal_name, new_root, _log):
         assert not (app_dir / "_internal.old").exists()
@@ -719,6 +723,8 @@ def test_full_update_accepts_package_without_legacy_copy(
     (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
     (new_root / "icudtl.dat").write_bytes(b"new-icu")
+    for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+        (new_root / runtime).write_bytes(b"new-runtime")
 
     def generic_apply(app_dir, app_exe, _internal_name, new_root, _log):
         workbench_updater.shutil.copy2(
@@ -761,6 +767,8 @@ def test_full_update_rejects_legacy_session_when_package_lacks_legacy(
     (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
     (new_root / "icudtl.dat").write_bytes(b"new-icu")
+    for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+        (new_root / runtime).write_bytes(b"new-runtime")
 
     ok, err = workbench_updater._apply_workbench_update(
         app_dir,
@@ -789,6 +797,8 @@ def test_full_update_uses_neutral_rename_error_wording(
     (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
     (new_root / "icudtl.dat").write_bytes(b"new-icu")
+    for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+        (new_root / runtime).write_bytes(b"new-runtime")
     monkeypatch.setattr(
         workbench_updater,
         "_original_apply_update",
@@ -979,6 +989,8 @@ def test_full_update_replaces_sidecar_and_dual_named_exes(
         (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new-sidecar")
         (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
         (new_root / "icudtl.dat").write_bytes(b"new-icu")
+        for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+            (new_root / runtime).write_bytes(b"new-runtime")
         def faithful_generic_apply(app_dir, app_exe, _internal_name, new_root, _log):
             # 忠实模拟原版行为：回写 --app-exe 指定的那一个 EXE
             workbench_updater.shutil.copy2(
@@ -1000,6 +1012,10 @@ def test_full_update_replaces_sidecar_and_dual_named_exes(
 
         assert ok is True and err == ""
         assert (app_dir / "krok_subtitle_renderer.exe").read_bytes() == b"new-sidecar"
+        # 根目录的 Skia sidecar、ICU 数据与 app-local VC++ 运行时同样回写。
+        assert (app_dir / "krok_skia_subtitle_renderer.exe").read_bytes() == b"new-skia"
+        assert (app_dir / "icudtl.dat").read_bytes() == b"new-icu"
+        assert (app_dir / "vcruntime140_1.dll").read_bytes() == b"new-runtime"
         assert (app_dir / "Lin-K Lyrics.exe").read_bytes() == b"new-primary"
         assert not (app_dir / "krok_subtitle_renderer.exe.old").exists()
         if launched_name == workbench_updater.PRIMARY_APP_EXE_NAME:
@@ -1017,7 +1033,8 @@ def test_full_update_replaces_sidecar_and_dual_named_exes(
     # 放行（test_full_update_accepts_package_without_legacy_copy）；旧名会话遇
     # 无旧名包由 test_full_update_rejects_legacy_session_when_package_lacks_legacy
     # 覆盖。
-    ["Lin-K Lyrics.exe", "krok_subtitle_renderer.exe", "krok_skia_subtitle_renderer.exe", "icudtl.dat"],
+    ["Lin-K Lyrics.exe", "krok_subtitle_renderer.exe", "krok_skia_subtitle_renderer.exe", "icudtl.dat",
+     "msvcp140.dll", "vcruntime140_1.dll"],
 )
 def test_full_update_rejects_package_missing_required_root_exe(
     tmp_path: Path, missing_name: str
@@ -1038,6 +1055,8 @@ def test_full_update_rejects_package_missing_required_root_exe(
     (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new")
     (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
     (new_root / "icudtl.dat").write_bytes(b"new-icu")
+    for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+        (new_root / runtime).write_bytes(b"new-runtime")
     (new_root / missing_name).unlink()
 
     ok, err = workbench_updater._apply_workbench_update(
@@ -1070,6 +1089,8 @@ def test_full_update_sidecar_copy_blocked_reports_failure(
     (new_root / "krok_subtitle_renderer.exe").write_bytes(b"new-sidecar")
     (new_root / "krok_skia_subtitle_renderer.exe").write_bytes(b"new-skia")
     (new_root / "icudtl.dat").write_bytes(b"new-icu")
+    for runtime in ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime140.dll', 'vcruntime140_1.dll']:
+        (new_root / runtime).write_bytes(b"new-runtime")
     monkeypatch.setattr(
         workbench_updater, "_original_apply_update", lambda *args: (True, "")
     )

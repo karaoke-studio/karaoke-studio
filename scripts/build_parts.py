@@ -81,6 +81,15 @@ NATIVE_RENDERER_EXE_NAME = "krok_subtitle_renderer.exe"
 # 每版重编，属于 app part。
 SKIA_RENDERER_EXE_NAME = "krok_skia_subtitle_renderer.exe"
 SKIA_ICU_DATA_NAME = "icudtl.dat"
+# 根目录的 VC++ 运行时（app-local），让两个 sidecar 不加载用户系统里更旧的版本。
+# 随构建机更新，属于 app part，复用旧 runtime zip 的版本里也会跟着更新。
+ROOT_VC_RUNTIME_NAMES = (
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+)
 # 资产名刻意保持改名前的 "KaraokeStudio-" 前缀：存量 Updater 硬编码全量 zip 名，
 # 且从 zip 名派生 manifest 名。改了会甩掉整个存量安装基数。
 ASSET_BASE = "KaraokeStudio-windows"
@@ -143,6 +152,7 @@ APP_TARGETS = [
     NATIVE_RENDERER_EXE_NAME,
     SKIA_RENDERER_EXE_NAME,
     SKIA_ICU_DATA_NAME,
+    *ROOT_VC_RUNTIME_NAMES,
     "_internal/krok_helper",
     "_internal/strange_uta_game",
 ]

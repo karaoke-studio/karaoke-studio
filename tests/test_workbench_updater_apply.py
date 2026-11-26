@@ -36,6 +36,9 @@ def _write_release_zip(path: Path) -> str:
         # 4.5.0 起 Skia sidecar 与 ICU 数据同为必备根目录负载。
         zf.writestr("Lin-K Lyrics/krok_skia_subtitle_renderer.exe", "new skia\n")
         zf.writestr("Lin-K Lyrics/icudtl.dat", "new icu\n")
+        # 根目录 app-local VC++ 运行时（4.5.0 起）同为必备负载。
+        for runtime in ("msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+            zf.writestr(f"Lin-K Lyrics/{runtime}", "new runtime\n")
         zf.writestr("Lin-K Lyrics/_internal/version.txt", "3.0.1\n")
         zf.writestr("Lin-K Lyrics/_internal/runtime/new.txt", "new runtime\n")
     return hashlib.sha256(path.read_bytes()).hexdigest()

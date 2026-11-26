@@ -367,6 +367,29 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM 两个 sidecar 位于安装根目录。Windows 先在程序所在目录找 DLL、再找 System32，
+REM 根目录没有运行时就会用到用户系统里可能更旧的 VC++ 运行时（低于编译工具集时
+REM 可能崩溃，例如 14.40 起的 std::mutex）。这里从构建机 System32 复制同组运行时
+REM 到根目录（app-local 部署），版本不得低于 sidecar 的编译工具集下限 14.50。
+echo Copying VC++ runtime beside the subtitle renderers...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$targetDir = Resolve-Path '%APP_DIST%';" ^
+    "$minVersion = [version]'14.50.0.0';" ^
+    "foreach ($name in @('msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll')) {" ^
+    "  $src = Join-Path $env:SystemRoot ('System32\' + $name);" ^
+    "  if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { Write-Host ('System VC++ runtime missing: ' + $src); exit 1 };" ^
+    "  $version = [version][regex]::Match((Get-Item -LiteralPath $src).VersionInfo.FileVersion, '^\d+(\.\d+)+').Value;" ^
+    "  if ($version -lt $minVersion) { Write-Host ('VC++ runtime ' + $name + ' ' + $version + ' is older than ' + $minVersion); exit 1 };" ^
+    "  Copy-Item -LiteralPath $src -Destination (Join-Path $targetDir $name) -Force;" ^
+    "  Write-Host ('  ' + $name + ': ' + $version)" ^
+    "}"
+if errorlevel 1 (
+    echo.
+    echo Failed to copy the VC++ runtime beside the subtitle renderers.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 REM 嵌入的 AI 打轴 worker 以外部解释器（托管 PyMSS runtime）子进程运行，
 REM runpy 引导要求 _internal\strange_uta_game 下有真实 .py 源码；KS 的
 REM PyInstaller 用 --collect-submodules 把 SUG 编进 PYZ（仅 frozen 应用
@@ -428,9 +451,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'krok_subtitle_renderer.exe'," ^
     "  'krok_skia_subtitle_renderer.exe'," ^
     "  'icudtl.dat'," ^
+    "  'msvcp140.dll'," ^
+    "  'msvcp140_1.dll'," ^
+    "  'msvcp140_2.dll'," ^
+    "  'vcruntime140.dll'," ^
+    "  'vcruntime140_1.dll'," ^
     "  '%APP_NAME%.exe'" ^
     ") + $legacyFiles;" ^
-    "$rootLevel = @('Updater.exe','krok_subtitle_renderer.exe','krok_skia_subtitle_renderer.exe','icudtl.dat','%APP_NAME%.exe') + $legacyFiles;" ^
+    "$rootLevel = @('Updater.exe','krok_subtitle_renderer.exe','krok_skia_subtitle_renderer.exe','icudtl.dat','msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','vcruntime140.dll','vcruntime140_1.dll','%APP_NAME%.exe') + $legacyFiles;" ^
     "$missing = @();" ^
     "foreach ($rel in $required) { $base = if ($rel -in $rootLevel) { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
     "$multimediaRequired = @('QtMultimedia.pyd','QtMultimediaWidgets.pyd','Qt6Multimedia.dll','Qt6MultimediaWidgets.dll','ffmpegmediaplugin.dll');" ^
