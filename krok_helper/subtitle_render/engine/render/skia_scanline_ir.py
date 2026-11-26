@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from ..guide.semantics import guide_symbol_is_bitmap, render_line_with_guide_symbols
 from ..layout.line.style import style_for_line
-from ..style.style_semantics import effective_karaoke_colors, uses_authored_decoration
+from ..style.style_semantics import uses_authored_decoration
 from .elements.horizontal.scanline import scanline_role_fill
 from .skia_line_animation_ir import ordinary_line_animation
 from .skia_particle_ir import faded_band_singing_particles, vertical_singing_particle_modes
@@ -87,11 +87,8 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
     role_gradient = False
     role_line_motion = False
     role_scanline_particles = False
-    zoom_shapes = False
     role_singing_band = False
-    shaped_palette = False
     rtl_band = False
-    reverse_image = original_image_palette = reverse_procedural_shape = False
     shadow_band = False
     for index, (source, line) in enumerate(zip(track.lines, lines, strict=True)):
         if not line.get('scanline'):
@@ -125,36 +122,12 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         role_motion = (look.scanline_mode == 'role' and look.scanline_shape == 'band'
                        and (role_fill is None or role_fill.mode == 'solid')
                        and line.get('karaoke_anim') == 'none' and not look.lower_ruby_enabled)
-        palette_shape = False
-        procedural = (ordinary and look.scanline_shape in {'flame', 'bubble'} and not (
-            look.lower_ruby_enabled or bursts or line.get('stroke_flash')))
-        reverse_procedural = procedural and source.wipe_reverse and not (
-            look.right_to_left or has_readings or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse'))
-        if procedural and (not source.wipe_reverse or reverse_procedural):
-            colors = effective_karaoke_colors(look)
-            palette_shape = (look.scanline_mode == 'default'
-                             or (look.scanline_mode == 'role' and not has_readings
-                                 and role_fill is not None and role_fill.mode == 'solid')
-                             or (look.scanline_mode in {'follow_before', 'follow_after', 'brighten'}
-                                 and colors.before.text.mode == colors.after.text.mode == 'solid'))
-        shape_style = (palette_shape or (look.scanline_shape in {'flame', 'bubble', 'image'}
-                                         and look.scanline_mode == 'color'))
-        basic_image = (look.scanline_shape == 'image' and ordinary and not (
-            has_readings or bursts or look.right_to_left
-            or line.get('karaoke_anim') != 'none' or line.get('zoom_pulse') or line.get('stroke_flash')))
-        image_follows_palette = (basic_image and not look.scanline_image_color_layers
-                                 and look.scanline_mode in {'default', 'brighten', 'follow_before', 'follow_after'})
-        image_reverse = basic_image and source.wipe_reverse and (look.scanline_mode == 'color' or image_follows_palette)
-        shape_style |= image_follows_palette
+        # Like the GPU, every horizontal line draws its chosen shape in place of
+        # the band, whatever its colour mode, animation, particles or direction.
+        solid_shape = look.scanline_shape != 'band'
         image_during_transition = particle_entry and look.scanline_shape == 'image'
-        shape_with_singing = (shape_style and (ordinary or image_during_transition) and has_readings and bool(bursts)
+        shape_with_singing = (solid_shape and has_readings and bool(bursts)
                               and all(burst['kind'] != 'scanline' for burst in bursts))
-        # Like the GPU, a pulsing line keeps its shape through transitions and particles.
-        zoom_shape = (look.scanline_shape in {'flame', 'bubble'} and shape_style
-                      and line.get('karaoke_anim') == 'utopia' and line.get('zoom_pulse')
-                      and not (look.right_to_left or source.wipe_reverse or look.lower_ruby_enabled))
-        solid_shape = (shape_style and (not source.wipe_reverse or image_reverse or reverse_procedural)
-                       and (not line.get('zoom_pulse') or zoom_shape) and not line.get('stroke_flash'))
         faded_band = faded_band_singing_particles(line, look)
         motion = (not ordinary and ordinary_line_animation(line)
                   and (look.scanline_shape == 'band' or solid_shape) and (look.scanline_mode != 'role' or role_motion)
@@ -234,29 +207,16 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         lower_singing_particles |= lower_band and lower_particles
         if shape:
             shapes.add(look.scanline_shape)
-            zoom_shapes |= zoom_shape
-            shaped_palette |= palette_shape
-            reverse_image |= image_reverse
-            reverse_procedural_shape |= reverse_procedural
-            original_image_palette |= image_follows_palette
             particle_scanline_image |= image_during_transition
             moving_shapes = moving_shapes or motion
             shaped_singing = shaped_singing or shape_with_singing
     features = []
     if role_gradient:
         features.append('p07_scanline_role_gradient')
-    if shaped_palette:
-        features.append('p07_scanline_shape_palette')
     if rtl_band:
         features.append('p07_rtl_scanline_band')
     if shadow_band:
         features.append('p07_scanline_shadow')
-    if reverse_image:
-        features.append('p07_reverse_scanline_image')
-    if reverse_procedural_shape:
-        features.append('p07_reverse_procedural_scanline')
-    if original_image_palette:
-        features.append('p07_original_scanline_image_palette')
     if inline_role_fade:
         features.append('p07_inline_role_faded_scanline')
     if static_cell_scanline:
@@ -291,10 +251,6 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         features.append('p07_vertical_singing_scanline_palette')
     if shapes:
         features.append('p07_scanline_shape')
-    if zoom_shapes:
-        features.append('p07_zoom_scanline_shape')
-    if 'image' in shapes:
-        features.append('p07_scanline_image')
     if particle_scanline_image:
         features.append('p07_ruby_petal_scanline_image')
     if composed:

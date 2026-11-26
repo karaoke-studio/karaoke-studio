@@ -5020,6 +5020,13 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 - 条带回读不实施。§14.422 后同步回读等待 P50 为 **0ms**，sidecar 端只剩每帧约 **0.6ms** 的共享内存写入。§14.423 的整首导出中，Python 写 FFmpeg 管道的阻塞约占 **30%**。但 FFmpeg 用相同的背景缩放、合成与 `libx264 ultrafast` 处理透明 RGBA 时，整帧和 1920×300 条带的耗时相同（**13.19/13.17s**，3600 帧）。仅管道传入就达 **569 帧/秒（4.7GB/s）**。剩余瓶颈是 80% CPU 上限下 sidecar 与 FFmpeg 共同占用 CPU，不是像素量；条带化还需整首保守墨迹范围，有裁掉粒子或光晕的风险。
 - 临时面复用池不实施。临时探针统计原样式同段每帧约 **6.3** 次 `makeSurface`，共 **0.037ms/帧**，约占录制的 **0.5%**；Ganesh 已复用等尺寸临时纹理。探针未提交。
 
+### 14.425 P07 扫字线形态在所有颜色模式下生效（2026-11-26）
+
+- 用户报告：颜色模式为「默认颜色」并带「雪花飘散·镂空」扫字线特效时，Skia 把烈焰棒画成普通高亮带。原因是 IR 构建器只在逐行条件全部满足时声明 `p07_scanline_shape`：默认/提亮/跟随/角色模式要求无粒子、无描边闪烁、非下方注音等，而 native 只看该声明决定是否画形态；一行不满足就整场退回高亮带，满足一行又会给所有行画形态。
+- 现在横排行只要形态不是普通高亮带就声明并绘制形态，与 D2D 相同。删除不再参与判断的逐行条件和无人读取的声明（`p07_scanline_shape_palette`、`p07_zoom_scanline_shape`、`p07_reverse_procedural_scanline`、`p07_reverse_scanline_image`、`p07_original_scanline_image_palette`、`p07_scanline_image`），native 端的同名判断一并删去。
+- D2D GPU 探查：烈焰棒/水泡 × 六种颜色模式 × 12 种组合（粒子、Utopia、整字放大、渐入渐出、噪点入场、描边闪烁、反向、右至左、下方注音）共 144 组，严重差异由 **63** 组降为 **12** 组；剩下的全是下方注音行，普通高亮带同样存在，源于开启下方注音时上注音整体比 D2D 高 5–7px，与形态无关，另行处理。带上注音的 216 组中，用户原样组合（默认颜色 + 烈焰棒 + 雪花）一致。
+- 新增 `test_shaped_scanlines_apply_in_every_colour_mode_like_actual_gpu`（32 组，改前 26 组失败）。`test_subtitle_skia_scanline.py` 与 `test_subtitle_skia_lower_product.py` **453 通过**。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

@@ -273,29 +273,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool noteExit = source.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool particleScanlineImage = noteExit && source.entryAnimation == "petal"
             && resolved.scanlineShape == "image" && features.contains("p07_ruby_petal_scanline_image");
-        const bool shapePalette = features.contains("p07_scanline_shape_palette") && staticScanline
-            && !cfg.vertical && !cfg.rightToLeft && !hasLowerReading
-            && (!rubyScanline || resolved.scanlineMode != "role")
-            && (resolved.scanlineShape == "bubble" || resolved.scanlineShape == "flame");
-        const bool basicImage = staticScanline && !cfg.vertical && !cfg.rightToLeft && rubyGroups.isEmpty()
-            && source.karaokeAnimation == "none" && source.fxBursts.empty()
-            && resolved.scanlineShape == "image";
-        const bool originalImagePalette = basicImage && features.contains("p07_original_scanline_image_palette")
-            && resolved.scanlineImageColorLayers.isEmpty() && resolved.scanlineMode != "role";
-        const bool reverseImage = basicImage && features.contains("p07_reverse_scanline_image");
-        const bool reverseProceduralShape = features.contains("p07_reverse_procedural_scanline")
-            && staticScanline && !cfg.vertical && !cfg.rightToLeft && rubyGroups.isEmpty()
-            && source.karaokeAnimation == "none" && source.fxBursts.empty()
-            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble");
-        const bool zoomScanlineShape = features.contains("p07_zoom_scanline_shape") && utopiaSinging
-            && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !hasLowerReading
-            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble");
-        const bool solidShape = features.contains("p07_scanline_shape")
-            && (resolved.scanlineShape == "flame" || resolved.scanlineShape == "bubble"
-                || (resolved.scanlineShape == "image" && features.contains("p07_scanline_image")))
-            && (resolved.scanlineMode == "color" || shapePalette || originalImagePalette)
-            && (!source.wipeReverse || reverseImage || reverseProceduralShape)
-            && (!source.zoomPulseEnabled || zoomScanlineShape) && !source.strokeFlashEnabled;
+        // Like the GPU, every horizontal line draws its chosen shape in place of the band.
+        const bool solidShape = features.contains("p07_scanline_shape") && resolved.scanlineShape != "band";
         const bool movingUtopiaScanline = features.contains("p07_scanline_line_animation") && utopiaSinging;
         const bool movingVerticalSingingScanline = cfg.vertical && utopiaSinging
             && features.contains("p07_vertical_singing_scanline_line_animation");

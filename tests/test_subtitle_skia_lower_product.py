@@ -392,7 +392,7 @@ def test_reverse_flame_scanline_coexists_with_readings_on_another_row(binary, so
     base = ir_for(binary, (track, replace(style, scanline_enabled=False), resolve))
     first_final, second_final = active['skia_layout']['lines']
     assert any(group.get('lower') for group in first_final['ruby_groups']) and not second_final['ruby_groups']
-    assert 'p07_reverse_procedural_scanline' in active['required_features']
+    assert 'p07_scanline_shape' in active['required_features']
     assert 'p07_ruby_scanline' not in active['required_features']
     reference = None
     if sys.platform == 'win32':

@@ -1145,7 +1145,7 @@ def test_reverse_procedural_scanline_matches_actual_d2d_gpu(binary, project, sha
     assert any(np.count_nonzero((a[..., 3] > 16) & (b[..., 3] == 0)) > 100
                for a, b in zip(shaped, band_frames, strict=True))
     ir = ir_for(binary, (track, style), dpr=dpr)
-    assert 'p07_reverse_procedural_scanline' in ir['required_features']
+    assert 'p07_scanline_shape' in ir['required_features']
     gpu, raster = render_skia(binary, ir, times)
     assert_glow_parity(times, shaped, gpu, raster, ('reverse_procedural_scanline', shape), check_p00_edges=True)
 
@@ -1650,7 +1650,7 @@ def test_zoom_flame_scanline_with_glowing_ruby_matches_actual_d2d_gpu(binary, re
         refs.append([np.frombuffer(p, np.uint8).reshape(360*dpr, 640*dpr, 4) for p in pixels])
     for control in refs[1:]:
         assert any(np.count_nonzero(a != b) > 100 for a, b in zip(refs[0], control, strict=True))
-    assert 'p07_zoom_scanline_shape' in upper_ir(binary, (track, style), dpr)['required_features']
+    assert 'p07_scanline_shape' in upper_ir(binary, (track, style), dpr)['required_features']
     gpu, raster = glow_band_frames(binary, (track, style), dpr, times)
     assert_glow_parity(times, refs[0], gpu, raster, 'zoom_flame_scanline', check_p00_edges=True)
 
@@ -1855,7 +1855,7 @@ def test_scanline_image_replays_and_missing_asset_restores_band(binary, project,
     valid = ir_for(binary, (track, look), dpr=1.5)
     missing = ir_for(binary, (track, replace(look, scanline_image_path=str(tmp_path/'missing.gif'))), dpr=1.5)
     band_ir = ir_for(binary, (track, style), dpr=1.5)
-    assert 'p07_scanline_image' in valid['required_features']
+    assert 'p07_scanline_shape' in valid['required_features']
     assert valid['skia_layout']['lines'] == missing['skia_layout']['lines'] == band_ir['skia_layout']['lines']
     times = [199, 550, 650, 750, 2200]
     with SkiaRendererProcess(binary, selection=selection(target)) as process:
@@ -1933,4 +1933,27 @@ def test_pulse_scanline_shapes_compose_with_particles_and_entries_like_actual_gp
                     reverse_karaoke_anim='inherit', entry_lead_ms=500, **extra)
     track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
     case = SimpleNamespace(track=track, style=style, case_id=f'pulse-{shape}-{"-".join(extra.values())}')
+    assert_ruby_transition_gpu_parity(binary, case, (250, 400, 650, 950, 1250, 1600))
+
+
+# Every colour mode keeps its flame or bubble shape on a line with readings,
+# particles, transitions or a reverse/RTL front, as in Direct2D. Default colour
+# with a snow scanline effect used to draw the plain band instead.
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('shape', ['flame', 'bubble'])
+@pytest.mark.parametrize('mode', ['default', 'brighten', 'follow_before', 'role'])
+@pytest.mark.parametrize('extra', [{'scanline_effect': 'snow'}, {'sing_fx': 'feather'},
+                                   {'entry_anim': 'fade', 'exit_anim': 'fade'}, {'karaoke_anim': 'utopia'}],
+                         ids=['snow', 'feather', 'fade', 'utopia'])
+def test_shaped_scanlines_apply_in_every_colour_mode_like_actual_gpu(binary, reading, shape, mode, extra):
+    from types import SimpleNamespace
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    track, style = reading
+    style = replace(band(style), right_to_left=False, scanline_shape=shape, scanline_mode=mode,
+                    reverse_karaoke_anim='inherit', entry_lead_ms=500, **({'karaoke_anim': 'none'} | extra))
+    track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
+    ir = upper_ir(binary, (track, style), 1)
+    assert 'p07_scanline_shape' in ir['required_features']
+    case = SimpleNamespace(track=track, style=style, case_id=f'mode-{shape}-{mode}-{"-".join(map(str, extra.values()))}')
     assert_ruby_transition_gpu_parity(binary, case, (250, 400, 650, 950, 1250, 1600))
