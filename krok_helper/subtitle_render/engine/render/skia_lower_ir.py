@@ -2,12 +2,28 @@
 from krok_helper.subtitle_render.domain.gradient_path import rgba
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from krok_helper.subtitle_render.native.protocol import ruby_to_ir
-from .effects.metrics import ruby_glow_concentration_level, ruby_glow_radius, ruby_shadow_dx, ruby_shadow_dy
+from .effects.metrics import ruby_glow_concentration_level, ruby_glow_radius
 from .effects.fills import gradient_stops
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 
 
 _GRADIENT_MODES = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+
+
+def _shadow_offset(style, axis, sung):
+    """Lower reading shadow offset as the GPU resolves it.
+
+    A reading without its own offset uses the main text's offset unscaled
+    (the GPU does not scale it by the reading size, unlike the CPU painter).
+    """
+    own = getattr(style, f'ruby_shadow_offset_{axis}')
+    if sung or style.decoration_before_sync:
+        return int(own if own is not None else getattr(style, f'shadow_offset_{axis}'))
+    for value in (getattr(style, f'ruby_shadow_before_offset_{axis}'), own,
+                  getattr(style, f'shadow_before_offset_{axis}')):
+        if value is not None:
+            return int(value)
+    return int(getattr(style, f'shadow_offset_{axis}'))
 
 
 def _split_stops(fill):
@@ -99,7 +115,7 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
             glow[phase] = {'radius': radius, 'color': color,
                            'concentration': ruby_glow_concentration_level(style, after=sung)}
         elif kind == 'shadow':
-            shadow[phase] = {'offset': [ruby_shadow_dx(style, after=sung), ruby_shadow_dy(style, after=sung)],
+            shadow[phase] = {'offset': [_shadow_offset(style, 'x', sung), _shadow_offset(style, 'y', sung)],
                              'color': color}
         else:
             raise ValueError('Skia 下方注音装饰类型无效')

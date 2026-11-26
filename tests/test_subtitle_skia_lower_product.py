@@ -883,3 +883,18 @@ def test_independent_lower_alpha_colors_match_d2d(binary, independent, semantics
         # Negative intervals may overlap adjacent half-alpha glyph edges.
         # Their source-over alpha exceeds 128; isolated interiors keep 128.
         assert np.count_nonzero(mask & (p[lo:hi,:,3]==128))>200
+
+
+# A lower reading without its own shadow offset uses the main text's offset
+# unscaled, as in Direct2D (the CPU painter scales it by the reading size).
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+@pytest.mark.parametrize('sync', [True, False], ids=['synced', 'split'])
+def test_lower_shadow_inherits_the_unscaled_main_offset_like_actual_d2d_gpu(binary, application, tmp_path, sync):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+
+    case = next(c for c in build_cases(tmp_path) if c.case_id == 'lower_ruby')
+    style = replace(case.style, entry_anim='none', exit_anim='none', karaoke_anim='none',
+                    decoration_kind='shadow', decoration_kind_before='shadow', decoration_before_sync=sync,
+                    shadow_offset_x=12, shadow_offset_y=10, shadow_before_offset_x=-9, shadow_before_offset_y=8)
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), (1550, 2600, 4110, 4280))
