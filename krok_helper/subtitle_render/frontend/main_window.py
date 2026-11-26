@@ -9718,6 +9718,7 @@ class SubtitleRenderWindow(QWidget):
                     self._skia_backend_check.blockSignals(previous)
                 self._show_gpu_preview_fallback(str(error))
                 return
+        self._property_panel.set_skia_backend_enabled(enabled)
         gpu_controls_visible = sys.platform == "win32" or enabled
         self._gpu_preview_check.setVisible(gpu_controls_visible)
         self._gpu_export_check.setVisible(gpu_controls_visible)

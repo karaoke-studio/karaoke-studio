@@ -5412,8 +5412,17 @@ class PropertyPanel(QWidget):
         self._glow_after_radius_field.setVisible(is_decoration and is_glow)
         self._glow_concentration_field.setVisible(is_decoration and is_glow)
         self._glow_strength_field.setVisible(
-            is_decoration and is_glow and skia_requested()
+            is_decoration and is_glow and self._skia_backend_active()
         )
+
+    def _skia_backend_active(self) -> bool:
+        enabled = getattr(self, "_skia_backend_enabled", None)
+        return skia_requested() if enabled is None else enabled
+
+    def set_skia_backend_enabled(self, enabled: bool) -> None:
+        """导出页「使用 Skia 后端」开关变化时同步：发光强度只在 Skia 下显示。"""
+        self._skia_backend_enabled = bool(enabled)
+        self._sync_decoration_visibility()
 
     def _sync_color_subject_style_controls(self) -> None:
         if not hasattr(self, "_decoration_type_combo"):

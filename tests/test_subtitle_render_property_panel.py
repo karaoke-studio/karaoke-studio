@@ -7086,6 +7086,11 @@ def test_property_panel_glow_strength_is_skia_only(qapp, monkeypatch, skia):
     assert not panel._glow_concentration_field.isHidden()
     assert panel._glow_strength_field.isHidden() is (not skia)
     assert panel._glow_strength_spin.value() == 100
+    # 导出页「使用 Skia 后端」开关在运行中切换，面板跟随显示/隐藏。
+    panel.set_skia_backend_enabled(not skia)
+    assert panel._glow_strength_field.isHidden() is skia
+    panel.set_skia_backend_enabled(skia)
+    assert panel._glow_strength_field.isHidden() is (not skia)
 
     panel._glow_strength_spin.setValue(250)
     assert emitted[-1].glow_strength_percent == 250
