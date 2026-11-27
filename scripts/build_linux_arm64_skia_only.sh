@@ -71,11 +71,11 @@ show_qt_notice() {
  1. 打开网页 https://www.qt.io/development/download-qt-installer-oss
     下载并安装 Qt 在线安装器（Qt Online Installer）；
  2. 通过安装器安装 Qt 6.11.0 桌面版（Desktop，Linux gcc_arm64），
-    并勾选 qtbase 与 qtdeclarative 组件（预览模块依赖 Qt Quick）；
+    在安装器中必须选择自定义安装，在安装器右上角勾选archive才能看见6.11.0版本
  3. 安装 Qt 私有开发头文件：
         sudo apt install qt6-base-private-dev
 
-安装完成后，用 --qt-root 参数或 QT_ROOT 环境变量指定 SDK 根目录：
+Qt默认安装路径可以自动识别，若安装在别处使用 --qt-root 参数或 QT_ROOT 环境变量指定 SDK 根目录：
     bash scripts/build_linux_arm64_skia_only.sh --qt-root ~/Qt/6.11.0/gcc_arm64
 
 常用构建模式：
@@ -146,14 +146,14 @@ usage() {
   --jobs <N>       并行任务数；也可用环境变量 JOBS（默认 nproc）
   --clean          清空 ~/.cache/krok-helper 下全部缓存后从零重建
                    （LLVM 安装包与解压目录、gn/ninja、Skia 源码 skia-deps、
-                   构建产物全部删除后重新下载/拉取/编译；同时清理上一版
-                   脚本遗留的 ~/.cache/krok-studio）
+                   构建产物全部删除后重新下载/拉取/编译)
+                  
   -h, --help       显示帮助
 
 构建模式:
   （默认，不带参数） 正常模式：复用 ~/.cache/krok-helper 中已解压的 LLVM 与
-                   既有缓存，跳过下载/解压 tar.xz；若存在旧版遗留的
-                   ~/.cache/krok-studio 会自动迁回，避免重复下载
+                   既有缓存，跳过下载/解压 tar.xz
+                  
 
 环境变量:
   QT_ROOT / JOBS / CLEAN / SMOKE_FONT
