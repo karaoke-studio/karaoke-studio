@@ -18,6 +18,11 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     compact_property_control,
     property_section,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.timing_help import (
+    TIMING_HELP_SPECS,
+    TimingHelpButton,
+    install_timing_help_hover,
+)
 from krok_helper.subtitle_render.frontend.widgets.workspace_switcher import (
     WorkspaceSwitcher,
 )
@@ -91,6 +96,7 @@ class TimingPropertyPageBuilder:
         layout.addLayout(scope_row)
 
         grid = ResponsiveFieldGrid(section, min_column_width=130, max_columns=4)
+        host._timing_help_buttons = {}
 
         host._line_lead_spin = self._add_spin(
             grid,
@@ -131,7 +137,11 @@ class TimingPropertyPageBuilder:
                 section_ending_mode=host._section_ending_combo.currentData()
             )
         )
-        grid.add_field("段落结束", host._section_ending_combo)
+        grid.add_field(
+            "段落结束",
+            host._section_ending_combo,
+            label_suffix=self._make_help_button("section_ending_mode", section),
+        )
 
         host._lane_gap_spin = self._add_spin(
             grid,
@@ -281,15 +291,23 @@ class TimingPropertyPageBuilder:
         )
         host._n3_style_row.addWidget(host._auto_fill_section_time_check)
 
-        for tooltip_button in (
-            host._sync_entry_check,
-            host._sync_ending_check,
-            host._sync_each_page_check,
-            host._ruby_main_reading_units_check,
-            host._allow_animation_overlap_check,
-            host._auto_fill_section_time_check,
+        host._timing_help_hover_filters = {}
+        for tooltip_button, help_key in (
+            (host._sync_entry_check, "sync_entry"),
+            (host._sync_ending_check, "sync_ending"),
+            (host._sync_each_page_check, "sync_each_page"),
+            (host._ruby_main_reading_units_check, "ruby_main_progress_mode"),
+            (
+                host._allow_animation_overlap_check,
+                "allow_entry_exit_animation_overlap",
+            ),
+            (host._auto_fill_section_time_check, "auto_fill_section_time"),
         ):
             self._tooltip_installer(tooltip_button, show_delay=300)
+            host._timing_help_hover_filters[help_key] = install_timing_help_hover(
+                tooltip_button,
+                help_key,
+            )
         host._n3_style_row.addStretch(1)
         layout.addLayout(host._n3_style_row)
         # 跟随主字幕时整体只读的控件清单（轴下拉与跟随开关不在此列）。
@@ -352,6 +370,14 @@ class TimingPropertyPageBuilder:
             host._allow_inter_page_line_overlap_check,
             show_delay=300,
         )
+        hover_filters = getattr(host, "_timing_help_hover_filters", None)
+        if not isinstance(hover_filters, dict):
+            hover_filters = {}
+            host._timing_help_hover_filters = hover_filters
+        hover_filters["allow_inter_page_line_overlap"] = install_timing_help_hover(
+            host._allow_inter_page_line_overlap_check,
+            "allow_inter_page_line_overlap",
+        )
 
         host._overlap_fallback_switch = WorkspaceSwitcher(section)
         host._overlap_fallback_switch.setAccessibleName("残余冲突处理")
@@ -376,6 +402,14 @@ class TimingPropertyPageBuilder:
         host._overlap_fallback_switch.currentItemChanged.connect(
             lambda mode: host._update_style(overlap_fallback_mode=mode)
         )
+        fallback_hover = install_timing_help_hover(
+            host._overlap_fallback_switch,
+            "overlap_fallback_mode",
+        )
+        host._overlap_fallback_switch.currentItemChanged.connect(
+            lambda _mode, flt=fallback_hover: flt.hide_popover()
+        )
+        hover_filters["overlap_fallback_mode"] = fallback_hover
         # 勾选「启用行间重叠」后不存在跨页避让，收尾策略随之失效。
         host._allow_inter_page_line_overlap_check.toggled.connect(
             lambda checked: host._overlap_fallback_switch.setEnabled(not checked)
@@ -406,6 +440,19 @@ class TimingPropertyPageBuilder:
         )
         return section
 
+    def _make_help_button(
+        self,
+        help_key: str,
+        parent: QWidget,
+    ) -> TimingHelpButton | None:
+        if help_key not in TIMING_HELP_SPECS:
+            return None
+        button = TimingHelpButton(help_key, parent)
+        buttons = getattr(self._host, "_timing_help_buttons", None)
+        if isinstance(buttons, dict):
+            buttons[help_key] = button
+        return button
+
     def _add_spin(
         self,
         grid: ResponsiveFieldGrid,
@@ -420,5 +467,9 @@ class TimingPropertyPageBuilder:
                 **{field: value}
             )
         )
-        grid.add_field(label, spin)
+        grid.add_field(
+            label,
+            spin,
+            label_suffix=self._make_help_button(model_field, grid),
+        )
         return spin

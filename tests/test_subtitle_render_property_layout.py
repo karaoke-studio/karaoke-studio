@@ -29,6 +29,20 @@ def test_property_field_preserves_label_control_and_style_hooks(qapp) -> None:
     assert control.parentWidget() is field
 
 
+def test_property_field_supports_inline_label_suffix(qapp) -> None:
+    control = QLineEdit()
+    suffix = QWidget()
+    suffix.setObjectName("InlineHelpBadge")
+
+    field = property_field("提前入场", control, label_suffix=suffix)
+
+    assert field.objectName() == "SubtitlePropertyField"
+    assert field.findChild(QLabel).text() == "提前入场"
+    assert field.findChild(QWidget, "InlineHelpBadge") is suffix
+    assert suffix.parentWidget() is field
+    assert control.parentWidget() is field
+
+
 def test_compact_property_control_preserves_size_focus_and_width_policy(qapp) -> None:
     control = QLineEdit()
 

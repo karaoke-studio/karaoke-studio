@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+from PyQt6.QtCore import QEvent, QPoint
+from PyQt6.QtGui import QHelpEvent
+
+from krok_helper.subtitle_render.frontend.properties.controls.timing_help import (
+    TIMING_HELP_SPECS,
+    TimingHelpButton,
+    TimingHelpCanvas,
+    TimingHelpHoverFilter,
+)
 from krok_helper.subtitle_render.frontend.properties.pages.timing import (
     TimingPropertyPageBuilder,
 )
@@ -151,3 +160,130 @@ def test_timing_overlap_builder_routes_switch_and_fallback_mode(qapp) -> None:
     assert host._overlap_fallback_switch.isEnabled() is False
     host._allow_inter_page_line_overlap_check.setChecked(False)
     assert host._overlap_fallback_switch.isEnabled() is True
+
+
+def test_timing_property_builder_attaches_help_badges_to_all_eight_fields(qapp) -> None:
+    host = _Host()
+    builder = TimingPropertyPageBuilder(
+        host,
+        tooltip_installer=lambda *_args, **_kwargs: None,
+    )
+    section = builder.make_section()
+
+    expected_keys = {
+        "line_lead_in_ms",
+        "line_tail_ms",
+        "timing_offset_ms",
+        "section_ending_mode",
+        "line_lane_gap_ms",
+        "line_protect_ms",
+        "entry_anim_protect_ms",
+        "exit_anim_protect_ms",
+    }
+    assert set(host._timing_help_buttons) == expected_keys
+    assert all(isinstance(btn, TimingHelpButton) for btn in host._timing_help_buttons.values())
+    assert all(btn.isAncestorOf(btn) and section.isAncestorOf(btn) for btn in host._timing_help_buttons.values())
+
+
+def test_timing_help_canvases_render_and_animate_across_phases(qapp) -> None:
+    for key in TIMING_HELP_SPECS:
+        canvas = TimingHelpCanvas(key)
+        canvas.set_phase(0.05)
+        img_a = canvas.grab().toImage()
+        canvas.set_phase(0.60)
+        img_b = canvas.grab().toImage()
+        assert not img_a.isNull()
+        assert not img_b.isNull()
+        assert img_a != img_b, f"Animation for {key} should visibly change across phases"
+
+
+def test_timing_help_button_popover_starts_and_stops_animation(qapp) -> None:
+    host = _Host()
+    builder = TimingPropertyPageBuilder(
+        host,
+        tooltip_installer=lambda *_args, **_kwargs: None,
+    )
+    section = builder.make_section()
+    section.show()
+    qapp.processEvents()
+
+    btn = host._timing_help_buttons["line_lead_in_ms"]
+    idle_img = btn.grab().toImage()
+
+    btn.show_popover()
+    qapp.processEvents()
+    pop = btn.popover()
+    assert pop is not None
+    # Parentless popup avoids host stylesheet cascades that paint a second outer frame.
+    assert pop.parent() is None
+    assert pop.isVisible()
+    assert pop.canvas.is_animating()
+    assert btn._is_highlighted() is True
+    active_img = btn.grab().toImage()
+    assert active_img != idle_img
+
+    btn.hide_popover()
+    qapp.processEvents()
+    assert not pop.isVisible()
+    assert not pop.canvas.is_animating()
+    assert btn._is_highlighted() is False
+    restored_img = btn.grab().toImage()
+    assert restored_img == idle_img
+
+    section.close()
+    section.deleteLater()
+    qapp.processEvents()
+
+
+def test_timing_checkboxes_and_overlap_controls_attach_direct_hover_popovers(qapp) -> None:
+    host = _Host()
+    builder = TimingPropertyPageBuilder(
+        host,
+        tooltip_installer=lambda *_args, **_kwargs: None,
+    )
+    section = builder.make_section()
+    overlap = builder.make_overlap_section()
+    section.show()
+    overlap.show()
+    qapp.processEvents()
+
+    expected_hover_keys = {
+        "sync_entry",
+        "sync_ending",
+        "sync_each_page",
+        "ruby_main_progress_mode",
+        "allow_entry_exit_animation_overlap",
+        "auto_fill_section_time",
+        "allow_inter_page_line_overlap",
+        "overlap_fallback_mode",
+    }
+    assert set(host._timing_help_hover_filters) == expected_hover_keys
+    assert all(
+        isinstance(flt, TimingHelpHoverFilter)
+        for flt in host._timing_help_hover_filters.values()
+    )
+
+    flt = host._timing_help_hover_filters["sync_entry"]
+    # Native tooltip events are intercepted so only the animated card displays.
+    help_ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(4, 4), QPoint(10, 10))
+    assert flt.eventFilter(host._sync_entry_check, help_ev) is True
+    assert help_ev.isAccepted()
+
+    flt.show_popover()
+    qapp.processEvents()
+    pop = flt.popover()
+    assert pop is not None
+    assert pop.parent() is None
+    assert pop.isVisible()
+    assert pop.canvas.is_animating()
+
+    flt.hide_popover()
+    qapp.processEvents()
+    assert not pop.isVisible()
+    assert not pop.canvas.is_animating()
+
+    section.close()
+    overlap.close()
+    section.deleteLater()
+    overlap.deleteLater()
+    qapp.processEvents()

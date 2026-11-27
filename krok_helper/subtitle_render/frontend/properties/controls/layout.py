@@ -37,13 +37,19 @@ _COMPACT_CONTROL_HEIGHT = 32
 
 
 def property_field(
-    label_text: str, control: QWidget, *, wrap_label: bool = False
+    label_text: str,
+    control: QWidget,
+    *,
+    wrap_label: bool = False,
+    label_suffix: Optional[QWidget] = None,
 ) -> QWidget:
     """Wrap one property control with its standard vertical label.
 
     ``wrap_label`` lets a label that enumerates several controls (and is
     therefore long) break onto a second line instead of becoming the field's
     minimum width, which would keep a responsive grid from narrowing.
+    ``label_suffix`` optionally places a compact inline widget (such as a help
+    badge) immediately after the label text.
     """
     box = QWidget()
     box.setObjectName("SubtitlePropertyField")
@@ -55,7 +61,17 @@ def property_field(
     label.setWordWrap(wrap_label)
     themed(label, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
     control.setParent(box)
-    layout.addWidget(label)
+    if label_suffix is None:
+        layout.addWidget(label)
+    else:
+        label_suffix.setParent(box)
+        label_row = QHBoxLayout()
+        label_row.setContentsMargins(0, 0, 0, 0)
+        label_row.setSpacing(4)
+        label_row.addWidget(label, 0, Qt.AlignmentFlag.AlignVCenter)
+        label_row.addWidget(label_suffix, 0, Qt.AlignmentFlag.AlignVCenter)
+        label_row.addStretch(1)
+        layout.addLayout(label_row)
     layout.addWidget(control)
     return box
 
@@ -371,8 +387,14 @@ class ResponsiveFieldGrid(QWidget):
         self._grid.setVerticalSpacing(8)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-    def add_field(self, label_text: str, control: QWidget) -> None:
-        self.add_widget(property_field(label_text, control))
+    def add_field(
+        self,
+        label_text: str,
+        control: QWidget,
+        *,
+        label_suffix: Optional[QWidget] = None,
+    ) -> None:
+        self.add_widget(property_field(label_text, control, label_suffix=label_suffix))
 
     def add_widget(self, widget: QWidget) -> None:
         widget.setParent(self)
