@@ -430,3 +430,32 @@ def test_vp9_decoder_workaround_reopens_once_and_preserves_transport(codec_name)
         assert len(player.sources) == 2
     else:
         assert not player.sources
+
+
+def test_interlaced_media_forwards_flag_to_preview_proxy_preparation(
+    make_controller, monkeypatch, tmp_path
+):
+    from krok_helper.subtitle_render.frontend.preview import preview_media
+
+    ctrl = make_controller()
+    media = tmp_path / "stage_1080i.mp4"
+    media.write_bytes(b"fake-video")
+    prepared_calls: list[tuple[Path, object, bool]] = []
+    prep_calls: list[tuple[Path, object, bool]] = []
+
+    def fake_prepared(path, quality="high", *, interlaced=False):
+        prepared_calls.append((Path(path), quality, bool(interlaced)))
+        return None
+
+    def fake_preparation(path, quality="high", *, interlaced=False):
+        prep_calls.append((Path(path), quality, bool(interlaced)))
+        return None
+
+    monkeypatch.setattr(preview_media, "prepared_qt_playback_source", fake_prepared)
+    monkeypatch.setattr(preview_media, "qt_playback_preparation", fake_preparation)
+
+    ctrl.set_media(media, interlaced=True)
+    ctrl.set_preview_quality("low")
+
+    assert prepared_calls == [(media, "high", True), (media, "low", True)]
+    assert prep_calls == [(media, "high", True), (media, "low", True)]

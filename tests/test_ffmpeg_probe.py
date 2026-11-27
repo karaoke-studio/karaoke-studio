@@ -129,3 +129,39 @@ def test_probe_media_tolerates_na_video_fps(monkeypatch, tmp_path):
     assert info.video_width == 640
     assert info.video_height == 480
     assert info.video_fps is None
+    assert info.video_field_order is None
+    assert info.is_interlaced is False
+
+
+@pytest.mark.parametrize(
+    ("field_order", "expected_order", "expected_interlaced"),
+    [
+        ("tt", "tt", True),
+        ("bb", "bb", True),
+        ("tb", "tb", True),
+        ("bt", "bt", True),
+        ("progressive", "progressive", False),
+        ("unknown", "unknown", False),
+        ("N/A", None, False),
+        (None, None, False),
+    ],
+)
+def test_probe_media_extracts_field_order_and_interlaced_flag(
+    monkeypatch, tmp_path, field_order, expected_order, expected_interlaced
+):
+    stream: dict[str, object] = {
+        "codec_type": "video",
+        "width": 1920,
+        "height": 1080,
+        "r_frame_rate": "30000/1001",
+    }
+    if field_order is not None:
+        stream["field_order"] = field_order
+    _patch_ffprobe(
+        monkeypatch,
+        {"format": {"duration": "10.0"}, "streams": [stream]},
+    )
+
+    info = ffmpeg_mod.probe_media("ffprobe", tmp_path / "demo.mp4")
+    assert info.video_field_order == expected_order
+    assert info.is_interlaced is expected_interlaced

@@ -177,10 +177,16 @@ class _RollProxyPreparer(QObject):
         segment: "RollSegmentRuntime",
         path: Path,
         quality: str,
+        *,
+        interlaced: bool = False,
     ) -> None:
         def work() -> None:
             try:
-                prepared = qt_playback_source(path, quality)
+                prepared = (
+                    qt_playback_source(path, quality, interlaced=True)
+                    if interlaced
+                    else qt_playback_source(path, quality)
+                )
             except Exception:  # noqa: BLE001 - 后台准备失败回退源文件
                 prepared = None
             try:
@@ -373,6 +379,8 @@ class RollSegmentFrameSource(QObject):
                 continue
             if old_config.source_has_audio != normalized.source_has_audio:
                 continue
+            if old_config.source_interlaced != normalized.source_interlaced:
+                continue
             old.config = normalized
             old.start_ms = start_ms
             old.end_ms = end_ms
@@ -401,20 +409,37 @@ class RollSegmentFrameSource(QObject):
         source = segment.config.source
         if source.kind == "video" and source.path:
             source_path = Path(str(source.path))
+            is_interlaced = bool(segment.config.source_interlaced)
             protect_preview_source(source_path)
-            playback_path = prepared_qt_playback_source(
-                source_path,
-                self._preview_quality,
+            playback_path = (
+                prepared_qt_playback_source(
+                    source_path,
+                    self._preview_quality,
+                    interlaced=True,
+                )
+                if is_interlaced
+                else prepared_qt_playback_source(
+                    source_path,
+                    self._preview_quality,
+                )
             )
             if playback_path is None:
                 # 播放器只接收已准备好的路径；缓存缺失时回到后台准备，
                 # 绝不在 GUI 线程同步跑 FFmpeg。
                 segment.proxy_pending = True
-                self._proxy_preparer.prepare(
-                    segment,
-                    source_path,
-                    self._preview_quality,
-                )
+                if is_interlaced:
+                    self._proxy_preparer.prepare(
+                        segment,
+                        source_path,
+                        self._preview_quality,
+                        interlaced=True,
+                    )
+                else:
+                    self._proxy_preparer.prepare(
+                        segment,
+                        source_path,
+                        self._preview_quality,
+                    )
             else:
                 segment.video_playback_path = playback_path
                 self._ensure_video_media(segment, playback_path)

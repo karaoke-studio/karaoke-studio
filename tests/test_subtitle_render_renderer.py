@@ -362,6 +362,61 @@ def test_background_filter_video_is_always_contain(tmp_path):
     assert "force_original_aspect_ratio=decrease" in graph
     assert "pad=320:180" in graph
     assert "tpad=stop_mode=add:stop=-1:color=black,trim=" in graph
+    assert "bwdif" not in graph
+
+
+def test_background_filter_interlaced_video_inserts_bwdif_before_scale(tmp_path):
+    """仅隔行背景视频在 scale 前自动插入 bwdif，并按目标帧率选择单倍帧/倍帧。"""
+    same_fps_job = replace(
+        _job(tmp_path, include_audio=False),
+        fps=29.97,
+        main_background_interlaced=True,
+        main_background_source_fps=30000 / 1001,
+    )
+    same_graph = _filter_graph(build_render_command("ffmpeg", same_fps_job))
+    assert "[1:v:0]bwdif=mode=0:parity=-1:deint=1,scale=320:180" in same_graph
+
+    double_fps_job = replace(same_fps_job, fps=60)
+    double_graph = _filter_graph(build_render_command("ffmpeg", double_fps_job))
+    assert "[1:v:0]bwdif=mode=1:parity=-1:deint=1,scale=320:180" in double_graph
+
+
+def test_roll_background_graph_deinterlaces_interlaced_main_and_roll_video(tmp_path):
+    """前黑/后黑视频段与主段：逐行不动，隔行在 fill/scale 前自动插入 bwdif。"""
+    from krok_helper.subtitle_render.domain.roll import RollSegmentConfig
+
+    intro = tmp_path / "intro.mp4"
+    intro.write_bytes(b"fake")
+    base_job = _job(tmp_path, include_audio=False)
+
+    progressive_job = replace(
+        base_job,
+        fps=30,
+        pre_roll=RollSegmentConfig(
+            enabled=True,
+            duration_ms=1000,
+            source=BackgroundSource(kind="video", path=str(intro)),
+            source_interlaced=False,
+        ),
+    )
+    progressive_graph = _filter_graph(build_render_command("ffmpeg", progressive_job))
+    assert "bwdif" not in progressive_graph
+
+    interlaced_job = replace(
+        progressive_job,
+        fps=60,
+        main_background_interlaced=True,
+        main_background_source_fps=30000 / 1001,
+        pre_roll=RollSegmentConfig(
+            enabled=True,
+            duration_ms=1000,
+            source=BackgroundSource(kind="video", path=str(intro)),
+            source_interlaced=True,
+        ),
+    )
+    interlaced_graph = _filter_graph(build_render_command("ffmpeg", interlaced_job))
+    assert "[2:v:0]bwdif=mode=0:parity=-1:deint=1[2_v_0d];[2_v_0d]scale=" in interlaced_graph
+    assert "[1:v:0]bwdif=mode=1:parity=-1:deint=1,scale=320:180" in interlaced_graph
 
 
 def test_background_filter_image_fit_cover_and_contain(tmp_path):

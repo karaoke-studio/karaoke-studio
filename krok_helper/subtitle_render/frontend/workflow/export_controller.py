@@ -62,6 +62,8 @@ class ExportJobInputs:
     main_media_end_ms: int | None = None
     main_audio_end_ms: int | None = None
     main_background_has_audio: bool = False
+    main_background_interlaced: bool = False
+    main_background_source_fps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +135,8 @@ class ExportJobController:
             main_media_end_ms=inputs.main_media_end_ms,
             main_audio_end_ms=inputs.main_audio_end_ms,
             main_background_has_audio=inputs.main_background_has_audio,
+            main_background_interlaced=inputs.main_background_interlaced,
+            main_background_source_fps=inputs.main_background_source_fps,
             preset=inputs.preset,
             codec=inputs.codec,
             output_format=output_format,

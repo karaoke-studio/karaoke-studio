@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isfinite
 import re
 from pathlib import Path
 
@@ -116,6 +117,42 @@ def background_resample_filter(job: RenderJob, kind: str) -> str:
     return f"fps={rate}:round=up" if kind == "image_sequence" else f"fps={rate}"
 
 
+def deinterlace_video_filter(
+    *,
+    source_fps: float | None = None,
+    target_fps: int | float | None = None,
+) -> str:
+    """Return an FFmpeg ``bwdif`` filter for an interlaced video source.
+
+    仅在已确认源视频为隔行扫描时插入。导出目标帧率显著高于源帧率
+    （如 29.97i 源以 59.94/60fps 导出）时用 ``mode=1``（每场出一帧）
+    还原完整时间流畅度；否则用 ``mode=0``（每帧出一帧）省算力。
+    ``parity=-1`` 自动尊重帧场序，``deint=1`` 对混合流里的逐行帧无损透传。
+    """
+    mode = 0
+    if source_fps is not None and target_fps is not None:
+        try:
+            src = float(source_fps)
+            dst = float(target_fps)
+        except (TypeError, ValueError):
+            src, dst = 0.0, 0.0
+        if isfinite(src) and isfinite(dst) and src > 0 and dst >= src * 1.5:
+            mode = 1
+    return f"bwdif=mode={mode}:parity=-1:deint=1"
+
+
+def _main_video_deinterlace_prefix(job: RenderJob, source: BackgroundSource) -> str:
+    if source.kind != "video" or not job.main_background_interlaced:
+        return ""
+    return (
+        deinterlace_video_filter(
+            source_fps=job.main_background_source_fps,
+            target_fps=job.fps,
+        )
+        + ","
+    )
+
+
 def background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
     """Build the background scaling chain with preview-equivalent semantics."""
 
@@ -127,6 +164,7 @@ def background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
     tail = "tpad=stop_mode=add:stop=-1:color=black," if source.kind == "video" else ""
     cover = source.kind in {"image", "image_sequence"} and source.image_fit == "cover"
     resample = background_resample_filter(job, source.kind)
+    deint = _main_video_deinterlace_prefix(job, source)
     if cover:
         return (
             f"[1:v:0]scale={job.width}:{job.height}"
@@ -136,7 +174,7 @@ def background_scale_chain(job: RenderJob, duration_seconds: float) -> str:
             "setpts=PTS-STARTPTS[bg];"
         )
     return (
-        f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
+        f"[1:v:0]{deint}scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
         f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"{resample},{tail}trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
     )
@@ -337,7 +375,13 @@ def _roll_segment_chain(
 
     normalized = config.normalized()
     source = normalized.source
-    graph = _roll_fill_chain(in_label, f"{in_label}f", job, config)
+    fill_in_label = in_label
+    deint_prefix = ""
+    if source.kind == "video" and normalized.source_interlaced:
+        deint_label = f"{in_label.replace(':', '_')}d"
+        deint_prefix = f"[{in_label}]{deinterlace_video_filter()}[{deint_label}];"
+        fill_in_label = deint_label
+    graph = deint_prefix + _roll_fill_chain(fill_in_label, f"{in_label}f", job, config)
     chain = f"{background_resample_filter(job, source.kind)},format=yuv420p"
     if prepend_clone_ms > 0:
         chain += f",tpad=start_mode=clone:start_duration={_seconds(prepend_clone_ms)}"
@@ -384,12 +428,13 @@ def _roll_main_chain(
 
     source = resolved_background(job)
     cover = source.kind in {"image", "image_sequence"} and source.image_fit == "cover"
+    deint = _main_video_deinterlace_prefix(job, source)
     scale = (
         f"scale={job.width}:{job.height}"
         ":force_original_aspect_ratio=increase:force_divisible_by=2,"
         f"crop={job.width}:{job.height}"
         if cover
-        else f"scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
+        else f"{deint}scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
         f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black"
     )
     chain = f"{scale},{background_resample_filter(job, source.kind)},format=yuv420p"

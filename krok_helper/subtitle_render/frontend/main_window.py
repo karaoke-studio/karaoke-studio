@@ -4766,6 +4766,7 @@ class SubtitleRenderWindow(QWidget):
             source,
             source_duration_ms=int(getattr(result, "source_duration_ms", 0) or 0),
             source_has_audio=bool(getattr(result, "source_has_audio", False)),
+            source_interlaced=bool(getattr(result, "source_interlaced", False)),
             source_width=int(getattr(result, "source_width", 0) or 0),
             source_height=int(getattr(result, "source_height", 0) or 0),
         )
@@ -4813,6 +4814,7 @@ class SubtitleRenderWindow(QWidget):
                 source,
                 source_duration_ms=int(getattr(result, "source_duration_ms", 0) or 0),
                 source_has_audio=bool(getattr(result, "source_has_audio", False)),
+                source_interlaced=bool(getattr(result, "source_interlaced", False)),
                 source_width=int(getattr(result, "source_width", 0) or 0),
                 source_height=int(getattr(result, "source_height", 0) or 0),
             )
@@ -4846,6 +4848,7 @@ class SubtitleRenderWindow(QWidget):
         *,
         source_duration_ms: int,
         source_has_audio: bool,
+        source_interlaced: bool = False,
         source_width: int,
         source_height: int,
     ) -> None:
@@ -4859,6 +4862,7 @@ class SubtitleRenderWindow(QWidget):
                 source=source,
                 source_duration_ms=max(source_duration_ms, 0),
                 source_has_audio=source_has_audio,
+                source_interlaced=bool(source_interlaced),
                 source_width=max(source_width, 0),
                 source_height=max(source_height, 0),
             ).normalized(),
@@ -6504,9 +6508,15 @@ class SubtitleRenderWindow(QWidget):
             self._audio_info = None
         if self._playback is not None:
             # 单播放器：视频（无论是否含音频）整体交给共享 controller（同时出视频 + 音频）。
-            self._transport_bar.set_audio_source(path)
+            if info.is_interlaced:
+                self._transport_bar.set_audio_source(path, interlaced=True)
+            else:
+                self._transport_bar.set_audio_source(path)
         elif info.audio_streams > 0:
-            self._transport_bar.set_audio_source(path)
+            if info.is_interlaced:
+                self._transport_bar.set_audio_source(path, interlaced=True)
+            else:
+                self._transport_bar.set_audio_source(path)
         else:
             self._transport_bar.set_audio_source(None)
         self._sync_audio_action_enabled()
@@ -12390,6 +12400,14 @@ class SubtitleRenderWindow(QWidget):
                 ),
                 main_background_has_audio=bool(
                     self._video_info is not None and self._video_info.audio_streams > 0
+                ),
+                main_background_interlaced=bool(
+                    self._video_info is not None and self._video_info.is_interlaced
+                ),
+                main_background_source_fps=(
+                    self._video_info.video_fps
+                    if self._video_info is not None
+                    else None
                 ),
             )
         )

@@ -89,10 +89,13 @@ def purge_preview_cache(keep: tuple[Path, ...] | set[Path] = ()) -> None:
     protected = set(keep)
     for source in tuple(_ACTIVE_PREVIEW_SOURCES):
         for quality in ("low", "medium", "high"):
-            try:
-                protected.add(_playback_target_for(source, quality))
-            except (OSError, ValueError, TypeError):
-                continue
+            for is_interlaced in (False, True):
+                try:
+                    protected.add(
+                        _playback_target_for(source, quality, interlaced=is_interlaced)
+                    )
+                except (OSError, ValueError, TypeError):
+                    continue
     try:
         entries = list(_preview_cache_dir().iterdir())
     except OSError:
@@ -111,24 +114,31 @@ def purge_preview_cache(keep: tuple[Path, ...] | set[Path] = ()) -> None:
 
 
 def qt_playback_source(path: Path, preview_quality: object = "high", *,
-                       progress_callback=None, duration_seconds: float = 0) -> Path:
+                       progress_callback=None, duration_seconds: float = 0,
+                       interlaced: bool = False) -> Path:
     """Coalesce concurrent requests for the same preview into one preparation."""
-    key = (str(Path(path).resolve()), normalize_preview_media_quality(preview_quality))
+    key = (
+        str(Path(path).resolve()),
+        normalize_preview_media_quality(preview_quality),
+        bool(interlaced),
+    )
     with _PREPARATION_LOCK_GUARD:
         lock = _PREPARATION_LOCKS.setdefault(key, threading.Lock())
     with lock:
         return _prepare_qt_playback_source(path, preview_quality,
-            progress_callback=progress_callback, duration_seconds=duration_seconds)
+            progress_callback=progress_callback, duration_seconds=duration_seconds,
+            interlaced=bool(interlaced))
 
 
 def _prepare_qt_playback_source(path: Path, preview_quality: object = "high", *,
-                                progress_callback=None, duration_seconds: float = 0) -> Path:
+                                progress_callback=None, duration_seconds: float = 0,
+                                interlaced: bool = False) -> Path:
     """Return a Qt-friendly preview source for ``path`` when possible."""
     path = Path(path)
-    ready = prepared_qt_playback_source(path, preview_quality)
+    ready = prepared_qt_playback_source(path, preview_quality, interlaced=interlaced)
     if ready is not None:
         return ready
-    preparation = qt_playback_preparation(path, preview_quality)
+    preparation = qt_playback_preparation(path, preview_quality, interlaced=interlaced)
     if preparation is None:
         return path
     try:
@@ -172,12 +182,14 @@ def _prepare_qt_playback_source(path: Path, preview_quality: object = "high", *,
 def prepared_qt_playback_source(
     path: Path,
     preview_quality: object = "high",
+    *,
+    interlaced: bool = False,
 ) -> Path | None:
     """Return an already prepared source, the original non-video, or ``None``."""
     path = Path(path)
     if not _should_prepare_proxy(path):
         return path
-    target = _playback_target_for(path, preview_quality)
+    target = _playback_target_for(path, preview_quality, interlaced=bool(interlaced))
     try:
         return target if target.is_file() and target.stat().st_size > 0 else None
     except OSError:
@@ -187,25 +199,28 @@ def prepared_qt_playback_source(
 def qt_playback_preparation(
     path: Path,
     preview_quality: object = "high",
+    *,
+    interlaced: bool = False,
 ) -> QtPlaybackPreparation | None:
     """Build an ffmpeg preparation job without executing it."""
     path = Path(path)
+    is_interlaced = bool(interlaced)
     if not _should_prepare_proxy(path):
         return None
-    ready = prepared_qt_playback_source(path, preview_quality)
+    ready = prepared_qt_playback_source(path, preview_quality, interlaced=is_interlaced)
     if ready is not None:
         return None
     ffmpeg_path = _resolve_ffmpeg_path()
     if ffmpeg_path is None:
         return None
     quality = normalize_preview_media_quality(preview_quality)
-    target = _playback_target_for(path, quality)
+    target = _playback_target_for(path, quality, interlaced=is_interlaced)
     # 走到这里说明该画质缓存未命中 = 加载了新/变动的素材（或切换画质）：建新
     # 代理前先清掉**其它源文件**的旧代理；同一源文件全部画质的代理豁免，
     # 画质来回切换不必重转。正被占用的文件删除失败自然跳过。
     purge_preview_cache(
         keep={
-            _playback_target_for(path, proxy_quality)
+            _playback_target_for(path, proxy_quality, interlaced=is_interlaced)
             for proxy_quality in ("low", "medium", "high")
         }
     )
@@ -219,6 +234,7 @@ def qt_playback_preparation(
         path,
         temporary,
         quality,
+        interlaced=is_interlaced,
     )
     return QtPlaybackPreparation(path, target, temporary, tuple(command))
 
@@ -252,11 +268,16 @@ def discard_qt_playback_preparation(preparation: QtPlaybackPreparation) -> None:
         pass
 
 
+_PREVIEW_DEINTERLACE_FILTER = "bwdif=mode=0:parity=-1:deint=1"
+
+
 def _build_qt_playback_command(
     ffmpeg_path: str,
     source: Path,
     output: Path,
     quality: str,
+    *,
+    interlaced: bool = False,
 ) -> list[str]:
     command = [
         ffmpeg_path,
@@ -274,7 +295,7 @@ def _build_qt_playback_command(
         "0:a?",
     ]
     max_height = _VIDEO_PROXY_MAX_HEIGHT.get(quality)
-    if max_height is None:
+    if max_height is None and not interlaced:
         command.extend(
             [
                 "-c",
@@ -283,16 +304,40 @@ def _build_qt_playback_command(
                 "make_zero",
             ]
         )
+    elif max_height is None:
+        # 仅隔行视频的高画质预览需要反交错转码：Qt 6 FFmpeg 后端默认不做
+        # 实时反交错，-c copy 直接播放会把上下场交错横纹原样画到画布上。
+        command.extend(
+            [
+                "-vf",
+                _PREVIEW_DEINTERLACE_FILTER,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                "-fps_mode",
+                "passthrough",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+            ]
+        )
     else:
         max_width = max_height * 16 // 9
         scale = (
             f"scale=w='min(iw,{max_width})':h='min(ih,{max_height})':"
             "force_original_aspect_ratio=decrease:force_divisible_by=2"
         )
+        vf = f"{_PREVIEW_DEINTERLACE_FILTER},{scale}" if interlaced else scale
         command.extend(
             [
                 "-vf",
-                scale,
+                vf,
                 "-c:v",
                 "libx264",
                 "-preset",
@@ -368,8 +413,38 @@ def _scaled_proxy_path_for(path: Path, quality: str) -> Path:
     return _preview_cache_dir() / f"{path.stem}-{digest}-{max_height}p.mp4"
 
 
-def _playback_target_for(path: Path, preview_quality: object) -> Path:
+def _deinterlaced_proxy_path_for(path: Path) -> Path:
+    stat = path.stat()
+    key = (
+        f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|"
+        f"deint-v{_VIDEO_PROXY_PROFILE_VERSION}|high"
+    ).encode("utf-8", "surrogatepass")
+    digest = hashlib.sha256(key).hexdigest()[:24]
+    return _preview_cache_dir() / f"{path.stem}-{digest}-deint.mp4"
+
+
+def _deinterlaced_scaled_proxy_path_for(path: Path, quality: str) -> Path:
+    stat = path.stat()
+    max_height = _VIDEO_PROXY_MAX_HEIGHT[quality]
+    key = (
+        f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|"
+        f"scaled-v{_VIDEO_PROXY_PROFILE_VERSION}|{max_height}p|deint"
+    ).encode("utf-8", "surrogatepass")
+    digest = hashlib.sha256(key).hexdigest()[:24]
+    return _preview_cache_dir() / f"{path.stem}-{digest}-{max_height}p-deint.mp4"
+
+
+def _playback_target_for(
+    path: Path,
+    preview_quality: object,
+    *,
+    interlaced: bool = False,
+) -> Path:
     quality = normalize_preview_media_quality(preview_quality)
+    if interlaced:
+        if quality in _VIDEO_PROXY_MAX_HEIGHT:
+            return _deinterlaced_scaled_proxy_path_for(path, quality)
+        return _deinterlaced_proxy_path_for(path)
     if quality in _VIDEO_PROXY_MAX_HEIGHT:
         return _scaled_proxy_path_for(path, quality)
     return _proxy_path_for(path)

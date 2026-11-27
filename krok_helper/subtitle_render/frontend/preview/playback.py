@@ -71,6 +71,7 @@ class PlaybackController(QObject):
         self._player.setAudioOutput(self._audio_out)
         self._has_media = False
         self._media_path: Optional[Path] = None
+        self._media_interlaced = False
         self._active_playback_path: Optional[Path] = None
         self._preview_quality = "high"
         self._source_restore: Optional[tuple[int, bool]] = None
@@ -86,7 +87,7 @@ class PlaybackController(QObject):
         self._player.errorOccurred.connect(self._on_player_error)
 
     # ------------------------------------------------------------------ media
-    def set_media(self, path: Optional[Path]) -> None:
+    def set_media(self, path: Optional[Path], *, interlaced: bool = False) -> None:
         """设 source 为承载音频的文件；非法 / None → 清空。切源后回到 0。"""
         if self._media_path != path:
             preview_media.unprotect_preview_source(self._media_path)
@@ -96,14 +97,24 @@ class PlaybackController(QObject):
             self._player.setSource(QUrl())
             self._has_media = False
             self._media_path = None
+            self._media_interlaced = False
             self._active_playback_path = None
             self._source_restore = None
             return
         media_path = Path(path)
         self._media_path = media_path
-        playback_path = preview_media.prepared_qt_playback_source(
-            media_path,
-            self._preview_quality,
+        self._media_interlaced = bool(interlaced)
+        playback_path = (
+            preview_media.prepared_qt_playback_source(
+                media_path,
+                self._preview_quality,
+                interlaced=True,
+            )
+            if self._media_interlaced
+            else preview_media.prepared_qt_playback_source(
+                media_path,
+                self._preview_quality,
+            )
         )
         self._set_player_source(playback_path or media_path, position_ms=0, resume=False)
         self._has_media = True
@@ -120,7 +131,15 @@ class PlaybackController(QObject):
         if not self._has_media or media_path is None:
             return
         self._cancel_proxy_preparation()
-        prepared = preview_media.prepared_qt_playback_source(media_path, normalized)
+        prepared = (
+            preview_media.prepared_qt_playback_source(
+                media_path,
+                normalized,
+                interlaced=True,
+            )
+            if self._media_interlaced
+            else preview_media.prepared_qt_playback_source(media_path, normalized)
+        )
         if prepared is not None:
             self._set_player_source(
                 prepared,
@@ -201,6 +220,7 @@ class PlaybackController(QObject):
         self._player.setAudioOutput(None)
         self._has_media = False
         self._media_path = None
+        self._media_interlaced = False
         self._active_playback_path = None
         self._source_restore = None
         if self._proxy_process is not None:
@@ -236,7 +256,11 @@ class PlaybackController(QObject):
             self._player.play()
 
     def _start_proxy_preparation(self, path: Path, quality: str) -> None:
-        preparation = preview_media.qt_playback_preparation(path, quality)
+        preparation = (
+            preview_media.qt_playback_preparation(path, quality, interlaced=True)
+            if self._media_interlaced
+            else preview_media.qt_playback_preparation(path, quality)
+        )
         if preparation is None:
             return
         self._proxy_preparation = preparation
@@ -327,9 +351,17 @@ class PlaybackController(QObject):
             return
         if preparation.source != self._media_path:
             return
-        selected = preview_media.prepared_qt_playback_source(
-            preparation.source,
-            self._preview_quality,
+        selected = (
+            preview_media.prepared_qt_playback_source(
+                preparation.source,
+                self._preview_quality,
+                interlaced=True,
+            )
+            if self._media_interlaced
+            else preview_media.prepared_qt_playback_source(
+                preparation.source,
+                self._preview_quality,
+            )
         )
         if selected != preparation.target:
             return

@@ -246,3 +246,15 @@ def test_png_sequence_allows_existing_empty_folder(tmp_path) -> None:
     )
 
     assert result.job.output_path == tmp_path / "result"
+
+
+def test_export_job_controller_forwards_interlaced_metadata(tmp_path) -> None:
+    result = ExportJobController.build(
+        replace(
+            _inputs(tmp_path),
+            main_background_interlaced=True,
+            main_background_source_fps=29.97,
+        )
+    )
+    assert result.job.main_background_interlaced is True
+    assert result.job.main_background_source_fps == pytest.approx(29.97)

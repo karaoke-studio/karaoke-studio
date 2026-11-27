@@ -255,3 +255,45 @@ def test_real_remux_reports_progress(monkeypatch, tmp_path):
     target = preview_media.qt_playback_source(source, progress_callback=progress.append, duration_seconds=2)
     assert target != source and target.is_file()
     assert progress and all(0 <= value <= 99 for value in progress)
+
+
+def test_interlaced_high_quality_transcodes_with_bwdif_and_distinct_cache_key(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(preview_media, "_resolve_ffmpeg_path", lambda: "ffmpeg")
+    source = tmp_path / "stage_1080i.mp4"
+    source.write_bytes(b"video")
+
+    progressive = preview_media.qt_playback_preparation(source, "high")
+    interlaced = preview_media.qt_playback_preparation(source, "high", interlaced=True)
+
+    assert progressive is not None and interlaced is not None
+    assert progressive.target != interlaced.target
+    assert interlaced.target.name.endswith("-deint.mp4")
+    assert "-c" in progressive.command and "-vf" not in progressive.command
+    assert "-vf" in interlaced.command
+    assert interlaced.command[interlaced.command.index("-vf") + 1] == "bwdif=mode=0:parity=-1:deint=1"
+    assert interlaced.command[interlaced.command.index("-c:v") + 1] == "libx264"
+    preview_media.discard_qt_playback_preparation(progressive)
+    preview_media.discard_qt_playback_preparation(interlaced)
+
+
+def test_interlaced_low_quality_prepends_bwdif_before_scale(monkeypatch, tmp_path):
+    monkeypatch.setenv(TEMP_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(preview_media, "_resolve_ffmpeg_path", lambda: "ffmpeg")
+    source = tmp_path / "stage_1080i.mp4"
+    source.write_bytes(b"video")
+
+    progressive = preview_media.qt_playback_preparation(source, "low")
+    interlaced = preview_media.qt_playback_preparation(source, "low", interlaced=True)
+
+    assert progressive is not None and interlaced is not None
+    assert progressive.target != interlaced.target
+    assert interlaced.target.name.endswith("-540p-deint.mp4")
+    prog_vf = progressive.command[progressive.command.index("-vf") + 1]
+    int_vf = interlaced.command[interlaced.command.index("-vf") + 1]
+    assert "bwdif" not in prog_vf
+    assert int_vf.startswith("bwdif=mode=0:parity=-1:deint=1,scale=")
+    preview_media.discard_qt_playback_preparation(progressive)
+    preview_media.discard_qt_playback_preparation(interlaced)

@@ -141,6 +141,7 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
     video_width = None
     video_height = None
     video_fps = None
+    video_field_order = None
     if video_streams:
         first_video = video_streams[0]
         width_raw = first_video.get("width")
@@ -149,6 +150,11 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
             video_width = int(width_raw)
         if height_raw not in (None, "N/A", ""):
             video_height = int(height_raw)
+        field_order_raw = first_video.get("field_order")
+        if isinstance(field_order_raw, str):
+            normalized_field_order = field_order_raw.strip().lower()
+            if normalized_field_order and normalized_field_order != "n/a":
+                video_field_order = normalized_field_order
         # ffprobe 给出 "avg_frame_rate" / "r_frame_rate" 形如 "60000/1001"。
         # 优先 avg（更贴近实际播放速率）；都失败时 fps 留 None。
         for key in ("avg_frame_rate", "r_frame_rate"):
@@ -179,6 +185,7 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
         video_width=video_width,
         video_height=video_height,
         video_fps=video_fps,
+        video_field_order=video_field_order,
     )
 
 

@@ -121,6 +121,8 @@ class RollSegmentConfig:
     source: BackgroundSource = field(default_factory=BackgroundSource)
     source_has_audio: bool = False
     """素材自带音轨（浏览时探针结果，持久化缓存；纯图/纯色恒 False）。"""
+    source_interlaced: bool = False
+    """视频素材是否为隔行扫描（field_order 为 tt/bb/tb/bt；纯图/纯色恒 False）。"""
     source_width: int = 0
     source_height: int = 0
     """素材像素尺寸（探针/解码结果缓存；平铺填充的行列数依赖它）。"""
@@ -153,6 +155,7 @@ class RollSegmentConfig:
             enabled=bool(self.enabled),
             source=source,
             source_has_audio=bool(self.source_has_audio),
+            source_interlaced=bool(self.source_interlaced) if source.kind == "video" else False,
             source_width=max(int(self.source_width or 0), 0),
             source_height=max(int(self.source_height or 0), 0),
             source_duration_ms=max(int(self.source_duration_ms or 0), 0),
@@ -301,6 +304,8 @@ def roll_segment_to_dict(config: RollSegmentConfig) -> dict:
             "sequence_start_number": source.sequence_start_number,
         },
     }
+    if normalized.source_interlaced:
+        payload["source_interlaced"] = True
     if normalized.audio_path:
         payload["audio_path"] = normalized.audio_path
     return payload
@@ -331,6 +336,7 @@ def roll_segment_from_dict(payload: object) -> RollSegmentConfig:
         enabled=bool(payload.get("enabled")),
         source=source,
         source_has_audio=bool(payload.get("source_has_audio")),
+        source_interlaced=bool(payload.get("source_interlaced")) if source.kind == "video" else False,
         source_width=_clamp_non_negative(payload.get("source_width")),
         source_height=_clamp_non_negative(payload.get("source_height")),
         source_duration_ms=_clamp_non_negative(payload.get("source_duration_ms")),

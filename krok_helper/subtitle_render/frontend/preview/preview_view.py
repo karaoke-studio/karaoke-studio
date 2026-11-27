@@ -1248,12 +1248,20 @@ class TransportBar(QWidget):
     def _use_controller(self) -> bool:
         return self._controller is not None and self._controller.has_media()
 
-    def set_audio_source(self, path: Optional[Path]) -> None:
+    def set_audio_source(
+        self,
+        path: Optional[Path],
+        *,
+        interlaced: bool = False,
+    ) -> None:
         """喂音频文件给播放器；``None`` 清空。attach controller 后交给共享 controller。"""
         was_playing = self.is_playing()
         self.pause()
         if self._controller is not None:
-            self._controller.set_media(path)
+            if interlaced:
+                self._controller.set_media(path, interlaced=True)
+            else:
+                self._controller.set_media(path)
             if was_playing and self._controller.has_media():
                 self.play()
             return
@@ -1267,7 +1275,11 @@ class TransportBar(QWidget):
                 self._player.setSource(QUrl())
             self._has_audio = False
             return
-        playback_path = qt_playback_source(path)
+        playback_path = (
+            qt_playback_source(path, interlaced=True)
+            if interlaced
+            else qt_playback_source(path)
+        )
         player = self._ensure_audio_player()
         player.setSource(QUrl.fromLocalFile(str(playback_path)))
         self._has_audio = True

@@ -39,6 +39,7 @@ from krok_helper.subtitle_render.engine.export.export_command import (
     background_scale_chain as _background_scale_chain,
     bands_filter_graph as _bands_filter_graph,
     build_render_command,
+    deinterlace_video_filter as _deinterlace_video_filter,
     resolved_preview_width as _resolved_preview_width,
 )
 from krok_helper.subtitle_render.engine.export.io_paths import is_remote_path
@@ -72,6 +73,7 @@ from krok_helper.subtitle_render.engine.export.render_job import (
     OUTPUT_FORMAT_PNG_COMPOSITED,
     OUTPUT_FORMAT_PNG_TRANSPARENT,
     RenderJob,
+    format_needs_background,
     is_png_sequence,
 )
 from krok_helper.subtitle_render.engine.export.render_job_policy import (
@@ -492,6 +494,15 @@ def _render_subtitle_video_prepared(
         f"输出参数: {job.width}x{job.height} / {job.fps}fps / "
         f"{duration_ms / 1000:.3f}s / {params_tail}"
     )
+    if (
+        format_needs_background(job.output_format)
+        and _resolved_background(job).kind == "video"
+        and job.main_background_interlaced
+    ):
+        logger(
+            "反交错处理: 检测到隔行背景视频，自动启用 "
+            f"{_deinterlace_video_filter(source_fps=job.main_background_source_fps, target_fps=job.fps)}"
+        )
     logger("执行命令:")
     logger(" ".join(f'"{part}"' if " " in part else part for part in command))
 

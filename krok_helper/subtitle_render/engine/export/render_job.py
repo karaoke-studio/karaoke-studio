@@ -103,6 +103,10 @@ class RenderJob:
     """主背景独立音频时长（非视频背景参与内容长度）。"""
     main_background_has_audio: bool = False
     """主背景视频是否内嵌音轨（前黑/后黑混音图需要；探针事实）。"""
+    main_background_interlaced: bool = False
+    """主背景视频是否为隔行扫描（field_order 为 tt/bb/tb/bt；探针事实）。"""
+    main_background_source_fps: float | None = None
+    """主背景视频原始帧率（隔行反交错决定单倍帧/倍帧模式；探针事实）。"""
     roll_shift_ms: int = 0
     """前黑开启且自动偏移时歌词展示层整体后移量（渲染器冻结值）。"""
     title_duration_ms: int | None = None

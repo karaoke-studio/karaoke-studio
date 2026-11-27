@@ -4,6 +4,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+INTERLACED_FIELD_ORDERS: frozenset[str] = frozenset({"tt", "bb", "tb", "bt"})
+
+
+def is_interlaced_field_order(field_order: str | None) -> bool:
+    """Return True only when ffprobe reports an explicit interlaced field order."""
+    return str(field_order or "").strip().lower() in INTERLACED_FIELD_ORDERS
+
+
 @dataclass
 class MediaInfo:
     path: Path
@@ -18,3 +26,8 @@ class MediaInfo:
     video_width: int | None = None
     video_height: int | None = None
     video_fps: float | None = None
+    video_field_order: str | None = None
+
+    @property
+    def is_interlaced(self) -> bool:
+        return is_interlaced_field_order(self.video_field_order)

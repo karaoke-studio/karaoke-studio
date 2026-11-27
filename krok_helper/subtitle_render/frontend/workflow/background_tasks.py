@@ -256,6 +256,7 @@ class RollMediaLoadResult:
         "source",
         "source_duration_ms",
         "source_has_audio",
+        "source_interlaced",
         "source_width",
         "source_height",
         "preview_frame_path",
@@ -270,6 +271,7 @@ class RollMediaLoadResult:
         self.source = None
         self.source_duration_ms = 0
         self.source_has_audio = False
+        self.source_interlaced = False
         self.source_width = 0
         self.source_height = 0
         self.preview_frame_path = None
@@ -337,18 +339,24 @@ class _RollMediaLoadWorker(QObject):
             max(int(round(info.duration * 1000)), 0) if info.duration > 0 else 0
         )
         result.source_has_audio = info.audio_streams > 0
+        result.source_interlaced = info.is_interlaced
         result.source_width = info.video_width or 0
         result.source_height = info.video_height or 0
         # 先回填面板并建立时间映射，再准备预览源/首帧。
         self.metadataReady.emit(result)
-        # 复用普通背景的预览准备：高画质 -c copy 封装，中低画质缩小代理；
-        # 不做全片 CFR 转码。失败只影响首次播放，不阻断素材选择。
+        # 复用普通背景的预览准备：高画质 -c copy 封装（隔行视频自动反交错），
+        # 中低画质缩小代理；不做全片 CFR 转码。失败只影响首次播放，不阻断素材选择。
         self.stageChanged.emit("准备预览…")
         try:
-            qt_playback_source(self._path, self._preview_quality,
-                duration_seconds=info.duration,
-                progress_callback=lambda percent: self.progressChanged.emit(
-                    self._generation, self._segment, percent))
+            proxy_kwargs: dict[str, object] = {
+                "duration_seconds": info.duration,
+                "progress_callback": lambda percent: self.progressChanged.emit(
+                    self._generation, self._segment, percent
+                ),
+            }
+            if info.is_interlaced:
+                proxy_kwargs["interlaced"] = True
+            qt_playback_source(self._path, self._preview_quality, **proxy_kwargs)
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).debug(
                 "前黑/后黑预览源准备失败: %s", self._path, exc_info=True
