@@ -175,15 +175,17 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool lightning = version >= 6 && (fx.kind == "lightning" || fx.kind == "lightning_glow");
         const bool flame = version >= 6 && (fx.kind == "flame" || fx.kind == "flame_alt" || fx.kind == "flame_glow"
                                             || fx.kind == "smoke" || fx.kind == "ember" || fx.kind == "spark");
+        const bool scanline = version >= 7 && fx.kind == "scanline";
         const bool paintedEnergy = (lightning || flame) && features.contains("p07_energy_singing_paints");
         const bool fadedPaint = fadedBand && features.contains("p07_faded_scanline_particle_paint")
             && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0 && spritePaint(fx.fill);
         const bool localPaint = paintedSprites && (star || symbol || falling || paintedEnergy || assemblySprite
-                || (impact && fx.kind != "shockwave")) && spriteLayerPaint(fx.fill)
+                || scanline || (impact && fx.kind != "shockwave")) && spriteLayerPaint(fx.fill)
             && spriteStroke(fx.strokeWidthPx, fx.stroke) && spriteStroke(fx.stroke2WidthPx, fx.stroke2);
         const bool ringPaint = paintedSprites && ripple && ripplePaints
             && (spritePaint(fx.fill) || fx.fill.mode == "split_vertical"
-                || (lineGradients && fx.fill.mode == "gradient_horizontal"))
+                || (lineGradients && fx.fill.mode == "gradient_horizontal")
+                || (imagePaints && fx.fill.mode == "image"))
             && fx.strokeWidthPx == 0 && fx.stroke2WidthPx == 0 && !fx.hasDecor;
         const bool glow = fx.decorKind == "glow" && std::isfinite(fx.decorRadius)
             && fx.decorRadius >= 0 && fx.decorRadius <= 532
@@ -205,7 +207,6 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
                 // Singing particles keep their own sweep beside the transition layers.
                 || (flame ? fx.sweep == singingFlameSweep : (!falling || fx.sweep == 0))
             : !falling || fx.sweep == 0;
-        const bool scanline = version >= 7 && fx.kind == "scanline";
         const bool back = ripple || fx.kind == "lightning_glow" || fx.kind == "flame_glow" || fx.kind == "smoke"
             || (impact && fx.kind == "shockwave");
         QString defaultSprite = QStringLiteral("star4");
@@ -232,7 +233,8 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
         const bool oldWindow = fx.startMs >= *source.displayStartMs && fx.endMs <= *source.displayEndMs;
         const bool emitWindowValid = scanline ? fx.emitMs > 0 && fx.emitMs < end-start && fx.timeScale == 1
                                              : fx.emitMs == 0;
-        const bool validBand = !scanline || source.scanlineEnabled || noWipeSinging;
+        const bool validBand = !scanline || source.scanlineEnabled
+            || (!cfg.vertical && source.karaokeAnimation == "no_wipe");
         if (!(star || symbol || ripple || falling || lightning || flame || scanline || assemblySprite || impact) || fx.anchor != "char"
             || (verticalParticles && !(verticalStars && star && fx.sweep == (fx.kind == "twinkle" ? 1 : 0))
                 && !(verticalShapes && (symbol || ripple) && fx.sweep == 0)

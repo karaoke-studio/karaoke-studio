@@ -468,13 +468,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
             // A script-slot override has no effect on non-Latin cells or guides.
             const bool latin = isLatinText(line.chars[j].text);
-            if (roleFadedScanline) {
-                const auto supported = [](const PaintStyle& fill) {
-                    return fill.mode == "solid" || fill.mode == "gradient_vertical";
-                };
-                if (!supported(paint.beforeFillPaint) || !supported(paint.afterFillPaint))
-                    throw BackendError("Skia 行内角色扫字线支持实色和纵向渐变填充");
-            }
             const float strokeWidth = latin ? paint.latinStrokeWidth : paint.strokeWidth;
             const float stroke2Width = latin ? paint.latinStroke2Width : paint.stroke2Width;
             const auto beforeColor = argb(paint.beforeFillPaint.color);
@@ -656,8 +649,10 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
                 if (!hasVisibleGradientStops(paint)) return;
                 auto ink = inlineShadow && paint.mode == "gradient_horizontal"
                     ? rolePaintBounds->forRole(-1) : rolePaintBounds->line;
-                if (hasBitmapGuide && ink.isEmpty()) throw BackendError("Skia 图片导唱符渐变阴影需要同一行存在正文");
-                if (paint.mode == "gradient_horizontal") {
+                if (hasBitmapGuide && ink.isEmpty()) {
+                    for (const auto& cell : prepared.cells)
+                        if (cell.bitmap) ink.join(cell.bitmap->box);
+                } else if (paint.mode == "gradient_horizontal") {
                     // Bitmap artwork extends the horizontal paint span only.
                     for (const auto& cell : prepared.cells)
                         if (cell.bitmap) {

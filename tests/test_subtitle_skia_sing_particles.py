@@ -1601,3 +1601,142 @@ def test_particle_decoration_gradient_spans_each_sprite_like_d2d_gpu(binary, app
     shares = [[recoloured(*pair) for pair in zip(reference, frames, strict=True)] for frames in (gpu, raster)]
     assert max(map(max, shares)) < .01, shares
     assert_glow_parity(times, reference, gpu, raster, f'particle_decoration_gradient_{decoration}')
+
+
+def test_scanline_particles_inherit_role_paint_and_match_d2d(binary, project, tmp_path):
+    """Scanline particles with follow/role paints (including outlines, shadow, image) must configure and draw."""
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = twinkle_source(project)
+    image_path = write_png(tmp_path / 'scanline_particle.png', pattern('opaque'))
+    palette = colors('#FF226BD5', '#FF226BD5')
+    after = replace(palette.after,
+                    text=image_paint(image_path, scale=780, fallback='#FF226BD5'),
+                    stroke=PaintFill(color='#FFFF4080'),
+                    stroke2=PaintFill(color='#FFFFD22C'),
+                    shadow=PaintFill(color='#CC3CB549'))
+    scheme = SubtitleStyleScheme(karaoke_colors=replace(palette, after=after),
+                                 stroke_width_px=6, stroke2_enabled=True, stroke2_width_px=4,
+                                 decoration_kind='shadow', shadow_offset_x=12, shadow_offset_y=-10)
+    style = replace(style, karaoke_colors=colors('#00000000', '#00000000'), sing_fx='none',
+                    scanline_enabled=True, scanline_forward_enabled=True, scanline_mode='color',
+                    scanline_color='#00000000', scanline_effect='star',
+                    scanline_effect_color_mode='role', scanline_effect_role_name='particle',
+                    scanline_effect_color_layers='all', custom_style_schemes={'particle': scheme})
+    times, dpr = (300, 550, 900, 1300), 2
+    refs = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs = [np.frombuffer(p, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert any(b['kind'] == 'scanline' and 'paint_id' in b for b in ir['track']['lines'][0]['fx_bursts'])
+    gpu, raster = render_skia(binary, ir, times)
+    assert any(np.count_nonzero(frame[..., 3] > 30) > 100 for frame in gpu)
+    assert_glow_parity(times, refs, gpu, raster, 'scanline_particle_role_paint', check_p00_edges=True)
+
+
+def test_singing_ripple_with_image_fill_matches_d2d(binary, project, tmp_path):
+    """Ripple particles inheriting an image fill must configure and paint the ring path with the image brush."""
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    track, style = twinkle_source(project)
+    image_path = write_png(tmp_path / 'ripple.png', pattern('opaque'))
+    palette = colors('#FF25B4F2', '#FF25B4F2')
+    scheme = SubtitleStyleScheme(karaoke_colors=replace(
+        palette, after=replace(palette.after, text=image_paint(image_path, scale=600, fallback='#FF25B4F2'))))
+    style = replace(style, karaoke_colors=colors('#00000000', '#00000000'), sing_fx='ripple',
+                    fx_particle_size_em=.72, fx_particle_color_mode='role', fx_particle_role_name='particle',
+                    custom_style_schemes={'particle': scheme})
+    times, dpr = (300, 550, 950, 1450), 3
+    refs = None
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                       width=640, height=360, dpr=dpr, realization_enabled=False)
+        refs = [np.frombuffer(p, np.uint8).reshape(360 * dpr, 640 * dpr, 4) for p in raw]
+    ir = ir_for(binary, (track, style), dpr=dpr)
+    assert {'p07_ripple_singing_paints', 'p07_singing_sprite_images'} <= set(ir['required_features'])
+    gpu, raster = render_skia(binary, ir, times)
+    assert any(np.count_nonzero(frame[..., 3] > 30) > 100 for frame in gpu)
+    alpha_cov = lambda frame: frame[..., 3].astype(float)
+    for time, vulkan, cpu, oracle in zip(times, gpu, raster, refs or gpu, strict=True):
+        assert_particle_region(oracle, vulkan, ('ripple_image_fill', time, 'D2D'), coverage=alpha_cov)
+        assert_particle_region(vulkan, cpu, ('ripple_image_fill', time, 'Raster'), coverage=alpha_cov)
+
+
+def test_no_wipe_annotated_faded_line_keeps_scanline_particles(binary, project):
+    """Horizontal no_wipe lines with ruby/fade still emit scanline particles after band suppression."""
+    from krok_helper.subtitle_render.domain.timing import RubyAnnotation
+
+    track, style = twinkle_source(project)
+    track = replace(track, rubies=[RubyAnnotation(kanji='漢', reading='かん', pos_start_ms=200, pos_end_ms=700)])
+    style = replace(style, sing_fx='none', karaoke_anim='no_wipe',
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=300, exit_fade_ms=300,
+                    scanline_enabled=True, scanline_forward_enabled=True, scanline_effect='star',
+                    scanline_effect_color_mode='follow_after', scanline_effect_color_layers='all')
+    ir = ir_for(binary, (track, style), dpr=1)
+    assert not ir['track']['lines'][0]['scanline']
+    assert any(b['kind'] == 'scanline' for b in ir['track']['lines'][0]['fx_bursts'])
+    gpu, raster = render_skia(binary, ir, (300, 750, 1200))
+    assert any(frame[..., 3].any() for frame in gpu)
+    assert all(np.array_equal(a, b) or abs(premultiplied(a) - premultiplied(b)).mean() < .5
+               for a, b in zip(gpu, raster, strict=True))
+
+
+def test_faded_scanline_inline_roles_support_horizontal_and_image_fills(binary, project, tmp_path):
+    """Inline roles on faded utopia scanline lines must not reject horizontal gradients or image fills."""
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+    from test_subtitle_skia_image_fills import image_paint, pattern, write_png
+
+    track, style = twinkle_source(project)
+    line, = track.lines
+    chars = [replace(ch, role_label='lead' if i == 0 else None) for i, ch in enumerate(line.chars)]
+    track = replace(track, lines=[replace(line, chars=chars)])
+    img = write_png(tmp_path / 'role.png', pattern('opaque'))
+    palette = colors('#FF2040FF', '#FFFF4020')
+    lead_colors = replace(
+        palette,
+        before=replace(palette.before, text=PaintFill(mode='gradient_horizontal', start_color='#FF2040FF', end_color='#FF20FFC0')),
+        after=replace(palette.after, text=image_paint(img, scale=500, fallback='#FFFF4020')),
+    )
+    style = replace(style, sing_fx='none', karaoke_anim='utopia',
+                    entry_anim='fade', exit_anim='fade', entry_lead_ms=300, exit_fade_ms=300,
+                    scanline_enabled=True, scanline_forward_enabled=True, scanline_mode='color',
+                    custom_style_schemes={'lead': SubtitleStyleScheme(karaoke_colors=lead_colors)})
+    ir = ir_for(binary, (track, style), dpr=1)
+    gpu, raster = render_skia(binary, ir, (300, 750))
+    assert any(frame[..., 3].any() for frame in gpu) and any(frame[..., 3].any() for frame in raster)
+
+
+@pytest.mark.parametrize('decoration', ['shadow', 'glow'])
+def test_bitmap_only_line_with_gradient_decoration_configures_cleanly(binary, project, tmp_path, decoration):
+    """A line containing only bitmap guides must not fail when gradient shadow or gradient glow is enabled."""
+    from krok_helper.subtitle_render.domain.models import GuideSymbol
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    _, style = twinkle_source(project)
+    icon = str(write_png(tmp_path / 'guide.png', pattern('opaque')))
+    guide = GuideSymbol(kind='bitmap', count=1, bitmap_before_path=icon, bitmap_after_path=icon, bitmap_no_decor=False)
+    line = TimingLine(chars=[TimingChar('\uFFFC', 200, vector_glyph=guide)], end_ms=1000,
+                      display_start_override_ms=0, display_end_override_ms=1200)
+    track = TimingTrack(lines=[line])
+    grad = PaintFill(mode='gradient_vertical', start_color='#FF2080FF', end_color='#FFFF40A0')
+    palette = style.karaoke_colors
+    style = replace(style, sing_fx='none', decoration_kind=decoration,
+                    shadow_offset_x=6, shadow_offset_y=6, glow_before_radius_px=8, glow_after_radius_px=8,
+                    karaoke_colors=replace(palette, before=replace(palette.before, shadow=grad),
+                                           after=replace(palette.after, shadow=grad)))
+    ir = ir_for(binary, (track, style), dpr=1)
+    gpu, raster = render_skia(binary, ir, (400, 800))
+    assert any(frame[..., 3].any() for frame in gpu) and any(frame[..., 3].any() for frame in raster)

@@ -46,11 +46,11 @@ _VERTICAL_PARTICLE_FEATURES = (
 _VERTICAL_PARTICLE_MODES = set().union(*(modes for modes, _ in _VERTICAL_PARTICLE_FEATURES))
 _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 'shockwave', 'ash'}
               | set(PARTICLE_TRANSITIONS.values()) | _ENERGY_PARTICLES)
-_PAINTED_SPRITES = ({'twinkle', 'twinkle_classic', 'note', 'heart', 'sparkle', 'assemble', 'dissolve',
+_PAINTED_SPRITES = ({'twinkle', 'twinkle_classic', 'scanline', 'note', 'heart', 'sparkle', 'assemble', 'dissolve',
                      'fireball', 'flash', 'ash'} | FALLING_PARTICLES)
 _SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
 _LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical', 'image'}
-_RIPPLE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical'}
+_RIPPLE_PAINT_MODES = _LOCAL_SPRITE_PAINT_MODES
 
 
 def _transition_layers(kind, entry):
@@ -264,6 +264,7 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                       and not (paint['stroke_width_px'] or paint['stroke2_width_px'] or paint.get('decor'))):
                     painted_sprites = painted_ripples = True
                     sprite_line_gradients |= paint['fill']['mode'] == 'gradient_horizontal'
+                    sprite_images |= paint['fill']['mode'] == 'image'
                 elif kind in (_PAINTED_SPRITES | _ENERGY_PARTICLES) and _supports_singing_particle_paint(
                         paint, local_sprite=True):
                     painted_sprites = True
@@ -279,7 +280,7 @@ def write_particle_anchors(ir, plan, measured, composed_lines=()) -> int:
                 else:
                     raise ValueError('Skia 暂不支持此唱字粒子画笔或装饰')
             if (kind not in _PARTICLES
-                    or (kind == 'scanline' and not (band or no_wipe_singing))
+                    or (kind == 'scanline' and not (band or (not look.vertical and source.get('karaoke_anim') == 'no_wipe')))
                     or burst.get('front', True) != (kind not in _BACK_PARTICLES)
                     or 'char_color_ids' in burst):
                 raise ValueError('Skia 暂不支持此粒子类型、配色或扫字线组合')

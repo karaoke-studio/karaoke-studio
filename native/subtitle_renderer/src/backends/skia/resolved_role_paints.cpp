@@ -130,14 +130,18 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
             const auto glow = skiaStaticGlow(style);
             if (glow.before.radius > 0 || glow.after.radius > 0) {
                 ::subtitle::skia::GlowGradients gradients;
-                if (gradientBounds && !gradientBounds->line.isEmpty()) {
+                const bool hasTextBounds = gradientBounds && !gradientBounds->line.isEmpty();
+                const bool hasBitmapFallback = !hasTextBounds && bitmapGradients && !horizontalBitmapSpan.isEmpty();
+                if (hasTextBounds || hasBitmapFallback) {
                     const auto shader = [&](const PaintStyle& paint) {
-                        auto ink = paint.mode == "gradient_horizontal" ? gradientBounds->forRole(role) : gradientBounds->line;
-                        if (role < 0 && paint.mode == "gradient_horizontal" && !horizontalBitmapSpan.isEmpty()) {
+                        auto ink = hasTextBounds
+                            ? (paint.mode == "gradient_horizontal" ? gradientBounds->forRole(role) : gradientBounds->line)
+                            : horizontalBitmapSpan;
+                        if (hasTextBounds && role < 0 && paint.mode == "gradient_horizontal" && !horizontalBitmapSpan.isEmpty()) {
                             ink.fLeft = std::min(ink.fLeft, horizontalBitmapSpan.left());
                             ink.fRight = std::max(ink.fRight, horizontalBitmapSpan.right());
                         }
-                        return ::subtitle::skia::lineGradient(paint, ink, gradientBounds->outlinePad);
+                        return ::subtitle::skia::lineGradient(paint, ink, hasTextBounds ? gradientBounds->outlinePad : 0.f);
                     };
                     if (glow.before.radius > 0) gradients[0] = shader(style.beforeDecorPaint);
                     if (glow.after.radius > 0) gradients[1] = shader(style.afterDecorPaint);
@@ -155,11 +159,8 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
         auto& group = line.roleGlows[it->second];
         auto& cell = line.cells[index];
         if (!cell.path.isEmpty()) group.cells.push_back(index);
-        if (bitmapGradients && cell.bitmap && cell.bitmap->decorate) {
-            if (!gradientBounds || gradientBounds->line.isEmpty())
-                throw BackendError("Skia 图片导唱符渐变光晕需要同一行存在正文");
+        if (bitmapGradients && cell.bitmap && cell.bitmap->decorate)
             cell.bitmap->glowGradients = group.gradients;
-        }
     }
 }
 

@@ -71,7 +71,8 @@ void resolveSkiaParticleAnchors(const QJsonValue& box, const QJsonArray& feature
         prepared.particles.push_back({std::move(localBurst), sprite->second,
             SkColorSetARGB(color.alpha, color.red, color.green, color.blue),
             x, y + verticalEmit, std::max(anchor.right - anchor.left, 1.f), height,
-            burst.kind == "ripple" || burst.kind == "shockwave"
+            (burst.kind == "ripple" || burst.kind == "shockwave")
+                && !(burst.hasPaint && burst.fill.mode == "image")
                 ? ::subtitle::skia::concentricRing(sprite->second) : std::nullopt,
             std::move(paint)});
     }
