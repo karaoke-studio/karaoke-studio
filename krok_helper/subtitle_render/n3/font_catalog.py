@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import struct
 import sys
+import threading
 import uuid
 from ctypes import wintypes
 from dataclasses import dataclass, field, replace
@@ -23,7 +25,8 @@ from functools import cmp_to_key, lru_cache
 from types import MappingProxyType
 from typing import Callable, Mapping, Sequence
 
-from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo, QGuiApplication
+from PyQt6.QtCore import QThread
+from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo, QGuiApplication, QRawFont
 
 from krok_helper.subtitle_render.domain.models import (
     Style,
@@ -51,6 +54,185 @@ _OPTIONAL_FONT_WEIGHT_FIELDS = {
     "ruby_font_family": "ruby_font_weight",
     "ruby_font_family_latin": "ruby_latin_font_weight",
 }
+
+_OPENTYPE_FAMILY_NAME_IDS = frozenset({1, 16, 21})
+_MAC_NAME_ENCODINGS = {
+    0: "mac_roman",
+    1: "cp932",     # MacJapanese (Shift-JIS)
+    2: "cp950",     # MacChineseTrad (Big5)
+    3: "cp949",     # MacKorean
+    25: "gb18030",  # MacChineseSimp
+}
+_QT_ALIAS_LOCK = threading.Lock()
+_QT_ALIAS_INDEX: dict[str, str] | None = None
+_QT_COMPACT_ALIAS_INDEX: dict[str, str | None] | None = None
+_QT_ALIAS_LOOKUPS: dict[str, str | None] = {}
+
+
+def _compact_family_key(name: str) -> str:
+    """Fold case and strip ASCII/CJK whitespace for safe localized alias matching."""
+    return "".join(str(name or "").split()).casefold()
+
+
+def opentype_family_names(table: bytes) -> set[str]:
+    """Decoded family-name records (IDs 1/16/21) of an OpenType ``name`` table.
+
+    Supports Unicode/Windows UTF-16-BE as well as MacRoman and MacCJK
+    (including MacJapanese Shift-JIS used by many macOS/Windows Japanese fonts).
+    """
+    if len(table) < 6:
+        return set()
+    _, count, storage = struct.unpack_from(">3H", table)
+    names: set[str] = set()
+    for index in range(count):
+        offset = 6 + index * 12
+        if offset + 12 > len(table):
+            break
+        platform, encoding, _, name_id, length, start = struct.unpack_from(
+            ">6H", table, offset
+        )
+        if name_id not in _OPENTYPE_FAMILY_NAME_IDS or length == 0:
+            continue
+        data = table[storage + start : storage + start + length]
+        if len(data) != length:
+            continue
+        if platform in (0, 3):
+            codec: str | None = "utf-16-be"
+        elif platform == 1:
+            codec = _MAC_NAME_ENCODINGS.get(encoding)
+        else:
+            codec = None
+        if codec is None:
+            continue
+        decoded = data.decode(codec, errors="replace").strip("\x00").strip()
+        if decoded:
+            names.add(decoded)
+    return names
+
+
+def _names_match_family(family: str, names: set[str]) -> bool:
+    wanted = family.casefold()
+    if any(name.casefold() == wanted for name in names):
+        return True
+    compact = _compact_family_key(family)
+    return bool(compact) and any(_compact_family_key(name) == compact for name in names)
+
+
+def _probe_qt_raw_font(canonical: str) -> tuple[QRawFont, set[str]]:
+    """Read a Qt family's real face, falling back to enumerated styles for bold-only families."""
+    font = QFont(canonical)
+    raw = QRawFont.fromFont(font)
+    if raw.isValid():
+        names = opentype_family_names(bytes(raw.fontTable(b"name")))
+        if _names_match_family(canonical, names):
+            return raw, names
+    # Bold-only families (e.g. UD Digi Kyokasho N-B on macOS CoreText) can fail
+    # to resolve their own face when probed at default weight 400.
+    try:
+        styles = list(QFontDatabase.styles(canonical))
+    except (RuntimeError, TypeError, ValueError):
+        styles = []
+    for style_name in styles[:3]:
+        styled = QFont(canonical)
+        styled.setStyleName(style_name)
+        candidate = QRawFont.fromFont(styled)
+        if not candidate.isValid():
+            continue
+        names = opentype_family_names(bytes(candidate.fontTable(b"name")))
+        if _names_match_family(canonical, names):
+            return candidate, names
+    return raw, set()
+
+
+def _on_gui_thread() -> bool:
+    app = QGuiApplication.instance()
+    return app is not None and QThread.currentThread() is app.thread()
+
+
+def _ensure_qt_alias_index() -> tuple[dict[str, str], dict[str, str | None]]:
+    """Lazily index localized OpenType family names across installed Qt families (GUI only)."""
+    global _QT_ALIAS_INDEX, _QT_COMPACT_ALIAS_INDEX
+    with _QT_ALIAS_LOCK:
+        if _QT_ALIAS_INDEX is not None and _QT_COMPACT_ALIAS_INDEX is not None:
+            return _QT_ALIAS_INDEX, _QT_COMPACT_ALIAS_INDEX
+    # Ensure fontDatabaseChanged invalidation is connected before snapshotting.
+    _qt_application_cache_key()
+    exact_index: dict[str, str] = {}
+    compact_index: dict[str, str | None] = {}
+    try:
+        families = tuple(QFontDatabase.families())
+    except (RuntimeError, TypeError, ValueError):
+        families = ()
+    for canonical in families:
+        # Skip hidden macOS system UI fonts (.AppleSystemUIFont / .SFNS*): never
+        # user-selectable and probing them triggers CoreText overhead/warnings.
+        if not canonical or canonical.startswith("."):
+            continue
+        _raw, names = _probe_qt_raw_font(canonical)
+        if not names:
+            continue
+        for name in names:
+            exact_index.setdefault(name.casefold(), canonical)
+            compact = _compact_family_key(name)
+            if not compact:
+                continue
+            existing = compact_index.get(compact)
+            if existing is None and compact not in compact_index:
+                compact_index[compact] = canonical
+            elif existing != canonical:
+                # Ambiguous compact key across distinct families: disable fuzzy fallback.
+                compact_index[compact] = None
+    with _QT_ALIAS_LOCK:
+        _QT_ALIAS_INDEX = exact_index
+        _QT_COMPACT_ALIAS_INDEX = compact_index
+    return exact_index, compact_index
+
+
+def resolve_localized_qt_alias(family: str) -> str | None:
+    """Resolve an unlisted localized family name to its installed Qt family via OpenType ``name``.
+
+    Runs Qt probing strictly on the GUI thread; worker threads only consult the
+    already-built cache. Unverified platform substitutes are never returned.
+    """
+    requested = str(family or "").strip()
+    if not requested:
+        return None
+    cache_key = requested.casefold()
+    with _QT_ALIAS_LOCK:
+        if cache_key in _QT_ALIAS_LOOKUPS:
+            return _QT_ALIAS_LOOKUPS[cache_key]
+    if not _on_gui_thread():
+        with _QT_ALIAS_LOCK:
+            if _QT_ALIAS_INDEX is not None:
+                hit = _QT_ALIAS_INDEX.get(cache_key)
+                if hit is not None:
+                    return hit
+            if _QT_COMPACT_ALIAS_INDEX is not None:
+                return _QT_COMPACT_ALIAS_INDEX.get(_compact_family_key(requested))
+        return None
+
+    _qt_application_cache_key()
+    alias: str | None = None
+    try:
+        font = QFont(requested)
+        matched = QFontInfo(font).family().strip()
+        raw = QRawFont.fromFont(font)
+        if matched and matched.casefold() != cache_key and not matched.startswith(".") and raw.isValid():
+            names = opentype_family_names(bytes(raw.fontTable(b"name")))
+            if _names_match_family(requested, names) and _names_match_family(matched, names):
+                alias = matched
+    except (RuntimeError, TypeError, ValueError):
+        alias = None
+
+    if alias is None:
+        exact_index, compact_index = _ensure_qt_alias_index()
+        alias = exact_index.get(cache_key)
+        if alias is None:
+            alias = compact_index.get(_compact_family_key(requested))
+
+    with _QT_ALIAS_LOCK:
+        _QT_ALIAS_LOOKUPS[cache_key] = alias
+    return alias
 
 
 @dataclass(frozen=True)
@@ -561,7 +743,15 @@ def is_n3_font_catalog_ready() -> bool:
 
 
 def canonicalize_n3_font_family(name: str) -> str | None:
-    return get_n3_font_catalog().canonicalize(name)
+    catalog = get_n3_font_catalog()
+    canonical = catalog.canonicalize(name)
+    if canonical is not None or catalog.authoritative:
+        return canonical
+    # On macOS/Linux (non-authoritative Qt catalog without DirectWrite alias
+    # table), lazily verify localized OpenType family names (e.g. Windows
+    # Japanese names like "UD デジタル 教科書体 N-B" -> "UD Digi Kyokasho N-B").
+    alias = resolve_localized_qt_alias(name)
+    return catalog.canonicalize(alias) if alias is not None else None
 
 
 @lru_cache(maxsize=1024)
@@ -579,6 +769,10 @@ def _resolve_qt_font_family_cached(name: str, qt_application_key: int) -> str:
     candidate = catalog.qt_family(requested)
     if not candidate or qt_application_key == 0:
         return candidate
+    if not catalog.authoritative and catalog.canonicalize(requested) is None:
+        alias = resolve_localized_qt_alias(requested)
+        if alias:
+            return alias
 
     try:
         actual = QFontInfo(QFont(candidate)).family().strip()
@@ -652,6 +846,11 @@ def invalidate_n3_font_caches() -> None:
 
     _get_n3_font_catalog.cache_clear()
     _resolve_qt_font_family_cached.cache_clear()
+    global _QT_ALIAS_INDEX, _QT_COMPACT_ALIAS_INDEX
+    with _QT_ALIAS_LOCK:
+        _QT_ALIAS_INDEX = None
+        _QT_COMPACT_ALIAS_INDEX = None
+        _QT_ALIAS_LOOKUPS.clear()
     try:
         from strange_uta_game.frontend import font_cache
 

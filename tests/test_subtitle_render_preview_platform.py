@@ -351,3 +351,111 @@ def test_skia_missing_font_fallback_prepares_on_gui_and_resolves_on_worker(qapp,
         resource, _opts = pool.submit(resolver, style).result(timeout=10)
     assert resource["path"] == str(fake_otf)
     assert resolver.missing_fallbacks == {missing_name: fallback_name}
+
+
+def test_opentype_family_names_decodes_mac_japanese_and_wws_records(tmp_path):
+    """MacJapanese (platform=1, encoding=1, Shift-JIS) 与 WWS(21) 族名都能被正确解码。"""
+    from fontTools.ttLib import TTFont
+    from skia_text_fixture import make_font
+    from krok_helper.subtitle_render.n3.font_catalog import opentype_family_names
+
+    font_path = make_font(tmp_path / "ud-jp.ttf", family="UD Digi Kyokasho N-B")
+    with TTFont(font_path) as font:
+        # 仅写入 MacJapanese (platform=1, enc=1, lang=11) 与 WWS(21) 记录
+        font["name"].setName("UD デジタル 教科書体 N-B", 1, 1, 1, 0x000B)
+        font["name"].setName("UD デジタル 教科書体 N-B WWS", 21, 3, 1, 0x0411)
+        table = font["name"].compile(font)
+    decoded = opentype_family_names(table)
+    assert "UD Digi Kyokasho N-B" in decoded
+    assert "UD デジタル 教科書体 N-B" in decoded
+    assert "UD デジタル 教科書体 N-B WWS" in decoded
+
+
+def test_macos_non_authoritative_catalog_resolves_japanese_alias_and_skips_hidden_fonts(
+    qapp, tmp_path, monkeypatch
+):
+    """macOS 非权威 Qt 目录可经 OpenType name 表解析日文别名（含空白差异与粗体专族），且跳过 .SF* 隐藏字体。"""
+    from types import MappingProxyType
+    from fontTools.ttLib import TTFont
+    from skia_text_fixture import make_font
+    from krok_helper.subtitle_render.n3 import font_catalog as fc
+
+    font_nb = make_font(tmp_path / "nb.ttf", family="UD Digi Kyokasho N-B")
+    with TTFont(font_nb) as font:
+        font["name"].setName("UD デジタル 教科書体 N-B", 1, 1, 1, 0x000B)
+        nb_table = font["name"].compile(font)
+    font_nkb = make_font(tmp_path / "nkb.ttf", family="UD Digi Kyokasho NK-B")
+    with TTFont(font_nkb) as font:
+        font["name"].setName("UD デジタル 教科書体 NK-B", 1, 3, 1, 0x0411)
+        nkb_table = font["name"].compile(font)
+
+    probed_families = []
+
+    class FakeRawFont:
+        def __init__(self, table: bytes | None):
+            self._table = table
+
+        def isValid(self) -> bool:
+            return self._table is not None
+
+        def fontTable(self, tag):
+            return self._table or b""
+
+    def fake_from_font(font):
+        fam = font.family()
+        probed_families.append((fam, font.styleName()))
+        if fam == "UD Digi Kyokasho N-B":
+            # 模拟 macOS Bold-only 族：默认 styleName='' 返回无效/替身，指定 'Bold' 才返回真实 face
+            return FakeRawFont(nb_table if font.styleName() == "Bold" else None)
+        if fam == "UD Digi Kyokasho NK-B":
+            return FakeRawFont(nkb_table)
+        return FakeRawFont(None)
+
+    catalog = fc.N3FontCatalog(
+        families=("UD Digi Kyokasho N-B", "UD Digi Kyokasho NK-B"),
+        aliases=MappingProxyType(
+            {
+                "ud digi kyokasho n-b": "UD Digi Kyokasho N-B",
+                "ud digi kyokasho nk-b": "UD Digi Kyokasho NK-B",
+            }
+        ),
+        authoritative=False,
+        family_aliases=MappingProxyType(
+            {
+                "ud digi kyokasho n-b": ("UD Digi Kyokasho N-B",),
+                "ud digi kyokasho nk-b": ("UD Digi Kyokasho NK-B",),
+            }
+        ),
+        qt_families=MappingProxyType(
+            {
+                "ud digi kyokasho n-b": "UD Digi Kyokasho N-B",
+                "ud digi kyokasho nk-b": "UD Digi Kyokasho NK-B",
+            }
+        ),
+    )
+
+    fc.invalidate_n3_font_caches()
+    monkeypatch.setattr(fc, "get_n3_font_catalog", lambda: catalog)
+    monkeypatch.setattr(
+        fc.QFontDatabase,
+        "families",
+        staticmethod(lambda: [".AppleSystemUIFont", "UD Digi Kyokasho N-B", "UD Digi Kyokasho NK-B"]),
+    )
+    monkeypatch.setattr(
+        fc.QFontDatabase,
+        "styles",
+        staticmethod(lambda fam: ["Bold"] if fam == "UD Digi Kyokasho N-B" else ["Regular"]),
+    )
+    monkeypatch.setattr(fc.QRawFont, "fromFont", staticmethod(fake_from_font))
+    try:
+        # 精确 MacJapanese 别名 + 空格变体都能命中对应英文字体，且 N-B 与 NK-B 互不串台
+        assert fc.canonicalize_n3_font_family("UD デジタル 教科書体 N-B") == "UD Digi Kyokasho N-B"
+        assert fc.canonicalize_n3_font_family("UDデジタル教科書体 N-B") == "UD Digi Kyokasho N-B"
+        assert fc.canonicalize_n3_font_family("UD デジタル 教科書体 NK-B") == "UD Digi Kyokasho NK-B"
+        assert fc.resolve_qt_font_family("UD デジタル 教科書体 N-B") == "UD Digi Kyokasho N-B"
+        # 不存在的字体绝不被误匹配
+        assert fc.canonicalize_n3_font_family("Completely Missing Font") is None
+        # .AppleSystemUIFont 隐藏字体绝不被探测
+        assert all(fam != ".AppleSystemUIFont" for fam, _ in probed_families)
+    finally:
+        fc.invalidate_n3_font_caches()
