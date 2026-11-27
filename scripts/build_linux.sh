@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build the Linux x86_64 package (4.5.0+): PyInstaller onedir + Skia sidecar
-# + GUI Updater, packed as KaraokeStudio-linux.zip with POSIX modes/symlinks.
+# + GUI Updater, packed as KaraokeStudio-linux.tar.xz (recommended for manual
+# extraction, preserving POSIX modes/symlinks across desktop archive managers)
+# and KaraokeStudio-linux.zip (used by the in-app updater).
 #
 # Build on the oldest supported glibc (CI: ubuntu-22.04); the package runs on
 # that distribution or newer. Requirements on the build machine:
@@ -20,6 +22,7 @@ SPEC_PATH="$PROJECT_ROOT/build/spec-linux"
 APP_DIST="$DIST_PATH/$APP_NAME"
 APP_INTERNAL="$APP_DIST/_internal"
 ASSET_NAME="KaraokeStudio-linux.zip"
+TAR_ASSET_NAME="KaraokeStudio-linux.tar.xz"
 SUG_SRC="$PROJECT_ROOT/krok_helper/lyrics_timing/src"
 SUG_PACKAGE="$SUG_SRC/strange_uta_game"
 PYQT6_BINDING_VERSION="6.11.0"
@@ -284,11 +287,16 @@ echo "Validating packaged PortAudio..."
 QT_QPA_PLATFORM=offscreen "$APP_DIST/$APP_NAME" --package-audio-smoke
 echo "Packaged smoke checks passed."
 
-echo "Creating $ASSET_NAME..."
-rm -f "$PROJECT_ROOT/dist/$ASSET_NAME" "$PROJECT_ROOT/dist/$ASSET_NAME.sha256"
+echo "Creating $ASSET_NAME and $TAR_ASSET_NAME..."
+rm -f "$PROJECT_ROOT/dist/$ASSET_NAME" "$PROJECT_ROOT/dist/$ASSET_NAME.sha256" \
+  "$PROJECT_ROOT/dist/$TAR_ASSET_NAME" "$PROJECT_ROOT/dist/$TAR_ASSET_NAME.sha256"
 "$PYTHON_BIN" -m krok_helper.updater.posix_zip "$APP_DIST" "$PROJECT_ROOT/dist/$ASSET_NAME" --prefix "$APP_NAME"
-(cd "$PROJECT_ROOT/dist" && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256")
+# tar natively preserves symlinks and executable bits in desktop archive managers
+# (e.g. KDE Dolphin/Ark, whose libzip plugin turns ZIP symlinks into plain files).
+XZ_OPT="${XZ_OPT:--T0}" tar -C "$DIST_PATH" -cJf "$PROJECT_ROOT/dist/$TAR_ASSET_NAME" "$APP_NAME"
+(cd "$PROJECT_ROOT/dist" && sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256" && sha256sum "$TAR_ASSET_NAME" > "$TAR_ASSET_NAME.sha256")
 
 echo
 echo "Build complete:"
+echo "$PROJECT_ROOT/dist/$TAR_ASSET_NAME"
 echo "$PROJECT_ROOT/dist/$ASSET_NAME"

@@ -305,9 +305,18 @@ def test_linux_picks_only_the_linux_package(monkeypatch) -> None:
     """4.5.0 起发布 Linux 包；没有 Linux 包的旧版本绝不能回落到其他平台的 zip。"""
     monkeypatch.setattr(worker.sys, "platform", "linux")
     assert worker.current_asset_name() == "KaraokeStudio-linux.zip"
-    with_linux = replace(_release("4.5.0"), assets=_assets(
-        "KaraokeStudio-windows.zip", "KaraokeStudio-macos.zip", "KaraokeStudio-linux.zip"))
+    with_linux = replace(_release("4.5.1"), assets=_assets(
+        "KaraokeStudio-windows.zip",
+        "KaraokeStudio-macos.zip",
+        "KaraokeStudio-linux.tar.xz",
+        "KaraokeStudio-linux.zip",
+    ))
     assert with_linux.pick_primary_asset(worker.current_asset_name()).name == "KaraokeStudio-linux.zip"
+    tar_only = replace(_release("4.5.1"), assets=_assets(
+        "KaraokeStudio-windows.zip",
+        "KaraokeStudio-linux.tar.xz",
+    ))
+    assert tar_only.pick_primary_asset(worker.current_asset_name()) is None
     older = replace(_release("4.4.0"), assets=_assets("KaraokeStudio-windows.zip", "KaraokeStudio-macos.zip"))
     assert older.pick_primary_asset(worker.current_asset_name()) is None
 

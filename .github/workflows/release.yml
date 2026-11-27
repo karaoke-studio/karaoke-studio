@@ -283,7 +283,7 @@ jobs:
       - name: Install build toolchain and runtime libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y g++-12 ninja-build libportaudio2 libasound2 \
+          sudo apt-get install -y g++-12 ninja-build xz-utils libportaudio2 libasound2 \
             libegl1 libgl1 libfontconfig1 libdbus-1-3 libxkbcommon0 libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libnss3 libxcomposite1 \
             libxdamage1 libxrandr2 libxtst6 libvulkan1 \
@@ -328,6 +328,8 @@ jobs:
         with:
           name: KaraokeStudio-linux
           path: |
+            dist/KaraokeStudio-linux.tar.xz
+            dist/KaraokeStudio-linux.tar.xz.sha256
             dist/KaraokeStudio-linux.zip
             dist/KaraokeStudio-linux.zip.sha256
 
@@ -399,5 +401,7 @@ jobs:
             release-assets/macos/KaraokeStudio-macos.zip
             release-assets/macos/KaraokeStudio-macos-appcast.xml
             release-assets/macos/KaraokeStudio-macos-deltas.zip
+            release-assets/linux/KaraokeStudio-linux.tar.xz
+            release-assets/linux/KaraokeStudio-linux.tar.xz.sha256
             release-assets/linux/KaraokeStudio-linux.zip
             release-assets/linux/KaraokeStudio-linux.zip.sha256
