@@ -113,8 +113,61 @@ def _sidecar_subprocess_kwargs(platform: str | None = None) -> dict[str, Any]:
     }
 
 
+_LAUNCH_RETRY_DELAYS_S: tuple[float, ...] = (0.15, 0.45)
+_TRANSIENT_LAUNCH_WINERRORS = frozenset({5, 32})
+
+
+def _describe_executable_for_log(path: Path) -> str:
+    """Return lightweight file state metadata for startup failure diagnostics."""
+    try:
+        exists = path.exists()
+        is_file = path.is_file()
+        size = path.stat().st_size if is_file else None
+    except OSError as exc:
+        return f"stat_error={type(exc).__name__}({exc})"
+    return f"exists={exists} is_file={is_file} size={size}"
+
+
+def _is_transient_launch_os_error(exc: OSError) -> bool:
+    """Windows AV / Defender real-time scan locks often surface as WinError 5 or 32."""
+    if os.name != "nt":
+        return False
+    return (
+        isinstance(exc, PermissionError)
+        or getattr(exc, "winerror", None) in _TRANSIENT_LAUNCH_WINERRORS
+    )
+
+
+def _format_launch_os_error(executable_path: Path, exc: OSError) -> str:
+    winerror = getattr(exc, "winerror", None)
+    if isinstance(exc, PermissionError) or winerror == 5:
+        return (
+            "无法启动字幕渲染进程（[WinError 5] 拒绝访问，可能被安全软件或 "
+            "Windows Defender 拦截/锁定，请将软件安装目录加入白名单）："
+            f"{executable_path}（{exc}）"
+        )
+    if winerror == 32:
+        return (
+            "无法启动字幕渲染进程（[WinError 32] 文件正被其他程序占用，可能正在被安全软件扫描）："
+            f"{executable_path}（{exc}）"
+        )
+    return f"无法启动字幕渲染进程：{executable_path}（{exc}）"
+
+
 class NativeRendererError(RuntimeError):
     """Raised when the native sidecar reports an error or exits unexpectedly."""
+
+
+class NativeRendererLaunchError(NativeRendererError):
+    """Raised when spawning or bootstrapping the sidecar process fails."""
+
+
+class NativeRendererTimeoutError(NativeRendererError):
+    """Raised when waiting for a sidecar protocol response times out."""
+
+
+class NativeRendererExitError(NativeRendererError):
+    """Raised when the sidecar exits or closes stdout unexpectedly."""
 
 
 class NativeRendererStallError(NativeRendererError):
@@ -955,19 +1008,65 @@ class NativeRendererProcess:
             self._stall_aborted = False
             self._send_stall_reported = False
             self._send_started_monotonic = 0.0
+        started_at = time.monotonic()
         env = self._launch_environment()
-        self._process = subprocess.Popen(
-            [str(self.executable_path)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=1,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            **_sidecar_subprocess_kwargs(),
-        )
+        popen_kwargs = _sidecar_subprocess_kwargs()
+        max_attempts = 1 + len(_LAUNCH_RETRY_DELAYS_S)
+        process: subprocess.Popen[str] | None = None
+        for attempt in range(1, max_attempts + 1):
+            if self._aborted:
+                raise NativeRendererLaunchError(
+                    "native renderer was aborted during startup retry"
+                )
+            try:
+                process = subprocess.Popen(
+                    [str(self.executable_path)],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    bufsize=1,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    **popen_kwargs,
+                )
+                break
+            except OSError as exc:
+                winerror = getattr(exc, "winerror", None)
+                meta = _describe_executable_for_log(self.executable_path)
+                if attempt < max_attempts and _is_transient_launch_os_error(exc):
+                    delay_s = _LAUNCH_RETRY_DELAYS_S[attempt - 1]
+                    _log.warning(
+                        "sidecar 启动被系统拒绝或占用，%.2fs 后重试（第 %d/%d 次）: "
+                        "executable=%s winerror=%s errno=%s err=%s %s",
+                        delay_s,
+                        attempt,
+                        max_attempts,
+                        self.executable_path,
+                        winerror,
+                        exc.errno,
+                        exc,
+                        meta,
+                    )
+                    time.sleep(delay_s)
+                    continue
+                _log.error(
+                    "sidecar 启动失败（CreateProcess/Popen 异常，尝试 %d/%d 次）: "
+                    "executable=%s winerror=%s errno=%s err=%s %s",
+                    attempt,
+                    max_attempts,
+                    self.executable_path,
+                    winerror,
+                    exc.errno,
+                    exc,
+                    meta,
+                )
+                raise NativeRendererLaunchError(
+                    _format_launch_os_error(self.executable_path, exc)
+                ) from exc
+        assert process is not None
+        self._process = process
         self._start_pipe_threads(self._process)
         self._start_supervisor()
         try:
@@ -975,11 +1074,36 @@ class NativeRendererProcess:
                 timeout_s=self.startup_timeout_s,
                 waiting_for="ready",
             )
-        except BaseException:
+        except BaseException as exc:
+            elapsed_ms = (time.monotonic() - started_at) * 1000.0
+            _log.error(
+                "sidecar 等待 ready 失败: executable=%s pid=%s elapsed=%.0fms "
+                "timeout=%.1fs err_type=%s err=%s",
+                self.executable_path,
+                getattr(self._process, "pid", None),
+                elapsed_ms,
+                self.startup_timeout_s,
+                type(exc).__name__,
+                exc,
+            )
             self._stop_supervisor()
             raise
         if not ready.get("ok"):
-            raise NativeRendererError(f"native renderer did not become ready: {ready}")
+            _log.error(
+                "sidecar 返回非就绪状态: executable=%s pid=%s ready=%r",
+                self.executable_path,
+                getattr(self._process, "pid", None),
+                ready,
+            )
+            raise NativeRendererLaunchError(f"native renderer did not become ready: {ready}")
+        _log.info(
+            "sidecar 启动就绪: executable=%s pid=%s ready=%.0fms backend=%s schema=%s",
+            self.executable_path.name,
+            getattr(self._process, "pid", None),
+            (time.monotonic() - started_at) * 1000.0,
+            ready.get("backend", "native"),
+            ready.get("schema"),
+        )
         return ready
 
     def _launch_environment(self) -> dict[str, str] | None:
@@ -1777,7 +1901,7 @@ class NativeRendererProcess:
             error_type = (
                 NativeRendererStallError
                 if self.stall_aborted
-                else NativeRendererError
+                else NativeRendererTimeoutError
             )
             raise error_type(
                 self._format_timeout_error(
@@ -1811,7 +1935,7 @@ class NativeRendererProcess:
                 error_type = (
                     NativeRendererStallError
                     if self.stall_aborted
-                    else NativeRendererError
+                    else NativeRendererExitError
                 )
                 raise error_type(
                     self._format_exit_error(process, waiting_for=waiting_for)
@@ -1820,7 +1944,7 @@ class NativeRendererProcess:
                 error_type = (
                     NativeRendererStallError
                     if self.stall_aborted
-                    else NativeRendererError
+                    else NativeRendererExitError
                 )
                 raise error_type(
                     f"native renderer stdout read failed ({type(line).__name__}: {line}); "
@@ -1879,7 +2003,7 @@ class NativeRendererProcess:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process = self._current_process()
-                raise NativeRendererError(
+                raise NativeRendererTimeoutError(
                     self._format_timeout_error(
                         process,
                         timeout_s=self._resolved_timeout(timeout_s),
@@ -1950,7 +2074,7 @@ class NativeRendererProcess:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process = self._current_process()
-                raise NativeRendererError(
+                raise NativeRendererTimeoutError(
                     self._format_timeout_error(
                         process,
                         timeout_s=self._resolved_timeout(timeout_s),
@@ -1983,7 +2107,7 @@ class NativeRendererProcess:
             error_type = (
                 NativeRendererStallError
                 if self.stall_aborted
-                else NativeRendererError
+                else NativeRendererExitError
             )
             raise error_type(
                 self._format_exit_error(self._process, waiting_for="command write")

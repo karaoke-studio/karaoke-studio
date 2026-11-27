@@ -1,16 +1,40 @@
 """Latest-request Skia preview using the existing G5 shared-memory transport."""
 from __future__ import annotations
 
+import logging
 import threading
+import time
 import uuid
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QImage
 
-from krok_helper.subtitle_render.native.backend import SharedFrameRingReader, NativeRendererError
-from krok_helper.subtitle_render.native.skia_backend import SkiaRendererProcess, SkiaSelection
+from krok_helper.subtitle_render.native.backend import (
+    NativeRendererError,
+    NativeRendererExitError,
+    NativeRendererLaunchError,
+    NativeRendererStallError,
+    NativeRendererTimeoutError,
+    SharedFrameRingReader,
+)
+from krok_helper.subtitle_render.native.skia_backend import (
+    SkiaRendererProcess,
+    SkiaSceneUnsupportedError,
+    SkiaSelection,
+)
 from krok_helper.subtitle_render.native.skia_fonts import SkiaFontNotPreparedError
 from krok_helper.subtitle_render.engine.text.font_capabilities import capabilities_generation
+
+_log = logging.getLogger(__name__)
+_TRANSIENT_RETRY_DELAY_S = 0.4
+_MAX_TRANSIENT_RETRIES = 1
+_RETRYABLE_PREVIEW_ERRORS = (
+    NativeRendererLaunchError,
+    NativeRendererTimeoutError,
+    NativeRendererExitError,
+    NativeRendererStallError,
+    OSError,
+)
 
 
 class SkiaAsyncSubtitleRenderer(QObject):
@@ -37,6 +61,12 @@ class SkiaAsyncSubtitleRenderer(QObject):
         self.backend_label = "Skia 准备中"
         self._thread = threading.Thread(target=self._run, name="subtitle-preview-skia", daemon=True)
         self._thread.start()
+        _log.info(
+            "Skia 预览渲染器已创建: size=%sx%s selection=%s",
+            width,
+            height,
+            self.selection,
+        )
         # Workers only read GUI-prepared font resources. A registry change
         # makes them stale even when track/style objects are unchanged.
         # Owned, coalescing timer: a burst of registry changes prepares once,
@@ -131,6 +161,8 @@ class SkiaAsyncSubtitleRenderer(QObject):
         renderer = None
         configured_version = -1
         failed_version = -1
+        retry_version = -1
+        retry_count = 0
         generation = 0
         # Stable Windows slot allocation. The Unix sidecar still owns fresh POSIX keys.
         ring_key = "krok-skia-preview-" + uuid.uuid4().hex
@@ -145,8 +177,14 @@ class SkiaAsyncSubtitleRenderer(QObject):
                     font_generation = self._prepared_generation
                 if not state or state[0] is None or state[1] is None or version == failed_version:
                     continue
+                if version != retry_version:
+                    retry_version = version
+                    retry_count = 0
+                stage = "start"
+                attempt_started = time.monotonic()
                 try:
                     if renderer is None:
+                        stage = "start"
                         renderer = SkiaRendererProcess(selection=self.selection, response_timeout_s=5)
                         with self._condition:
                             if self._stopped:
@@ -154,6 +192,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
                             self._renderer = renderer
                         renderer.start()
                     if configured_version != version:
+                        stage = "configure"
                         track, style, extras, duration, scope, roll_shift = state
                         self.renderProgress.emit(0, "Skia 字幕准备")
                         renderer.configure(track, style, width=target[0], height=target[1], dpr=target[2], fps=60,
@@ -164,8 +203,14 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         self.current_backend_mode = "gpu" if info["execution_target"] == "gpu" else "cpu"
                         self.backend_label = "Skia " + (info["api"].capitalize() + " GPU" if self.current_backend_mode == "gpu" else "Raster CPU")
                         if info.get("fallback_reason"):
+                            _log.warning(
+                                "Skia 预览 GPU 初始化失败，已降级到 Skia Raster: reason=%s info=%r",
+                                info["fallback_reason"],
+                                info,
+                            )
                             self.renderProgress.emit(100, "Skia GPU 初始化失败，已使用 Skia Raster：" + info["fallback_reason"])
                         self.backendModeChanged.emit(self.current_backend_mode)
+                    stage = "render"
                     generation += 1
                     renderer.start_render_range([t_ms], generation=generation, threads=1,
                                                 shm_key=ring_key, ring_slots=1)
@@ -189,6 +234,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
                             break
                     if image is None or image.isNull():
                         raise NativeRendererError("Skia 字幕帧缺失")
+                    retry_count = 0
                     with self._condition:
                         valid = (not self._stopped and version == self._version
                                  and not self._font_change_pending
@@ -198,9 +244,13 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         self.frame_ready.emit(image, t_ms)
                         self.renderProgress.emit(100, "Skia 字幕已更新")
                 except Exception as exc:
+                    elapsed_ms = (time.monotonic() - attempt_started) * 1000.0
+                    pid = getattr(renderer, "process_id", None)
+                    executable = getattr(renderer, "executable_path", None)
                     if renderer is not None:
                         renderer.close()
                     renderer = None
+                    configured_version = -1
                     with self._condition:
                         self._renderer = None
                         valid = not self._stopped and version == self._version
@@ -209,12 +259,84 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         superseded = isinstance(exc, SkiaFontNotPreparedError) and (
                             self._font_change_pending
                             or capabilities_generation() != self._prepared_generation)
-                    failed_version = version
                     if superseded:
+                        _log.info(
+                            "Skia 预览字体库已变化，放弃过时请求等待重备: version=%s stage=%s err=%s",
+                            version,
+                            stage,
+                            exc,
+                        )
                         continue
-                    if valid:
-                        self.backend_label = "Skia 错误"
-                        self.renderError.emit("Skia 字幕渲染失败：" + str(exc))
+                    if not valid:
+                        _log.info(
+                            "Skia 预览请求已被停止或新状态替代: stopped=%s version=%s stage=%s elapsed=%.0fms err=%s",
+                            self._stopped,
+                            version,
+                            stage,
+                            elapsed_ms,
+                            exc,
+                        )
+                        continue
+                    retryable = (
+                        not isinstance(exc, (SkiaSceneUnsupportedError, SkiaFontNotPreparedError))
+                        and isinstance(exc, _RETRYABLE_PREVIEW_ERRORS)
+                        and retry_count < _MAX_TRANSIENT_RETRIES
+                    )
+                    if retryable:
+                        retry_count += 1
+                        _log.warning(
+                            "Skia 预览 %s 阶段瞬时失败，%.2fs 后重试（第 %d/%d 次）: "
+                            "version=%s t_ms=%s target=%s selection=%s pid=%s elapsed=%.0fms "
+                            "executable=%s err_type=%s err=%s",
+                            stage,
+                            _TRANSIENT_RETRY_DELAY_S,
+                            retry_count,
+                            _MAX_TRANSIENT_RETRIES,
+                            version,
+                            t_ms,
+                            target,
+                            self.selection,
+                            pid,
+                            elapsed_ms,
+                            executable,
+                            type(exc).__name__,
+                            exc,
+                            exc_info=True,
+                        )
+                        with self._condition:
+                            self._condition.wait_for(
+                                lambda: self._stopped or self._version != version,
+                                timeout=_TRANSIENT_RETRY_DELAY_S,
+                            )
+                            if self._stopped:
+                                return
+                            if self._version == version and self._pending is None:
+                                self._pending = t_ms
+                        continue
+                    failed_version = version
+                    _log.error(
+                        "Skia 预览失败（将通知界面回退旧渲染器）: stage=%s retries=%d "
+                        "version=%s t_ms=%s target=%s selection=%s pid=%s elapsed=%.0fms "
+                        "executable=%s err_type=%s err=%s",
+                        stage,
+                        retry_count,
+                        version,
+                        t_ms,
+                        target,
+                        self.selection,
+                        pid,
+                        elapsed_ms,
+                        executable,
+                        type(exc).__name__,
+                        exc,
+                        exc_info=True,
+                    )
+                    self.backend_label = "Skia 错误"
+                    if stage == "start" or isinstance(exc, (NativeRendererLaunchError, NativeRendererTimeoutError)):
+                        prefix = "Skia 后端启动失败："
+                    else:
+                        prefix = "Skia 字幕渲染失败："
+                    self.renderError.emit(prefix + str(exc))
         finally:
             try:
                 if renderer is not None:

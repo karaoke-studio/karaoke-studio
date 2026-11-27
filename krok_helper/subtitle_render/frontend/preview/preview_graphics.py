@@ -8,6 +8,7 @@ handled by ``QGraphicsVideoItem`` and the subtitles are painted by a transparent
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -72,6 +73,8 @@ from krok_helper.subtitle_render.domain.background import (
 from krok_helper.subtitle_render.domain.timing import TimingTrack
 from krok_helper.subtitle_render.domain.models import Style
 
+
+_log = logging.getLogger(__name__)
 
 _VIDEO_SEEK_TOLERANCE_MS = 80
 """Small playback drift allowed before forcing the preview video position."""
@@ -460,12 +463,22 @@ class PreviewGraphicsView(QGraphicsView):
             if skia:
                 from .skia_async import SkiaAsyncSubtitleRenderer
                 renderer_cls = lambda w, h, parent: SkiaAsyncSubtitleRenderer(w, h, parent, gpu_enabled=gpu_preview_enabled())
+                init_label = "SkiaAsyncSubtitleRenderer"
             elif gpu_preview_enabled():
                 renderer_cls = GpuAsyncSubtitleRenderer
+                init_label = "GpuAsyncSubtitleRenderer"
             elif native_preview_enabled():
                 renderer_cls = NativeAsyncSubtitleRenderer
+                init_label = "NativeAsyncSubtitleRenderer"
             else:
                 renderer_cls = AsyncSubtitleRenderer
+                init_label = "AsyncSubtitleRenderer"
+            _log.info(
+                "初始化预览渲染器: renderer=%s skia=%s gpu_preview=%s",
+                init_label,
+                skia,
+                gpu_preview_enabled(),
+            )
             self._async_renderer = renderer_cls(self._output_w, self._output_h, self)
             self._connect_async_frame_signal()
             self._connect_render_progress_signal()
@@ -645,14 +658,17 @@ class PreviewGraphicsView(QGraphicsView):
         if type(self._async_renderer) is target_cls:
             if not skia or self._async_renderer.selection == SkiaSelection.from_environment(gpu_enabled=enabled):
                 return True
+        previous_cls = type(self._async_renderer).__name__ if self._async_renderer is not None else "None"
         self._stop_async_renderer()
         if not skia and not enabled and not async_preview_enabled():
             self._update_quick_preview()
             self._subtitle_item.set_async_mode(False)
             self._subtitle_item.set_time(self._t_ms)
             # 同步 QPainter 模式（async 全关）后端确定是 CPU，也必须通知 UI。
+            _log.info("预览渲染器切换: %s -> SyncPainter (skia=%s gpu=%s)", previous_cls, skia, enabled)
             self.renderBackendChanged.emit(self.render_backend_label())
             return True
+        _log.info("预览渲染器切换: %s -> %s (skia=%s gpu=%s)", previous_cls, target_cls.__name__, skia, enabled)
         self._async_renderer = target_cls(self._output_w, self._output_h, self, **({"gpu_enabled": enabled} if skia else {}))
         self._connect_async_frame_signal()
         self._connect_render_progress_signal()
@@ -699,16 +715,33 @@ class PreviewGraphicsView(QGraphicsView):
         if self.sender() is not None and self.sender() is not self._async_renderer:
             return
         self._note_frame_delivered()
+        raw_reason = str(reason)
         if self._use_skia_backend:
             # Skia 不支持当前工程（或 sidecar 故障）：预览自动改用旧渲染器，
             # Windows 保持 GPU（D2D），其他平台回到 CPU Painter。
             selection = getattr(self._async_renderer, "selection", None)
-            gpu = os.name == "nt" and getattr(selection, "target", "gpu") == "gpu"
-            self.set_skia_backend_enabled(False, gpu_enabled=gpu)
-            reason = (
-                "Skia 暂不支持当前工程，预览已自动改用旧渲染器，导出也会自动回退。"
-                "重新勾选「使用 Skia 后端」可再次尝试。原因：" + str(reason)
+            target = getattr(selection, "target", "gpu")
+            gpu = os.name == "nt" and target == "gpu"
+            _log.warning(
+                "Skia 预览出错，自动切换旧渲染器: target=%s fallback_gpu=%s reason=%s",
+                target,
+                gpu,
+                raw_reason,
             )
+            self.set_skia_backend_enabled(False, gpu_enabled=gpu)
+            if "暂不支持" in raw_reason or "无法配置" in raw_reason:
+                reason = (
+                    "Skia 暂不支持当前工程，预览已自动改用旧渲染器，导出也会自动回退。"
+                    "重新勾选「使用 Skia 后端」可再次尝试。原因：" + raw_reason
+                )
+            else:
+                reason = (
+                    "Skia 预览后端启动或运行失败，预览已自动改用旧渲染器。"
+                    "如频繁出现请检查安全软件是否拦截了渲染进程，重新勾选「使用 Skia 后端」可再次尝试。"
+                    "原因：" + raw_reason
+                )
+        else:
+            _log.warning("收到 Skia 预览错误通知（当前未启用 Skia）: reason=%s", raw_reason)
         self.renderBackendChanged.emit(self.render_backend_label())
         self.gpuFallback.emit(reason)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import math
 import os
 import platform
@@ -638,10 +639,21 @@ def _render_subtitle_video_prepared(
                 preview_width=preview_width,
             )
         if skia_active and isinstance(exc, SkiaGpuDeviceError) and exc.raster_allowed:
+            logging.getLogger(__name__).warning(
+                "Skia GPU 导出设备故障，准备切换 Skia Raster 重试: err=%s",
+                exc,
+                exc_info=True,
+            )
             retry_skia_raster_reason = str(exc)
         elif skia_active:
             # 用户选定的口径：Skia 不支持或失败时自动回退旧渲染器从头导出
             # （Windows 走 D2D GPU，其余平台走 CPU Painter）。
+            logging.getLogger(__name__).warning(
+                "Skia 字幕导出失败，准备回退旧渲染器重头导出: err_type=%s err=%s",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             reason = " ".join(str(exc).split())
             if len(reason) > 300:
                 reason = reason[:297] + "..."

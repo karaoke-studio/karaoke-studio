@@ -9720,18 +9720,22 @@ class SubtitleRenderWindow(QWidget):
         except Exception:
             return
         if output.get("use_skia_backend") is False:
+            logging.getLogger(__name__).info("恢复用户偏好：关闭 Skia 字幕后端（use_skia_backend=False）")
             set_session_skia_backend(False)
 
     def _on_skia_backend_changed(self, enabled: bool) -> None:
         from krok_helper.subtitle_render.native.backend_selection import set_session_skia_backend
 
+        log = logging.getLogger(__name__)
         if enabled:
             from krok_helper.subtitle_render.native.backend import NativeRendererError
             from krok_helper.subtitle_render.native.skia_process import resolve_skia_renderer_path
 
             try:
-                resolve_skia_renderer_path()
+                skia_path = resolve_skia_renderer_path()
+                log.info("用户启用 Skia 字幕后端: executable=%s", skia_path)
             except NativeRendererError as error:
+                log.warning("用户尝试启用 Skia 字幕后端失败: %s", error)
                 previous = self._skia_backend_check.blockSignals(True)
                 try:
                     self._skia_backend_check.setChecked(False)
@@ -9739,6 +9743,8 @@ class SubtitleRenderWindow(QWidget):
                     self._skia_backend_check.blockSignals(previous)
                 self._show_gpu_preview_fallback(str(error))
                 return
+        else:
+            log.info("用户关闭 Skia 字幕后端，切回旧渲染器")
         set_session_skia_backend(enabled)
         self._property_panel.set_skia_backend_enabled(enabled)
         gpu_controls_visible = sys.platform == "win32" or enabled
@@ -9842,8 +9848,10 @@ class SubtitleRenderWindow(QWidget):
 
     def _show_gpu_preview_fallback(self, message: str) -> None:
         # 回退原因常带 sidecar 错误细节（stderr 尾巴等），10s 比 6s 更容易读完。
+        title = "Skia 字幕渲染" if self._skia_backend_check.isChecked() else "GPU 预览已回退"
+        logging.getLogger(__name__).warning("界面提示[%s]: %s", title, message)
         InfoBar.warning(
-            title="Skia 字幕渲染" if self._skia_backend_check.isChecked() else "GPU 预览已回退",
+            title=title,
             content=str(message),
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,
