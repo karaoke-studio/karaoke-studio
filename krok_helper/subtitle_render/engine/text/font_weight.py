@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import os
+from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QPainterPath, QRawFont
@@ -69,8 +70,13 @@ def resolve_font_instance(
         _RESOURCE_ERRORS.clear()
         _RESOURCE_GENERATION = generation
     resource_key = (generation, family, weight, italic, stretch_pct)
-    if resource_key in _RESOURCE_INSTANCES:
-        return _RESOURCE_INSTANCES[resource_key]
+    cached = _RESOURCE_INSTANCES.get(resource_key)
+    if cached is not None:
+        if not cached.resource_path or Path(cached.resource_path).is_file():
+            return cached
+        # External cleaners can remove snapshot files while the process is
+        # running; drop the stale entry so snapshot_raw_font re-materializes it.
+        _RESOURCE_INSTANCES.pop(resource_key, None)
     if resource_key in _RESOURCE_ERRORS:
         raise FontResourceError(_RESOURCE_ERRORS[resource_key])
     capabilities = get_capabilities(family)

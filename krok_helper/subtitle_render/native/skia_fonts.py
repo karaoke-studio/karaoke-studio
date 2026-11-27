@@ -1,6 +1,7 @@
 """Platform font discovery exports bytes/instance decisions, never layout metrics."""
 from contextlib import contextmanager
 import hashlib
+import os
 import sys
 import threading
 from krok_helper.subtitle_render.engine.text.font_slots import is_emoji_text
@@ -16,6 +17,10 @@ from .skia_font_aliases import (
 
 class SkiaFontNotPreparedError(NativeRendererError):
     """A worker needed a font decision the GUI thread has not prepared."""
+
+
+class SkiaFontResourceMissingError(SkiaFontNotPreparedError):
+    """A prepared font snapshot disappeared from disk and must be re-materialized on the GUI thread."""
 
 
 def body_symbol_family(text):
@@ -50,6 +55,10 @@ def font_instance(family, weight, italic):
         instance = prepared_font_instance(fallback, weight, italic)
     if instance is None:
         raise SkiaFontNotPreparedError(f'Skia 字体资源未在界面线程准备（字体库可能已变化）：{family}')
+    if instance.resource_path and not os.path.isfile(instance.resource_path):
+        raise SkiaFontResourceMissingError(
+            f'Skia 字体快照文件已丢失，需要重新准备：{family}（{instance.resource_path}）'
+        )
     return instance
 
 
@@ -58,16 +67,22 @@ def resolve_skia_font(style):
     return _export_instance(instance, style.font_family)
 
 
-def _file_sha256(path):
-    with open(path, 'rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+def _file_sha256(path, family=''):
+    try:
+        with open(path, 'rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+    except FileNotFoundError as exc:
+        label = f'{family}（{path}）' if family else str(path)
+        raise SkiaFontResourceMissingError(
+            f'Skia 字体快照文件已丢失，需要重新准备：{label}'
+        ) from exc
 
 
 def _export_instance(instance, family, digest=None):
     if not instance.resource_path:
         raise NativeRendererError(f'无法取得 Skia 字体资源：{family}')
     resource = {'path': instance.resource_path, 'face_index': 0,
-                'sha256': digest or _file_sha256(instance.resource_path),
+                'sha256': digest or _file_sha256(instance.resource_path, family),
                 'axes': dict(instance.axis_values)}
     return resource, {'synthetic_bold': instance.synthetic_bold,
                       'synthetic_italic': instance.synthetic_italic,
@@ -120,7 +135,7 @@ class SkiaFontResolver:
             digests = self._local.digests
             path = str(instance.resource_path)
             if path not in digests:
-                digests[path] = _file_sha256(path)
+                digests[path] = _file_sha256(path, family)
             # Axes/simulations/scale are recomputed per instance, never cached.
             return _export_instance(instance, family, digests[path])
 

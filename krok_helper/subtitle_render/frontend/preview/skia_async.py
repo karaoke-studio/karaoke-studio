@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QImage
 
 from krok_helper.subtitle_render.native.backend import (
@@ -22,7 +22,10 @@ from krok_helper.subtitle_render.native.skia_backend import (
     SkiaSceneUnsupportedError,
     SkiaSelection,
 )
-from krok_helper.subtitle_render.native.skia_fonts import SkiaFontNotPreparedError
+from krok_helper.subtitle_render.native.skia_fonts import (
+    SkiaFontNotPreparedError,
+    SkiaFontResourceMissingError,
+)
 from krok_helper.subtitle_render.engine.text.font_capabilities import capabilities_generation
 
 _log = logging.getLogger(__name__)
@@ -42,6 +45,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
     renderProgress = pyqtSignal(int, str)
     backendModeChanged = pyqtSignal(str)
     renderError = pyqtSignal(str)
+    _reprepareRequested = pyqtSignal()
     supports_font_preparation_steps = True
 
     def __init__(self, width, height, parent=None, *, gpu_enabled=True):
@@ -50,6 +54,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
         self._condition = threading.Condition()
         self._target = (int(width), int(height), 1.0)
         self._state = None
+        self._state_epoch = 0
         self._version = 0
         self._pending = None
         self._last_request = None
@@ -76,6 +81,9 @@ class SkiaAsyncSubtitleRenderer(QObject):
         self._font_timer.setSingleShot(True)
         self._font_timer.setInterval(0)
         self._font_timer.timeout.connect(self._reprepare_fonts)
+        self._reprepareRequested.connect(
+            self._font_database_changed, Qt.ConnectionType.QueuedConnection
+        )
         app = QGuiApplication.instance()
         if app is not None:
             app.fontDatabaseChanged.connect(self._font_database_changed)
@@ -115,6 +123,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
         with self._condition:
             self._state = (track, style, list(extra_tracks or []), duration_ms, relayout_scope, roll_shift_ms)
             self._prepared_generation = capabilities_generation()  # Owners prepare before set_state.
+            self._state_epoch += 1
             self._version += 1
 
     def set_render_target(self, width, height, device_pixel_ratio=1.0):
@@ -163,6 +172,8 @@ class SkiaAsyncSubtitleRenderer(QObject):
         failed_version = -1
         retry_version = -1
         retry_count = 0
+        missing_reprepare_epoch = -1
+        missing_reprepare_count = 0
         generation = 0
         # Stable Windows slot allocation. The Unix sidecar still owns fresh POSIX keys.
         ring_key = "krok-skia-preview-" + uuid.uuid4().hex
@@ -174,9 +185,13 @@ class SkiaAsyncSubtitleRenderer(QObject):
                         return
                     t_ms, self._pending = self._pending, None
                     state, target, version = self._state, self._target, self._version
+                    state_epoch = self._state_epoch
                     font_generation = self._prepared_generation
                 if not state or state[0] is None or state[1] is None or version == failed_version:
                     continue
+                if state_epoch != missing_reprepare_epoch:
+                    missing_reprepare_epoch = state_epoch
+                    missing_reprepare_count = 0
                 if version != retry_version:
                     retry_version = version
                     retry_count = 0
@@ -235,6 +250,7 @@ class SkiaAsyncSubtitleRenderer(QObject):
                     if image is None or image.isNull():
                         raise NativeRendererError("Skia 字幕帧缺失")
                     retry_count = 0
+                    missing_reprepare_count = 0
                     with self._condition:
                         valid = (not self._stopped and version == self._version
                                  and not self._font_change_pending
@@ -276,6 +292,20 @@ class SkiaAsyncSubtitleRenderer(QObject):
                             elapsed_ms,
                             exc,
                         )
+                        continue
+                    if isinstance(exc, SkiaFontResourceMissingError) and missing_reprepare_count < 1:
+                        missing_reprepare_count += 1
+                        _log.warning(
+                            "Skia 预览字体快照文件已丢失，通知界面线程重新准备: version=%s stage=%s err=%s",
+                            version,
+                            stage,
+                            exc,
+                        )
+                        with self._condition:
+                            if self._stopped:
+                                return
+                            self._font_change_pending = True
+                        self._reprepareRequested.emit()
                         continue
                     retryable = (
                         not isinstance(exc, (SkiaSceneUnsupportedError, SkiaFontNotPreparedError))

@@ -7,11 +7,12 @@ from time import monotonic
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, pyqtSignal
 
 from krok_helper.subtitle_render.engine.text.font_preparation import iter_prepare_fonts
+from krok_helper.subtitle_render.native.skia_fonts import SkiaFontResourceMissingError
 from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
 
 
 class _SceneResult(QObject):
-    finished = pyqtSignal(object, object, str)
+    finished = pyqtSignal(object, object, str, bool)
 
 
 class _PrepareScene(QRunnable):
@@ -28,9 +29,14 @@ class _PrepareScene(QRunnable):
             ir = prepare_skia_scene_ir(self.track, self.style, **self.options)
             data = json.dumps(ir, ensure_ascii=False, allow_nan=False).encode('utf-8')
         except Exception as exc:
-            self.result.finished.emit(self.revision, None, str(exc) or type(exc).__name__)
+            self.result.finished.emit(
+                self.revision,
+                None,
+                str(exc) or type(exc).__name__,
+                isinstance(exc, SkiaFontResourceMissingError),
+            )
         else:
-            self.result.finished.emit(self.revision, data, '')
+            self.result.finished.emit(self.revision, data, '', False)
 
 
 class SkiaQuickScene(QObject):
@@ -41,6 +47,8 @@ class SkiaQuickScene(QObject):
         self._canvas = canvas
         self._revision = 0
         self._pending = None
+        self._active_source = None
+        self._retried_missing_revision = -1
         self._running = None
         self._font_steps = None
         self._timer = QTimer(self)
@@ -53,6 +61,7 @@ class SkiaQuickScene(QObject):
         if not self._canvas.reserve_scene(self._revision):
             raise RuntimeError('Skia 预览场景版本必须递增')
         self._pending = (self._revision, track, style, options)
+        self._active_source = None
         self._font_steps = None
         self._timer.start()
         return self._revision
@@ -60,6 +69,7 @@ class SkiaQuickScene(QObject):
     def clear(self) -> None:
         self._revision += 1
         self._pending = None
+        self._active_source = None
         self._font_steps = None
         self._timer.stop()
         self._canvas.clear_scene(self._revision)
@@ -78,6 +88,7 @@ class SkiaQuickScene(QObject):
             except StopIteration:
                 self._timer.stop()
                 self._font_steps = None
+                self._active_source = self._pending
                 self._pending = None
                 task = _PrepareScene(revision, track, style, options)
                 self._running = task
@@ -85,13 +96,24 @@ class SkiaQuickScene(QObject):
                 QThreadPool.globalInstance().start(task)
                 break
 
-    def _python_prepared(self, revision, data, error: str) -> None:
+    def _python_prepared(self, revision, data, error: str, resource_missing: bool = False) -> None:
         self._running = None
         if self._pending is not None:
             self._timer.start()
         if revision != self._revision:
             return
         if error:
+            if (
+                resource_missing
+                and self._retried_missing_revision != revision
+                and self._active_source is not None
+                and self._active_source[0] == revision
+            ):
+                self._retried_missing_revision = revision
+                self._pending = self._active_source
+                self._font_steps = None
+                self._timer.start()
+                return
             self.preparation_failed.emit(error)
         elif not self._canvas.configure_scene(data, revision):
             self.preparation_failed.emit('Skia 预览场景配置已失效')

@@ -25,6 +25,25 @@ _TAGS = "head hhea maxp OS/2 hmtx cmap loca glyf name post cvt fpgm prep gasp CF
 _TAGS = [tag.ljust(4) for tag in _TAGS]
 
 
+def _resource_directory() -> Path:
+    """Resolve a persistent local cache directory for font snapshots.
+
+    Avoid ``%TEMP%`` by default so OS/cleaner temp sweeps do not delete live
+    snapshots mid-session; fall back to the app temp dir if local cache is
+    unwritable (e.g. restricted sandbox).
+    """
+    from krok_helper.app_paths import cache_dir, temp_dir
+
+    preferred = cache_dir("font-resources")
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return preferred
+    except OSError:
+        fallback = temp_dir("font-resources")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+
 def clear_resource_cache() -> None:
     """Forget face mappings after registry changes; active sidecars keep files."""
     with _LOCK:
@@ -94,8 +113,7 @@ def snapshot_raw_font(raw: QRawFont, key: tuple) -> str:
     output = bytearray(header + directory + body)
     struct.pack_into(">I", output, head_offset + 8, (0xB1B0AFBA - checksum(output)) & 0xFFFFFFFF)
     digest = hashlib.sha256(output).hexdigest()
-    directory_path = Path(tempfile.gettempdir()) / "LinKFontResources"
-    directory_path.mkdir(parents=True, exist_ok=True)
+    directory_path = _resource_directory()
     destination = directory_path / (digest + ".otf")
     with _LOCK:
         if not destination.is_file():

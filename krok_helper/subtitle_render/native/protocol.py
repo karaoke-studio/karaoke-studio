@@ -1234,7 +1234,9 @@ def _line_char_fallbacks(style: Style, render_line: TimingLine) -> list[dict[str
             instance = lookup_fallback_instance(*slot, text)
             if instance is not None:
                 hint = payload.setdefault("font_resolved", {})
-                hint.update(resource_path=instance.resource_path, style=instance.face_style,
+                if instance.resource_path and Path(instance.resource_path).is_file():
+                    hint["resource_path"] = instance.resource_path
+                hint.update(style=instance.face_style,
                             scale=instance.fallback_scale,
                             weight=instance.face_weight, sim_bold=instance.synthetic_bold,
                             sim_italic=instance.synthetic_italic)

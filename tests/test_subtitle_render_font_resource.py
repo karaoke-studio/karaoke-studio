@@ -321,3 +321,78 @@ def test_snapshot_identity_includes_outlines_not_only_metadata():
     assert first != second
     assert same == first
     resources.clear_resource_cache()
+
+
+def test_snapshot_uses_local_cache_dir_and_rematerializes_after_external_delete(qapp, monkeypatch, tmp_path):
+    from skia_text_fixture import make_font
+    from krok_helper.app_paths import CACHE_DIR_ENV
+    from krok_helper.subtitle_render.engine.text import font_resource as resources
+    from krok_helper.subtitle_render.engine.text import font_weight as weights
+
+    cache_root = tmp_path / "local-cache"
+    monkeypatch.setenv(CACHE_DIR_ENV, str(cache_root))
+    family = "LinK Cache Recovery Probe"
+    font_path = make_font(tmp_path / "probe.ttf", family=family)
+    font_id = QFontDatabase.addApplicationFont(str(font_path))
+    assert font_id >= 0
+    try:
+        weights.clear_font_weight_cache()
+        resources.clear_resource_cache()
+
+        first = weights.resolve_font_instance(family, 400)
+        assert first.resource_path
+        snapshot_path = Path(first.resource_path)
+        assert snapshot_path.is_file()
+        assert snapshot_path.parent == cache_root / "font-resources"
+
+        # Simulate an external cleaner deleting the snapshot while caches stay warm.
+        snapshot_path.unlink()
+        assert not snapshot_path.exists()
+
+        recovered = weights.resolve_font_instance(family, 400)
+        assert recovered.resource_path == first.resource_path
+        assert Path(recovered.resource_path).is_file()
+    finally:
+        QFontDatabase.removeApplicationFont(font_id)
+        weights.clear_font_weight_cache()
+        resources.clear_resource_cache()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows fallback font resources")
+def test_prewarm_fallback_rematerializes_deleted_snapshot(tmp_path):
+    root = Path(__file__).resolve().parent.parent
+    cache_root = tmp_path / "fallback-cache"
+    script = f"""
+import json
+from pathlib import Path
+from PyQt6.QtWidgets import QApplication
+app = QApplication([])
+from krok_helper.subtitle_render.engine.text import font_fallback, font_resource
+font_fallback.clear_font_caches()
+font_resource.clear_resource_cache()
+font_fallback.prewarm_fallback("Arial", 400, False, ["한"])
+first = font_fallback.lookup_fallback_instance("Arial", 400, False, "한")
+assert first is not None and first.resource_path
+snapshot = Path(first.resource_path)
+assert snapshot.is_file()
+snapshot.unlink()
+assert not snapshot.exists()
+# Without clearing caches or bumping font generation, re-prewarming must recreate the file.
+font_fallback.prewarm_fallback("Arial", 400, False, ["한"])
+restored = font_fallback.lookup_fallback_instance("Arial", 400, False, "한")
+assert restored is not None and restored.resource_path
+print(json.dumps({{"path": restored.resource_path, "exists": Path(restored.resource_path).is_file()}}))
+"""
+    env = dict(
+        os.environ,
+        QT_QPA_PLATFORM="windows",
+        PYTHONPATH=str(root),
+        PYTHONIOENCODING="utf-8",
+        KARAOKE_STUDIO_CACHE_DIR=str(cache_root),
+    )
+    completed = subprocess.run([sys.executable, "-c", script], cwd=root, env=env, capture_output=True, timeout=60)
+    stdout = completed.stdout.decode("utf-8", errors="replace")
+    assert completed.returncode == 0, stdout + completed.stderr.decode("utf-8", errors="replace")
+    payload = json.loads(stdout.strip().splitlines()[-1])
+    assert payload["exists"]
+    assert Path(payload["path"]).parent == cache_root / "font-resources"

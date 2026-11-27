@@ -25,6 +25,7 @@ from __future__ import annotations
 import threading
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 
 from strange_uta_game.backend.domain.graphemes import split_graphemes
 from PyQt6.QtGui import QFont, QRawFont, QTextLayout, QTextOption
@@ -295,9 +296,22 @@ def prewarm_fallback(
         if not text:
             continue
         key = (cache_key_base, text)
+        fallback_key = (cache_key_base[0], cache_key_base, text)
         with _TABLE_LOCK:
             if key in _RESOLUTION_CACHE:
-                continue
+                cached_fallback = _FALLBACK_FONT_TABLE.get(fallback_key)
+                resource_path = (
+                    getattr(cached_fallback, "resource_path", "")
+                    if cached_fallback is not None
+                    else ""
+                )
+                if not resource_path or Path(resource_path).is_file():
+                    continue
+                # Snapshot file was removed externally; force re-resolution so
+                # remember_fallback_face re-materializes it on disk.
+                _RESOLUTION_CACHE.pop(key, None)
+                _FALLBACK_FONT_TABLE.pop(fallback_key, None)
+                _FALLBACK_TABLE.pop(fallback_key, None)
         missing = missing_clusters(family, weight, italic, text)
         with _TABLE_LOCK:
             if len(_RESOLUTION_CACHE) >= _FALLBACK_MAX:

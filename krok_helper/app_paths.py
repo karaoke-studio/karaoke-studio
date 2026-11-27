@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -368,6 +369,9 @@ def migrate_app_data_dir() -> Path | None:
 #: %TEMP% 下的应用统一根目录名。
 TEMP_ROOT_NAME = "LinKLyrics"
 
+#: 本地缓存根目录环境变量覆盖（测试与排障用）。
+CACHE_DIR_ENV = "KARAOKE_STUDIO_CACHE_DIR"
+
 #: 临时根目录环境变量覆盖（测试与排障用）。
 TEMP_DIR_ENV = "KARAOKE_STUDIO_TEMP_DIR"
 
@@ -375,6 +379,35 @@ TEMP_DIR_ENV = "KARAOKE_STUDIO_TEMP_DIR"
 #: 注意 ``KaraokeStudioUpdater`` **不在**其中——它的路径写在用户支持文档里
 #: （updater.log 位置），保持不动。
 _LEGACY_TEMP_DIR_NAMES = ("krok_merge_preview", "KaraokeStudioPreviewCache")
+
+
+def cache_root() -> Path:
+    """应用本地缓存根目录（可用 :data:`CACHE_DIR_ENV` 覆盖）。
+
+    存放可再生但在进程运行期间不宜被 ``%TEMP%`` 清理工具随时删除的缓存
+    （如字体资源快照）。Windows 落在 ``%LOCALAPPDATA%``（不污染 Roaming），
+    macOS 落在 ``~/Library/Caches``，Linux 遵循 ``XDG_CACHE_HOME``。
+    """
+    override = os.getenv(CACHE_DIR_ENV)
+    if override:
+        return Path(override).expanduser()
+    app_name = effective_app_name()
+    if os.name == "nt":
+        local_appdata = os.getenv("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / app_name / "cache"
+        return temp_root()
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / app_name
+    xdg_cache = os.getenv("XDG_CACHE_HOME")
+    if xdg_cache:
+        return Path(xdg_cache).expanduser() / app_name.lower().replace(" ", "-")
+    return Path.home() / ".cache" / app_name.lower().replace(" ", "-")
+
+
+def cache_dir(name: str) -> Path:
+    """本地缓存根下的某个模块子目录（如 ``font-resources``）。"""
+    return cache_root() / name
 
 
 def temp_root() -> Path:

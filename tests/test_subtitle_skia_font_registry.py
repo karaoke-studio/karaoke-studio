@@ -645,3 +645,146 @@ def test_product_export_with_missing_font_falls_back_within_skia(binary, monkeyp
     assert any('Skia 字幕后端' in line for line in logs)
     assert any('Skia 字体回退' in line and missing in line for line in logs)
     assert not any('Skia 字幕导出失败' in line for line in logs)
+
+
+def test_skia_preview_recovers_when_font_snapshot_deleted_mid_session(binary, registry, monkeypatch, tmp_path):
+    import time
+    from pathlib import Path
+    from PyQt6.QtWidgets import QApplication
+    from krok_helper.app_paths import CACHE_DIR_ENV
+    from krok_helper.subtitle_render.engine.text import font_resource, font_weight
+    from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
+    from krok_helper.subtitle_render.frontend.preview.skia_async import SkiaAsyncSubtitleRenderer
+
+    cache_root = tmp_path / 'skia-preview-cache'
+    monkeypatch.setenv(CACHE_DIR_ENV, str(cache_root))
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    font_weight.clear_font_weight_cache()
+    font_resource.clear_resource_cache()
+
+    for key, path in (('main', registry.font('main', MAIN, 600)), ('ruby', registry.font('ruby', RUBY, 500)),
+                      ('role', registry.font('role', ROLE, 760))):
+        registry.add(key, path)
+    track, style = source()
+    prepare_fonts(track, style, [], use_skia_backend=True)
+
+    renderer = SkiaAsyncSubtitleRenderer(640, 360, gpu_enabled=False)
+    images, errors = [], []
+    renderer.frame_ready.connect(lambda image, t: images.append(image))
+    renderer.renderError.connect(errors.append)
+
+    def wait_for(predicate, timeout_s=25):
+        deadline = time.monotonic() + timeout_s
+        while not predicate() and not errors and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        assert not errors, errors
+        assert predicate()
+
+    try:
+        renderer.set_state(track, style)
+        renderer.request(700)
+        wait_for(lambda: len(images) >= 1)
+
+        # Simulate external temp/cache cleanup deleting every materialized .otf snapshot.
+        snapshot_dir = cache_root / 'font-resources'
+        deleted = list(snapshot_dir.glob('*.otf'))
+        assert deleted
+        for item in deleted:
+            item.unlink()
+        assert not list(snapshot_dir.glob('*.otf'))
+
+        # Trigger a reconfigure without set_state or fontDatabaseChanged.
+        renderer.set_render_target(640, 360, 1.25)
+        renderer.request(700)
+        wait_for(lambda: len(images) >= 2)
+        assert list(snapshot_dir.glob('*.otf'))
+    finally:
+        renderer.stop()
+
+
+def test_skia_preview_limits_missing_snapshot_reprepare_attempts(binary, registry, monkeypatch):
+    import time
+    from PyQt6.QtWidgets import QApplication
+    from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
+    from krok_helper.subtitle_render.frontend.preview import skia_async
+    from krok_helper.subtitle_render.native.skia_fonts import SkiaFontResourceMissingError
+
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    for key, path in (('main', registry.font('main', MAIN, 600)), ('ruby', registry.font('ruby', RUBY, 500)),
+                      ('role', registry.font('role', ROLE, 760))):
+        registry.add(key, path)
+    track, style = source()
+    prepare_fonts(track, style, [], use_skia_backend=True)
+
+    calls = []
+
+    def always_missing(self, *args, **kwargs):
+        calls.append(1)
+        raise SkiaFontResourceMissingError('Skia 字体快照文件已丢失（注入测试）')
+
+    monkeypatch.setattr(skia_async.SkiaRendererProcess, 'configure', always_missing)
+    renderer = skia_async.SkiaAsyncSubtitleRenderer(640, 360, gpu_enabled=False)
+    errors = []
+    renderer.renderError.connect(errors.append)
+    try:
+        renderer.set_state(track, style)
+        renderer.request(700)
+        deadline = time.monotonic() + 20
+        while not errors and time.monotonic() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        assert errors and '快照文件已丢失' in errors[0]
+        # Initial attempt + 1 automatic GUI reprepare attempt, then fail without looping.
+        assert len(calls) == 2
+    finally:
+        renderer.stop()
+
+
+def test_product_export_recovers_when_font_snapshot_deleted_before_export(binary, registry, monkeypatch, tmp_path):
+    from krok_helper.app_paths import CACHE_DIR_ENV
+    from krok_helper.subtitle_render.domain.background import BackgroundSource
+    from krok_helper.subtitle_render.engine import renderer
+    from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+    from krok_helper.subtitle_render.engine.text import font_resource, font_weight
+    from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
+    from test_subtitle_skia_protocol import export_ffmpeg
+
+    cache_root = tmp_path / 'skia-export-cache'
+    monkeypatch.setenv(CACHE_DIR_ENV, str(cache_root))
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    font_weight.clear_font_weight_cache()
+    font_resource.clear_resource_cache()
+
+    ffmpeg = export_ffmpeg(tmp_path)
+    monkeypatch.setattr(renderer, 'paint_frame', lambda *a, **k: pytest.fail('subtitle QPainter export was called'))
+    monkeypatch.setattr(renderer, 'paint_frame_to_painter', lambda *a, **k: pytest.fail('subtitle QPainter export was called'))
+
+    for key, path in (('main', registry.font('main', MAIN, 600)), ('ruby', registry.font('ruby', RUBY, 500)),
+                      ('role', registry.font('role', ROLE, 760))):
+        registry.add(key, path)
+    track, style = source()
+    prepare_fonts(track, style, [], use_skia_backend=True)
+
+    snapshot_dir = cache_root / 'font-resources'
+    deleted = list(snapshot_dir.glob('*.otf'))
+    assert deleted
+    for item in deleted:
+        item.unlink()
+    assert not list(snapshot_dir.glob('*.otf'))
+
+    # Export prewarm runs again without registry changes and must rematerialize deleted snapshots.
+    prepare_fonts(track, style, [], use_skia_backend=True)
+    assert list(snapshot_dir.glob('*.otf'))
+
+    job = RenderJob(
+        track, style, tmp_path / 'unused', tmp_path / 'recovered-snapshot.mp4',
+        width=640, height=360, background_source=BackgroundSource(kind='solid', color='#183048'),
+        fps=30, duration_ms=1000, include_audio=False, gpu_export_enabled=False, preset='ultrafast',
+        use_skia_backend=True,
+    )
+    logs = []
+    output = renderer.render_subtitle_video(job, ffmpeg_dir=ffmpeg.parent, logger=logs.append)
+    assert output.is_file() and output.stat().st_size > 1000
+    assert any('Skia 字幕后端' in line for line in logs)
+    assert not any('Skia 字幕导出失败' in line for line in logs)
