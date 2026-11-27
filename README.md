@@ -281,15 +281,20 @@
 
 ## 📦 安装与运行 / Installation
 
-> 🪟 **支持系统 / Supported OS：** Windows 10 / 11 · 🍎 macOS（实验性，未在真机验证 / experimental, unverified）
+> 🪟 **支持系统 / Supported OS：** Windows 10 / 11 · 🍎 macOS（Apple Silicon） · 🐧 Linux（x86_64，Ubuntu 22.04 及之后）
 
 > ⚙️ **前置依赖 / Prerequisite：** 本工具**不打包 FFmpeg**，全程通过 `ffmpeg` / `ffprobe` 子进程干活。请先自行安装并加入 `PATH`，或在 **全局设置 → 工具** 里指定 FFmpeg 目录。<br/>
 > FFmpeg is **not bundled**; the app runs `ffmpeg` and `ffprobe` as subprocesses throughout the workflow. Install FFmpeg and put it on `PATH`, or point the app at its folder under **Settings → Tools**.
 
 ### 🚀 方式一 · 直接运行（推荐） / Pre-built release (recommended)
 
-从 [Releases](https://github.com/karaoke-studio/karaoke-studio/releases) 页面下载 `KaraokeStudio-windows.zip`，解压后双击 `Lin-K Lyrics.exe` 即可。之后的版本可以直接用应用内的自动更新，不必再手动下载整包。
-Download `KaraokeStudio-windows.zip` from the [Releases](https://github.com/karaoke-studio/karaoke-studio/releases) page, unzip, then run `Lin-K Lyrics.exe`. Later versions arrive through the in-app updater.
+- **Windows**：从 [Releases](https://github.com/karaoke-studio/karaoke-studio/releases) 页面下载 `KaraokeStudio-windows.zip`，解压后双击 `Lin-K Lyrics.exe` 即可。之后的版本可以直接用应用内的自动更新，不必再手动下载整包。
+- **macOS**：下载 `KaraokeStudio-macos.zip`，解压后运行 `Lin-K Lyrics.app`。
+- **Linux（x86_64）**：推荐下载 `KaraokeStudio-linux.tar.xz`（原生保留符号链接与可执行权限，KDE Dolphin / Ark 等桌面归档管理器可直接右键解压），解压后运行 `./Lin-K Lyrics`。`KaraokeStudio-linux.zip` 保留用于应用内自动更新；如手动解压 `.zip`，请使用 `unzip`、`7z` 或 `bsdtar` 命令行工具，避免部分图形解压器的 `libzip` 插件破坏符号链接。
+
+- **Windows**: Download `KaraokeStudio-windows.zip` from [Releases](https://github.com/karaoke-studio/karaoke-studio/releases), extract, and launch `Lin-K Lyrics.exe`. Later versions arrive through the in-app updater.
+- **macOS**: Download `KaraokeStudio-macos.zip`, extract, and launch `Lin-K Lyrics.app`.
+- **Linux (x86_64)**: Download `KaraokeStudio-linux.tar.xz` (preserves symlinks and executable permissions in desktop archive managers such as KDE Dolphin/Ark), extract, and run `./Lin-K Lyrics`. `KaraokeStudio-linux.zip` is retained for in-app updates; if extracting the `.zip` manually, use `unzip`, `7z`, or `bsdtar`.
 
 <sub>💡 人声分离所需的运行时与模型**不在安装包里**，首次使用时按向导下载（CPU 版数百 MB，CUDA 版约 3–4 GB）。<br/>
 <i>The vocal-separation runtime and models are downloaded through the first-use wizard, not shipped in the zip (a few hundred MB for the CPU runtime or roughly 3–4 GB for CUDA).</i></sub>

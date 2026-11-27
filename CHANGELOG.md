@@ -19,9 +19,10 @@
 
 <span style="color:#d64545"><b>Lin-K/SUG 反馈交流群 QQ 1108437280</b></span>
 
-新增 UE 线性调色、隔行视频自动反交错与「随机缩放」出入场动画，改进 Skia 后端的字体回退、启动稳定性与图片导唱符，并优化动画与字体设置界面。
+新增 UE 线性调色、隔行视频自动反交错、Linux `.tar.xz` 安装包与「随机缩放」出入场动画，改进 Skia 后端的字体回退、启动稳定性与图片导唱符，并优化动画与字体设置界面。
 
 ### 新增功能
+- **Linux 新增 `.tar.xz` 安装包**：Linux 手动下载请优先选择 `KaraokeStudio-linux.tar.xz`，原生保留符号链接与可执行权限，避免 KDE Dolphin / Ark 默认 `libzip` 解压 `.zip` 时符号链接退化导致启动报错；`KaraokeStudio-linux.zip` 保留用于应用内自动更新（如需手动解压 `.zip`，请使用 `unzip`、`7z` 或 `bsdtar`）。[@凛夜](https://github.com/Myosotis11037)
 - **调色新增「UE 线性」模式**：专业调色可切换为 UE 线性 RGB 输入，RGB 与明度可超过 1、色相按角度输入，便于直接使用 UE 材质中的颜色数值；RGB 通道滑条固定显示从黑到对应纯色的渐变，方便对照。[@凛夜](https://github.com/Myosotis11037)
 - **隔行视频自动反交错**：加载隔行扫描的背景视频时自动识别，预览与导出均进行反交错处理，消除高速运动画面里的横纹；逐行视频不受影响。[@凛夜](https://github.com/Myosotis11037)
 - **Skia 后端新增「随机缩放」出入场动画**。[@凛夜](https://github.com/Myosotis11037)
