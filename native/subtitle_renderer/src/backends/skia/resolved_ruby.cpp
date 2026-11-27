@@ -469,11 +469,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 下方注音渐变描边缺少能力声明或格式无效");
         const bool gradientOutlines = (primary.width || secondary.width)
             && (lower ? object.contains("lower_outline_gradient") : allowOutlineGradient);
-        // The GPU protects the body under any image paint, decoded or not.
-        const bool imageOutline = !lower && (paint.rubyBeforeStrokePaint.mode == "image"
-                                             || paint.rubyAfterStrokePaint.mode == "image");
+        const auto lowerOutlineImages = object.value("lower_outline_image").toObject();
+        // The GPU protects the inner ring when an image can leave holes.
+        const bool imageOutline = lower ? lowerOutlineImages.contains("stroke")
+            : (paint.rubyBeforeStrokePaint.mode == "image" || paint.rubyAfterStrokePaint.mode == "image");
+        const auto& beforePrimary = lower ? lowerStroke[0] : paint.rubyBeforeStrokePaint;
+        const auto& afterPrimary = lower ? lowerStroke[1] : paint.rubyAfterStrokePaint;
         const bool protectPrimary = primary.width && (primary.hasAlpha() || imageOutline || (gradientOutlines
-            && (paintNeedsBodyProtection(paint.rubyBeforeStrokePaint) || paintNeedsBodyProtection(paint.rubyAfterStrokePaint))));
+            && (paintNeedsBodyProtection(beforePrimary) || paintNeedsBodyProtection(afterPrimary))));
         const bool protectFill = imageFill || (before >> 24) < 255 || (after >> 24) < 255 || (gradientFill
             && (paintNeedsBodyProtection(beforeFill) || paintNeedsBodyProtection(afterFill)));
         const float innerWidth = float(primary.width * glyphs.dpr);
@@ -745,6 +748,31 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                           std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients),
                           dripComposition});
         groups.back().utopiaExitSpan = utopiaExitSpan;
+        const auto loadLowerImages = [&](const QJsonObject& phases, const auto& active, auto& images) {
+            if (!lower || !validPhases(phases))
+                throw BackendError("Skia 下方注音图片画笔阶段无效");
+            for (const bool after : {false, true}) {
+                const char* phase = after ? "after" : "before";
+                if (!phases.contains(phase)) continue;
+                if (!active(phase))
+                    throw BackendError("Skia 下方注音图片画笔缺少对应绘制层");
+                images[after] = imageCache.fill(lowerImage(phases, phase), scene.layoutReferenceScale);
+            }
+        };
+        if (object.contains("lower_outline_image")) {
+            const auto& paints = lowerOutlineImages;
+            if (paints.isEmpty() || paints.size() != int(paints.contains("stroke")) + int(paints.contains("stroke2")))
+                throw BackendError("Skia 下方注音图片描边层无效");
+            if (paints.contains("stroke"))
+                loadLowerImages(paints.value("stroke").toObject(), [&](const char*) { return primary.width > 0; },
+                                groups.back().outlineImages);
+            if (paints.contains("stroke2"))
+                loadLowerImages(paints.value("stroke2").toObject(), [&](const char*) { return secondary.width > 0; },
+                                groups.back().outerOutlineImages);
+        }
+        if (object.contains("lower_glow_image"))
+            loadLowerImages(object.value("lower_glow_image").toObject(),
+                            [&](const char* phase) { return lowerGlow.contains(phase); }, groups.back().glowImages);
         // Image-painted outlines use the GPU's device-anchored bitmap brush.
         if (!lower)
             for (const bool after : {false, true}) {

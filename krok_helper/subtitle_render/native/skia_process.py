@@ -29,7 +29,7 @@ def resolve_skia_renderer_path() -> Path:
 
 # The sidecar and this client ship from one source tree. Any change to the IR,
 # measurement or frame protocol bumps this single version on both sides.
-SKIA_PROTOCOL = 2
+SKIA_PROTOCOL = 3
 
 
 class SkiaSidecarProcess(NativeRendererProcess):

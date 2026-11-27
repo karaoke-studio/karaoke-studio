@@ -775,6 +775,64 @@ def test_lower_reading_image_matches_actual_d2d_gpu(binary, application, tmp_pat
     assert_ruby_transition_gpu_parity(binary, replace(case, style=textured), times)
 
 
+def lower_image_layers_style(style, path):
+    paint = {'mode': 'image', 'image_path': str(path), 'image_scale_pct': 125, 'color': '#FFCD402A'}
+    return replace(style, entry_anim='none', exit_anim='none', karaoke_anim='none',
+        lower_ruby_follow_upper=False, decoration_before_sync=True, lower_ruby_style={
+            **style.lower_ruby_style,
+            'ruby_stroke_width_px': 3, 'ruby_stroke2_width_px': 4, 'ruby_stroke2_enabled': True,
+            'ruby_latin_stroke_width_px': None, 'ruby_latin_stroke2_width_px': None, 'ruby_latin_stroke2_enabled': None,
+            'ruby_decoration_kind': 'glow', 'ruby_glow_before_radius_px': 5, 'ruby_glow_after_radius_px': 5,
+            'ruby_colors_follow_main': False,
+            'ruby_karaoke_colors': {
+                'before': {'text': {'color': '#FFDCEBFF'}, 'stroke': paint, 'shadow': paint},
+                'after': {'text': {'color': '#FF60CEF0'}, 'stroke2': paint, 'shadow': paint},
+            },
+        })
+
+
+def test_lower_reading_image_layers_preserve_scene_after_invalid_paint(binary, independent, tmp_path):
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    track, style, resolve = independent
+    tile = write_png(tmp_path / 'reading-layers.png', pattern('transparent'))
+    ir = ir_for(binary, (track, lower_image_layers_style(style, tile), resolve))
+    invalid = copy.deepcopy(ir)
+    group = next(g for g in invalid['skia_layout']['lines'][0]['ruby_groups'] if g.get('lower'))
+    assert set(group['lower_outline_image']['stroke']) == {'before'}
+    assert set(group['lower_outline_image']['stroke2']) == {'after'}
+    assert set(group['lower_glow_image']) == {'before', 'after'}
+    group['lower_outline_image']['stroke2']['after']['scale_pct'] = 0
+    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [450, 950])
+        with pytest.raises(NativeRendererError, match='下方注音图片画笔缩放参数'):
+            configure(process, invalid)
+        replay, _ = collect(process, [950, 450], generation=2)
+    assert all(frame.any() for frame in frames) and np.array_equal(frames, replay[::-1])
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
+def test_lower_reading_image_outlines_and_glow_match_actual_d2d_gpu(binary, application, tmp_path):
+    from scripts.subtitle_gpu_baseline.cases import build_cases
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    from test_subtitle_skia_character_fade import assert_ruby_transition_gpu_parity
+    from test_subtitle_skia_image_fills import pattern, write_png
+
+    case = next(c for c in build_cases(tmp_path / 'assets') if c.case_id == 'lower_ruby')
+    tile = write_png(tmp_path / 'reading-layers.png', pattern('transparent'))
+    style = lower_image_layers_style(case.style, tile)
+    times = (1550, 2600, 4110, 4280)
+    refs = []
+    for look in (style, lower_image_layers_style(case.style, tmp_path / 'missing.png')):
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, look, times, force_warp=False, track=case.track,
+                                       realization_enabled=False)
+        refs.append(raw)
+    assert any(left != right for left, right in zip(*refs, strict=True))
+    assert_ruby_transition_gpu_parity(binary, replace(case, style=style), times)
+
+
 def test_lower_reading_gradient_keeps_existing_scene_after_invalid_paint(binary, independent):
     track, style, resolve = independent
     valid = ir_for(binary, (track, lower_gradient_style(style, True), resolve))

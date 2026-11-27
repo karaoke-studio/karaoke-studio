@@ -1,6 +1,7 @@
 """Materialize lower-reading provenance and appearance at the IR boundary."""
 from krok_helper.subtitle_render.domain.gradient_path import rgba
 from krok_helper.subtitle_render.domain.models import normalize_glow_strength
+from krok_helper.subtitle_render.engine.ruby.style_semantics import ruby_stroke_width, ruby_stroke2_width
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from krok_helper.subtitle_render.native.protocol import ruby_to_ir
 from .effects.metrics import ruby_glow_concentration_level, ruby_glow_radius
@@ -86,16 +87,22 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
     if images:
         result['static_fill_image'] = images
     # Like the GPU, lower outlines paint with the lower reading's own stroke fills.
-    outline_gradients = {}
-    for layer in ('stroke', 'stroke2'):
+    outline_gradients, outline_images = {}, {}
+    for layer, width in (('stroke', ruby_stroke_width(style)), ('stroke2', ruby_stroke2_width(style))):
+        if width <= 0:
+            continue
         for phase, palette in (('before', colors.before), ('after', colors.after)):
             fill = getattr(palette, layer)
             if fill.mode in _GRADIENT_MODES:
                 outline_gradients.setdefault(layer, {})[phase] = _gradient_payload(fill)
+            elif fill.mode == 'image':
+                outline_images.setdefault(layer, {})[phase] = _image_payload(fill)
     if outline_gradients:
         result['lower_outline_gradient'] = outline_gradients
         result['outline_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
-    glow, shadow, shadow_gradients, shadow_images, glow_gradients = {}, {}, {}, {}, {}
+    if outline_images:
+        result['lower_outline_image'] = outline_images
+    glow, shadow, shadow_gradients, shadow_images, glow_gradients, glow_images = {}, {}, {}, {}, {}, {}
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':
             continue
@@ -104,8 +111,8 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         if kind == 'glow' and radius <= 0:
             continue
         layer = getattr(colors, phase).shadow
-        if kind == 'shadow' and layer.mode == 'image':
-            shadow_images[phase] = _image_payload(layer)
+        if layer.mode == 'image' and kind in {'shadow', 'glow'}:
+            (shadow_images if kind == 'shadow' else glow_images)[phase] = _image_payload(layer)
         elif layer.mode != 'solid':
             if layer.mode not in _GRADIENT_MODES:
                 raise ValueError('Skia 下方注音装饰当前不支持此画笔')
@@ -133,4 +140,6 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
     if glow_gradients:
         result['lower_glow_gradient'] = glow_gradients
         result['glow_gradient_with_main'] = style.ruby_horizontal_gradient_with_main
+    if glow_images:
+        result['lower_glow_image'] = glow_images
     return result

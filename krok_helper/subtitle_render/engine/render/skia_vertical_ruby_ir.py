@@ -75,7 +75,7 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
         for target, clock, reading_index in groups:
             first, end = min(target.indices), max(target.indices) + 1
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
-            outlines, gradients = ruby_outlines(target.style, allow_gradients=True, allow_split=True, allow_images=True)
+            outlines, gradients = ruby_outlines(target.style)
             outline_gradients.update(gradients)
             decoration = set(ruby_decoration_kinds(target.style)) & {'shadow', 'glow'}
             singing_shadow |= singing_scale and 'shadow' in decoration
