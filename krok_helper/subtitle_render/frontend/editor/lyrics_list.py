@@ -132,6 +132,11 @@ from krok_helper.subtitle_render.domain.models import (
     layout_display_name,
     title_line_units,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.grouped_animation_combo import (
+    ENTRY_ANIMATION_GROUPS,
+    EXIT_ANIMATION_GROUPS,
+    GroupedAnimationComboBox,
+)
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 
 COL_LANE = 0
@@ -398,8 +403,8 @@ class _LineAnimationDialog(ModelessDialog):
         self._preset_combo = _StableFluentComboBox(self)
         for value, label in _PRESET_COMBO_ITEMS:
             self._preset_combo.addItem(label, userData=value)
-        self._entry_combo = _StableFluentComboBox(self)
-        self._exit_combo = _StableFluentComboBox(self)
+        self._entry_combo = GroupedAnimationComboBox(ENTRY_ANIMATION_GROUPS, self)
+        self._exit_combo = GroupedAnimationComboBox(EXIT_ANIMATION_GROUPS, self)
         for value, label in _ENTRY_EFFECTS:
             self._entry_combo.addItem(label, userData=value)
         for value, label in _EXIT_EFFECTS:

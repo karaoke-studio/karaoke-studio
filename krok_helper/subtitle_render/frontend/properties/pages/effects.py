@@ -21,6 +21,12 @@ from krok_helper.subtitle_render.domain.models import (
     ZOOM_PULSE_PEAK_PCT_MAX,
     ZOOM_PULSE_PEAK_PCT_MIN,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.grouped_animation_combo import (
+    AnimationGroupSpec,
+    ENTRY_ANIMATION_GROUPS,
+    EXIT_ANIMATION_GROUPS,
+    GroupedAnimationComboBox,
+)
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     CanvasSliderSpinBox,
     WheelFocusedComboBox,
@@ -560,6 +566,7 @@ class EffectsPropertyPageBuilder:
             section,
             ENTRY_ANIMATION_OPTIONS,
             "entry_anim",
+            groups=ENTRY_ANIMATION_GROUPS,
         )
         host._entry_lead_spin = self._spin_factory(0, 3000, suffix=" ms")
         host._entry_lead_spin.valueChanged.connect(
@@ -580,6 +587,7 @@ class EffectsPropertyPageBuilder:
             section,
             EXIT_ANIMATION_OPTIONS,
             "exit_anim",
+            groups=EXIT_ANIMATION_GROUPS,
         )
         host._exit_fade_spin = self._spin_factory(0, 3000, suffix=" ms")
         host._exit_fade_spin.valueChanged.connect(
@@ -973,6 +981,7 @@ class EffectsPropertyPageBuilder:
             section,
             ENTRY_ANIMATION_OPTIONS,
             "section_head_anim",
+            groups=ENTRY_ANIMATION_GROUPS,
         )
         host._section_head_anim_combo.setToolTip(
             "段首页各行替换全局入场动画；单页段两侧都替换"
@@ -981,6 +990,7 @@ class EffectsPropertyPageBuilder:
             section,
             EXIT_ANIMATION_OPTIONS,
             "section_tail_anim",
+            groups=EXIT_ANIMATION_GROUPS,
         )
         host._section_tail_anim_combo.setToolTip(
             "段尾页各行替换全局退场动画；单页段两侧都替换"
@@ -1107,9 +1117,15 @@ class EffectsPropertyPageBuilder:
         parent: QWidget,
         options: tuple[tuple[str, str], ...],
         model_field: str,
+        *,
+        groups: tuple[AnimationGroupSpec, ...] | None = None,
     ) -> WheelFocusedComboBox:
         host = self._host
-        combo = WheelFocusedComboBox(parent)
+        combo: WheelFocusedComboBox = (
+            GroupedAnimationComboBox(groups, parent)
+            if groups is not None
+            else WheelFocusedComboBox(parent)
+        )
         compact_property_control(combo)
         for label, value in options:
             combo.addItem(label, value)

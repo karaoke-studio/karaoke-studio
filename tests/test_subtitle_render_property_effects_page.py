@@ -9,6 +9,11 @@ from PyQt6.QtWidgets import QLabel, QPushButton
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     CanvasSliderSpinBox,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.grouped_animation_combo import (
+    ENTRY_ANIMATION_GROUPS,
+    EXIT_ANIMATION_GROUPS,
+    GroupedAnimationComboBox,
+)
 from krok_helper.subtitle_render.frontend.properties.pages.effects import (
     EffectsPropertyPageBuilder,
 )
@@ -94,6 +99,50 @@ class _Host:
         button = QPushButton(color)
         button.setObjectName(field)
         return button
+
+def test_grouped_animation_combos_categorize_and_filter_all_options(qapp) -> None:
+    host = _Host()
+    EffectsPropertyPageBuilder(host).make_animation_section()
+
+    for combo, expected_groups in (
+        (host._entry_anim_combo, ENTRY_ANIMATION_GROUPS),
+        (host._exit_anim_combo, EXIT_ANIMATION_GROUPS),
+        (host._section_head_anim_combo, ENTRY_ANIMATION_GROUPS),
+        (host._section_tail_anim_combo, EXIT_ANIMATION_GROUPS),
+    ):
+        assert isinstance(combo, GroupedAnimationComboBox)
+        assert combo.animation_groups == expected_groups
+
+        menu = combo.build_grouped_menu()
+        # All 24 animations appear in the categorized menu (none + 4 groups), plus 4 non-selectable headers.
+        assert len(menu.visible_option_texts()) == 24
+        assert menu.visible_row_count() == 24 + len(expected_groups)
+
+        # Filtering by each category shows only that group's animations and hides headers.
+        for group in expected_groups:
+            menu.set_category(group.key)
+            assert menu.active_category == group.key
+            assert len(menu.visible_option_texts()) == len(group.values)
+            assert menu.visible_row_count() == len(group.values)
+
+        menu.set_category("all")
+        assert len(menu.visible_option_texts()) == 24
+        menu.close()
+        menu.deleteLater()
+
+    # Clicking an action whose grouped order differs from underlying item order
+    # still routes to the exact model field value.
+    entry_menu = host._entry_anim_combo.build_grouped_menu()
+    glow_idx = host._entry_anim_combo.findData("glow_in")
+    action = entry_menu.action_for_combo_index(glow_idx)
+    assert action is not None
+    action.trigger()
+    assert host._entry_anim_combo.currentData() == "glow_in"
+    assert host.updates[-1] == {"entry_anim": "glow_in"}
+    entry_menu.close()
+    entry_menu.deleteLater()
+    qapp.processEvents()
+
 
 def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     host = _Host()
