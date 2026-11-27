@@ -6,7 +6,12 @@ import threading
 from krok_helper.subtitle_render.engine.text.font_slots import is_emoji_text
 from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance, prepared_font_instance
 from .backend import NativeRendererError
-from .skia_font_aliases import gui_font_instance, missing_family, prepared_alias
+from .skia_font_aliases import (
+    gui_font_instance,
+    missing_family,
+    prepared_alias,
+    prepared_missing_fallback,
+)
 
 
 class SkiaFontNotPreparedError(NativeRendererError):
@@ -32,14 +37,17 @@ def font_instance(family, weight, italic):
 
     A registry change bumps the font generation, so a worker that would need
     Qt again fails explicitly; its owner re-prepares on the GUI thread. A
-    family missing from Qt's family list may still be a verified localized
-    alias (``skia_font_aliases``); unverified substitutes stay missing.
+    family missing from Qt's family list first checks a verified localized
+    alias (``skia_font_aliases``), and if genuinely missing falls back to a
+    GUI-selected installed fallback family so Skia preview/export stays usable.
     """
     if _on_gui_thread():
         return gui_font_instance(family, weight, italic, resolve=resolve_font_instance)
     instance = prepared_font_instance(family, weight, italic)
     if missing_family(instance) and (alias := prepared_alias(family)):
         instance = prepared_font_instance(alias, weight, italic)
+    if missing_family(instance) and (fallback := prepared_missing_fallback(family)):
+        instance = prepared_font_instance(fallback, weight, italic)
     if instance is None:
         raise SkiaFontNotPreparedError(f'Skia 字体资源未在界面线程准备（字体库可能已变化）：{family}')
     return instance
@@ -82,6 +90,17 @@ class SkiaFontResolver:
 
     def __init__(self):
         self._local = threading.local()  # Per preparation thread: {path: sha256}.
+        self.missing_fallbacks: dict[str, str] = {}
+
+    def _note_missing_fallback(self, requested_family: str, instance) -> None:
+        if (
+            requested_family
+            and instance is not None
+            and prepared_missing_fallback(requested_family)
+            and instance.family
+            and instance.family.casefold() != requested_family.casefold()
+        ):
+            self.missing_fallbacks[requested_family] = instance.family
 
     @contextmanager
     def snapshot(self):
@@ -107,6 +126,7 @@ class SkiaFontResolver:
 
     def __call__(self, style):
         instance = font_instance(style.font_family, style.font_weight, style.italic)
+        self._note_missing_fallback(style.font_family, instance)
         return self._export(instance, style.font_family)
 
     def resolve_body_cell_fonts(self, style, text):
@@ -125,6 +145,7 @@ class SkiaFontResolver:
         )
         texts = list(dict.fromkeys([text, *grapheme_clusters(text)]))
         instance = font_instance(style.font_family, style.font_weight, style.italic)
+        self._note_missing_fallback(style.font_family, instance)
         # A verified localized alias must use that same physical family for
         # fallback discovery and lookup. Asking Qt for the missing spelling
         # again can add unrelated (even unreadable) faces to an otherwise

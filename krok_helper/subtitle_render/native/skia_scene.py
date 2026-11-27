@@ -10,14 +10,15 @@ from .skia_text import SkiaTextMetricsProcess
 _log = logging.getLogger(__name__)
 
 
-def prepare_skia_scene_ir(track, style, *, executable=None, **options):
+def prepare_skia_scene_ir(track, style, *, executable=None, missing_fallbacks=None, **options):
     from krok_helper.subtitle_render.engine.render.skia_ir import build_skia_render_ir
 
     started_at = time.monotonic()
+    resolver = SkiaFontResolver()
     try:
         with SkiaTextMetricsProcess(executable) as metrics:
             ir = build_skia_render_ir(track, style, measure=metrics.measure,
-                                      resolve_font=SkiaFontResolver(), **options)
+                                      resolve_font=resolver, **options)
         apply_resolved_font_faces(ir)
     except NativeRendererError:
         raise
@@ -30,4 +31,6 @@ def prepare_skia_scene_ir(track, style, *, executable=None, **options):
             exc,
         )
         raise NativeRendererError(str(exc)) from exc
+    if isinstance(missing_fallbacks, dict):
+        missing_fallbacks.update(resolver.missing_fallbacks)
     return ir

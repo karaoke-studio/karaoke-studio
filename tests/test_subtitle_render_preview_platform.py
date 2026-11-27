@@ -288,3 +288,66 @@ def test_skia_async_retries_transient_launch_failure_and_logs(qapp, monkeypatch,
     finally:
         renderer.stop()
         qapp.processEvents()
+
+
+def test_skia_missing_font_fallback_prepares_on_gui_and_resolves_on_worker(qapp, tmp_path, monkeypatch, caplog):
+    """找不到工程字体时，GUI 线程选定回退字体，worker 线程只读缓存且不崩溃。"""
+    import logging
+    from concurrent.futures import ThreadPoolExecutor
+    from krok_helper.subtitle_render.engine.text import font_weight as fw
+    from krok_helper.subtitle_render.native import skia_font_aliases as sfa
+    from krok_helper.subtitle_render.native import skia_fonts as sf
+    from krok_helper.subtitle_render.engine.text.weight_resolver import FontRequest, ResolvedFontInstance
+
+    fake_otf = tmp_path / "fallback.otf"
+    fake_otf.write_bytes(b"OTTO-fallback-bytes")
+    missing_name = "NonExistent Missing Font 9999"
+    fallback_name = "Installed Fallback Gothic"
+
+    def fake_resolve(family, weight, italic=False, stretch_pct=100):
+        gen = sfa.capabilities_generation()
+        req = FontRequest(family=str(family), weight=int(weight), italic=bool(italic))
+        if family == fallback_name:
+            inst = ResolvedFontInstance(
+                requested=req,
+                family=fallback_name,
+                face_weight=int(weight),
+                reason="exact",
+                generation=gen,
+                resource_path=str(fake_otf),
+            )
+        else:
+            inst = ResolvedFontInstance(
+                requested=req,
+                family=str(family),
+                face_weight=int(weight),
+                reason="missing_family",
+                generation=gen,
+                resource_path="",
+            )
+        fw._RESOURCE_GENERATION = gen
+        fw._RESOURCE_INSTANCES[(gen, family, int(weight), bool(italic), int(stretch_pct))] = inst
+        return inst
+
+    monkeypatch.setattr(sfa, "verify_alias", lambda _family: None)
+    monkeypatch.setattr(sfa, "_fallback_candidates", lambda _family: [fallback_name])
+    monkeypatch.setattr(sfa, "resolve_font_instance", fake_resolve)
+    monkeypatch.setattr(sf, "resolve_font_instance", fake_resolve)
+    with sfa._LOCK:
+        sfa._ALIASES.clear()
+        sfa._MISSING_FALLBACKS.clear()
+        sfa._LOGGED_FALLBACKS.clear()
+
+    with caplog.at_level(logging.WARNING):
+        gui_inst = sfa.gui_font_instance(missing_name, 700, False, resolve=fake_resolve)
+    assert gui_inst.family == fallback_name and gui_inst.resource_path == str(fake_otf)
+    assert any("已自动回退使用" in rec.message and missing_name in rec.message for rec in caplog.records)
+
+    # Worker 线程必须只读 prepared 缓存（绝不调 resolve_font_instance），同样拿到回退字体。
+    monkeypatch.setattr(sf, "resolve_font_instance", lambda *a, **k: pytest.fail("worker called Qt font discovery"))
+    resolver = sf.SkiaFontResolver()
+    style = SimpleNamespace(font_family=missing_name, font_weight=700, italic=False)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        resource, _opts = pool.submit(resolver, style).result(timeout=10)
+    assert resource["path"] == str(fake_otf)
+    assert resolver.missing_fallbacks == {missing_name: fallback_name}

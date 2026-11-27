@@ -117,8 +117,15 @@ class SkiaRendererProcess(SkiaSidecarProcess):
         from .skia_scene import prepare_skia_scene_ir
 
         started_at = time.monotonic()
+        missing_fallbacks: dict[str, str] = {}
         try:
-            ir = prepare_skia_scene_ir(track, style, executable=self.executable_path, **kwargs)
+            ir = prepare_skia_scene_ir(
+                track,
+                style,
+                executable=self.executable_path,
+                missing_fallbacks=missing_fallbacks,
+                **kwargs,
+            )
         except (ValueError, NotImplementedError) as exc:
             _log.warning(
                 "Skia 场景构建判定不支持: pid=%s elapsed=%.0fms err=%s",
@@ -191,6 +198,11 @@ class SkiaRendererProcess(SkiaSidecarProcess):
         self._on_backend_info(f"Skia 字幕后端：{target}，API={info.get('api')}，设备={info.get('adapter_name')}，"
                               f"硬件={'是' if info.get('hardware') else '否'}，"
                               f"回退原因={info.get('fallback_reason') or '无'}")
+        if missing_fallbacks:
+            pairs = "、".join(f"「{src}」→「{dst}」" for src, dst in sorted(missing_fallbacks.items()))
+            self._on_backend_info(
+                f"Skia 字体回退：未找到工程字体，已自动回退使用系统字体（{pairs}）"
+            )
         return out
 
     def _expect_ok(self, response):

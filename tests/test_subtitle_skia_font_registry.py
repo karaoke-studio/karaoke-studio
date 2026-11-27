@@ -195,7 +195,7 @@ def test_reused_resolver_follows_register_replace_remove_and_reregister(binary, 
 
 
 @pytest.mark.parametrize('slot', ['main', 'ruby', 'role'])
-def test_removed_family_fails_explicitly_without_qt_or_os_fallback(binary, registry, slot):
+def test_removed_family_falls_back_to_installed_font_and_recovers(binary, registry, slot):
     for key, path in (('main', registry.font('main', MAIN, 600)), ('ruby', registry.font('ruby', RUBY, 500)),
                       ('role', registry.font('role', ROLE, 760))):
         registry.add(key, path)
@@ -204,8 +204,13 @@ def test_removed_family_fails_explicitly_without_qt_or_os_fallback(binary, regis
     valid = prepare(binary, track, style, resolver)
     registry.remove(slot)
     family = {'main': MAIN, 'ruby': RUBY, 'role': ROLE}[slot]
-    with pytest.raises(NativeRendererError, match=f'无法取得 Skia 字体资源：{family}'):
-        prepare(binary, track, style, resolver)
+    fallback_resolver = SkiaFontResolver()
+    fallback_ir = prepare(binary, track, style, fallback_resolver)
+    assert family in fallback_resolver.missing_fallbacks
+    assert fallback_resolver.missing_fallbacks[family] != family
+    # 缺失字体回退后仍可由 Skia 正常渲染出非空帧，不致 Skia 崩溃。
+    rendered = frames(binary, fallback_ir, 'raster')
+    assert rendered[1][..., 3].max() > 0
     registry.add(slot, registry.root/f'{slot}.ttf')
     assert prepare(binary, track, style, resolver) == valid
 
@@ -230,11 +235,13 @@ def test_localized_and_english_family_names_select_the_same_bytes(binary, regist
     worker = _prepare_on_worker(binary, track, replace(style, font_family=LOCALIZED, font_family_latin=LOCALIZED),
                                 resolver)
     assert 'ir' in worker and used_fonts(worker['ir']) == used_fonts(english)
-    # The authored spelling stays in the requested-style signature, so the
-    # metrics cache identity is conservative; resources and geometry are equal.
+    # Removing the font invalidates the verified alias and falls back instead of crashing.
     registry.remove('main')
-    with pytest.raises(NativeRendererError, match=LOCALIZED):
-        prepare(binary, track, replace(style, font_family=LOCALIZED, font_family_latin=LOCALIZED), resolver)
+    removed_resolver = SkiaFontResolver()
+    fallback_ir = prepare(binary, track, replace(style, font_family=LOCALIZED, font_family_latin=LOCALIZED),
+                          removed_resolver)
+    assert LOCALIZED in removed_resolver.missing_fallbacks
+    assert used_fonts(fallback_ir)['main'] != used_fonts(english)['main']
 
 
 def test_duplicate_family_faces_select_physical_weights(binary, registry):
@@ -424,15 +431,22 @@ def test_preview_suppresses_only_superseded_not_prepared_errors(binary, registry
         renderer.stop()
 
 
-def test_unverified_platform_substitute_is_never_exported(binary, registry):
-    """Qt always matches *some* face; only a face naming the family is accepted."""
-    from krok_helper.subtitle_render.native.skia_font_aliases import verify_alias
+def test_unverified_platform_substitute_is_not_an_alias_and_uses_missing_fallback(binary, registry, monkeypatch):
+    """verify_alias stays strict; missing fonts use explicit fallback (and fail only if no fallback exists)."""
+    from krok_helper.subtitle_render.native import skia_font_aliases
     for key, path in (('main', registry.font('main', MAIN, 600)), ('ruby', registry.font('ruby', RUBY, 500)),
                       ('role', registry.font('role', ROLE, 760))):
         registry.add(key, path)
     absent = 'LinK Registry Absent 9'
-    assert verify_alias(absent) is None
+    assert skia_font_aliases.verify_alias(absent) is None
     track, style = source()
+    resolver = SkiaFontResolver()
+    fallback_ir = prepare(binary, track, replace(style, font_family=absent, font_family_latin=absent), resolver)
+    assert absent in resolver.missing_fallbacks
+    assert frames(binary, fallback_ir, 'raster')[1][..., 3].max() > 0
+    # When no system fallback is available at all, fail explicitly with the requested family name.
+    monkeypatch.setattr(skia_font_aliases, 'resolve_missing_fallback', lambda *a, **k: None)
+    monkeypatch.setattr(skia_font_aliases, 'prepared_missing_fallback', lambda *a, **k: None)
     with pytest.raises(NativeRendererError, match=absent):
         prepare(binary, track, replace(style, font_family=absent, font_family_latin=absent), SkiaFontResolver())
 
@@ -526,7 +540,7 @@ def test_registry_change_drops_an_inflight_frame_before_gui_repreparation(binary
         renderer.stop()
 
 
-def test_preview_reports_removed_font_then_recovers_after_reregistration(binary, registry, monkeypatch):
+def test_preview_falls_back_on_removed_font_then_recovers_after_reregistration(binary, registry, monkeypatch):
     import time
     from PyQt6.QtWidgets import QApplication
     from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
@@ -553,12 +567,18 @@ def test_preview_reports_removed_font_then_recovers_after_reregistration(binary,
         renderer.request(700)
         pump(lambda: bool(images or errors))
         assert images and not errors
+        first_bytes = images[0].constBits().asstring(images[0].sizeInBytes())
         registry.remove('main')
-        pump(lambda: bool(errors))
-        assert MAIN in errors[-1] and len(images) == 1
+        pump(lambda: len(images) >= 2 or bool(errors))
+        assert not errors and len(images) >= 2
+        fallback_bytes = images[-1].constBits().asstring(images[-1].sizeInBytes())
+        assert fallback_bytes != first_bytes
+        count_before = len(images)
         registry.add('main', main)
-        pump(lambda: len(images) > 1)
-        assert len(errors) == 1
+        pump(lambda: len(images) > count_before)
+        assert not errors
+        restored_bytes = images[-1].constBits().asstring(images[-1].sizeInBytes())
+        assert restored_bytes == first_bytes
     finally:
         renderer.stop()
 
@@ -594,3 +614,34 @@ def test_verified_alias_uses_its_physical_family_for_fallback_preparation_and_lo
     prepared.clear()
     SkiaFontResolver().resolve_cell_fonts(style, 'A字')
     assert prepared == [physical.family] and set(consumed) == {physical.family}
+
+
+def test_product_export_with_missing_font_falls_back_within_skia(binary, monkeypatch, tmp_path):
+    """导出工程包含缺失字体时，Skia 应回退到系统字体继续导出并记日志，而非中断或退回旧渲染器。"""
+    from krok_helper.subtitle_render.domain.background import BackgroundSource
+    from krok_helper.subtitle_render.engine import renderer
+    from krok_helper.subtitle_render.engine.export.render_job import RenderJob
+    from krok_helper.subtitle_render.engine.text.font_preparation import prepare_fonts
+    from test_subtitle_skia_protocol import export_ffmpeg
+
+    ffmpeg = export_ffmpeg(tmp_path)
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia')
+    monkeypatch.setattr(renderer, 'paint_frame', lambda *a, **k: pytest.fail('subtitle QPainter export was called'))
+    monkeypatch.setattr(renderer, 'paint_frame_to_painter', lambda *a, **k: pytest.fail('subtitle QPainter export was called'))
+
+    missing = 'LinK Nonexistent Missing Export Font 42'
+    track, style = sample()
+    style = replace(style, font_family=missing, font_family_latin=missing)
+    prepare_fonts(track, style, [], use_skia_backend=True)
+    job = RenderJob(
+        track, style, tmp_path / 'unused', tmp_path / 'missing-font.mp4',
+        width=640, height=360, background_source=BackgroundSource(kind='solid', color='#183048'),
+        fps=30, duration_ms=1000, include_audio=False, gpu_export_enabled=False, preset='ultrafast',
+        use_skia_backend=True,
+    )
+    logs = []
+    output = renderer.render_subtitle_video(job, ffmpeg_dir=ffmpeg.parent, logger=logs.append)
+    assert output.is_file() and output.stat().st_size > 1000
+    assert any('Skia 字幕后端' in line for line in logs)
+    assert any('Skia 字体回退' in line and missing in line for line in logs)
+    assert not any('Skia 字幕导出失败' in line for line in logs)

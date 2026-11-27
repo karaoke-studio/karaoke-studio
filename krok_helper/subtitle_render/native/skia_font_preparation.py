@@ -33,9 +33,15 @@ def fallback_requests(track, style):
         (unowned if ruby.target_line_index is None else owned[ruby.target_line_index]).extend(units)
     for index, line in enumerate(track.lines):
         appearance = style_for_line(track_style, line)
+        # measure_track 总是先解析每行基线样式 appearance（即便所有字符都有角色），
+        # 必须在 GUI 线程一并预热其主字体/回退决策。
+        add(appearance, MAIN_REFERENCE)
         roles = {char.role_label for char in line.chars} | {None}
         for char in line.chars:
-            selected, _ = font_style_for_cell(style_for_role_in_layout(appearance, char.role_label), char.text)
+            role_style = style_for_role_in_layout(appearance, char.role_label)
+            if char.vector_glyph is not None:
+                add(role_style, MAIN_REFERENCE)
+            selected, _ = font_style_for_cell(role_style, char.text)
             add(selected, char.text)
         readings = [*unowned, *owned[line.track_line_index if line.track_line_index is not None else index]]
         for role in roles:
@@ -65,6 +71,7 @@ def scene_fallback_requests(track, style, extra_tracks=()):
         appearance = title_style(title)
         if appearance is None:
             continue
+        requests[appearance.font_family, appearance.font_weight, appearance.italic].add(MAIN_REFERENCE)
         for row in title_rows(title):
             for unit, role in row:
                 slot, _ = font_style_for_cell(style_for_role_in_layout(appearance, role), unit)
