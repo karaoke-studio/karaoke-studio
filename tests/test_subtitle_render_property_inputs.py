@@ -468,3 +468,34 @@ def test_font_picker_refreshes_after_registry_change_without_changing_selection(
     assert picker.is_inherited()
     assert picker.findText("Another") >= 0
     picker.deleteLater()
+
+
+def test_font_picker_displays_missing_font_instead_of_stale_selection(qapp) -> None:
+    """无继承槽的主字体下拉查不到字体时显示「原名（未安装）」，不再残留旧字体且单次点击即可改选。"""
+    families = ["UD Digi Kyokasho N-B", "Comic Sans MS"]
+    combo = WheelFocusedFontComboBox(
+        font_families_provider=lambda: families,
+        canonicalize_family=lambda name: name if name in families else None,
+    )
+    changed = []
+    combo.currentFontChanged.connect(lambda font: changed.append(font.family()))
+    combo.setCurrentFont(QFont("UD Digi Kyokasho N-B"))
+    assert combo.currentIndex() == 0
+    assert combo.text() == "UD Digi Kyokasho N-B"
+    changed.clear()
+
+    # 切到包含缺失字体的角色：不污染候选列表、不静默残留旧字体、不误发信号
+    combo.setCurrentFont(QFont("UD デジタル 教科書体 NK-B"))
+    assert [combo.itemText(i) for i in range(combo.count())] == families
+    assert combo.currentIndex() == -1
+    assert combo.text() == "UD デジタル 教科書体 NK-B（未安装）"
+    assert combo.currentFont().family() == "UD デジタル 教科書体 NK-B"
+    assert changed == []
+
+    # 直接点回原本显示在第 0 项的字体，一次点击即可生效（无需「切到别的再切回来」）
+    combo._onItemClicked(0)
+    assert combo.currentIndex() == 0
+    assert combo.text() == "UD Digi Kyokasho N-B"
+    assert combo.currentFont().family() == "UD Digi Kyokasho N-B"
+    assert changed == ["UD Digi Kyokasho N-B"]
+    combo.deleteLater()

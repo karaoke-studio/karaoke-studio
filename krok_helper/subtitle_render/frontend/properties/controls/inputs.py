@@ -909,6 +909,7 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
         self._font_families_provider = font_families_provider
         self._font_catalog_dirty = False
         self._inheritance_label: Optional[str] = None
+        self._unresolved_family: Optional[str] = None
         # 菜单因「点击组合框」而关闭时置位：同一次点击的 release 会再走
         # _showComboMenu，置位时吞掉这一次，避免菜单被立刻重新弹开。
         self._suppress_combo_reopen = False
@@ -920,12 +921,16 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
         application = QGuiApplication.instance()
         if application is not None:
             application.fontDatabaseChanged.connect(self._mark_font_catalog_dirty)
-        self.currentIndexChanged.connect(
-            lambda _index: self.currentFontChanged.emit(self.currentFont())
-        )
+        self.currentIndexChanged.connect(self._on_font_index_changed)
         if self.count() >= self.filter_min_items:
             self.setToolTip("展开后可在顶部输入框输入关键字筛选字体")
             self._schedule_font_menu_warmup()
+
+    def _on_font_index_changed(self, index: int) -> None:
+        if index >= 0:
+            self._unresolved_family = None
+            self._placeholderText = ""
+        self.currentFontChanged.emit(self.currentFont())
 
     def _mark_font_catalog_dirty(self) -> None:
         self._font_catalog_dirty = True
@@ -936,6 +941,7 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
         families = tuple(self._font_families_provider())
         selected = self.currentText()
         inherited = self.is_inherited()
+        unresolved = self._unresolved_family
         previous = self.blockSignals(True)
         try:
             if self._cached_font_menu is not None:
@@ -946,7 +952,17 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
             if self._inheritance_label is not None:
                 self.addItem(self._inheritance_label, userData=0)
             self.addItems(families)
-            if not inherited:
+            if unresolved is not None and not inherited:
+                canonical = self._canonicalize_family(unresolved)
+                index = self.findText(canonical) if canonical is not None else -1
+                if index >= 0:
+                    self._unresolved_family = None
+                    self._placeholderText = ""
+                    self.setCurrentIndex(index)
+                else:
+                    self.setCurrentIndex(-1)
+                    self.setPlaceholderText(f"{unresolved}（未安装）")
+            elif not inherited:
                 index = self.findText(selected)
                 if index < 0 and selected:
                     # Preserve the document's selection even after uninstall.
@@ -969,19 +985,32 @@ class WheelFocusedFontComboBox(WheelFocusedComboBox):
 
     def setInherited(self) -> None:  # noqa: N802 - Qt-style helper
         if self._inheritance_label is not None:
+            self._unresolved_family = None
+            self._placeholderText = ""
             self.setCurrentIndex(0)
 
     def currentFont(self) -> QFont:  # noqa: N802 - QFontComboBox compatibility
+        if self.currentIndex() < 0 and self._unresolved_family:
+            return QFont(self._unresolved_family)
         return QFont(self.currentText())
 
     def setCurrentFont(self, font: QFont) -> None:  # noqa: N802
         self._refresh_font_catalog()
-        family = self._canonicalize_family(font.family())
+        raw_family = str(font.family() or "").strip()
+        family = self._canonicalize_family(raw_family)
         index = self.findText(family) if family is not None else -1
         if index < 0:
             if self._inheritance_label is not None:
                 self.setInherited()
+                return
+            # 未在已安装字体目录中找到时，不再静默保留上一次选中的字体文本
+            # （否则界面看起来像已选好本机字体，底层数据却仍是缺失字体，且直接点该字体无法触发切换）。
+            self._unresolved_family = raw_family or None
+            self.setCurrentIndex(-1)
+            self.setPlaceholderText(f"{raw_family}（未安装）" if raw_family else "")
             return
+        self._unresolved_family = None
+        self._placeholderText = ""
         if index == self.currentIndex():
             # 字体族未变化时不再补发 currentFontChanged：下游会因此
             # 无差别刷新四组字重下拉（每次改字号都触发，全部在 UI 线程）。
