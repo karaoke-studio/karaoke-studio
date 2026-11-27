@@ -223,9 +223,11 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         const auto exitParticleKind = scene::skiaParticleKindForTransition(QString::fromStdString(line.exitAnimation), false);
         const bool particleEntry = !entryParticleKind.isEmpty(), particleExit = !exitParticleKind.isEmpty();
         const bool geoEntry = particleEntry || line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in"
-            || line.entryAnimation == "stretch_in" || line.entryAnimation == "glow_in";
+            || line.entryAnimation == "stretch_in" || line.entryAnimation == "glow_in"
+            || line.entryAnimation == "random_zoom";
         const bool geoExit = particleExit || line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
-            || line.exitAnimation == "stretch_out" || line.exitAnimation == "glow_out";
+            || line.exitAnimation == "stretch_out" || line.exitAnimation == "glow_out"
+            || line.exitAnimation == "random_zoom";
         const bool noiseEntry = line.entryAnimation == "noise", noiseExit = line.exitAnimation == "noise";
         const bool singingScale = line.karaokeAnimation == "utopia";
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
@@ -303,8 +305,11 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             && (line.entryAnimation == "tracking_in" || line.entryAnimation == "wave_in")
             && line.entryDurationMs > 0;
         const bool affineExit = ((features.contains("p07_ruby_character_affine_exit")
-                    && (line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"))
+                    && (line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
+                        || line.exitAnimation == "random_zoom"))
                 || (features.contains("p07_ruby_character_stretch_exit") && line.exitAnimation == "stretch_out"));
+        const bool randomZoomEntry = features.contains("p07_ruby_character_affine_exit")
+            && line.entryAnimation == "random_zoom" && line.entryDurationMs > 0;
         const bool waveScatter = features.contains("p07_ruby_character_wave_scatter")
             && line.entryAnimation == "wave_in" && line.exitAnimation == "scatter_out" && line.entryDurationMs > 0;
         const bool stretchEntry = features.contains("p07_ruby_character_stretch_entry")
@@ -313,7 +318,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             && ((line.entryAnimation == "glow_in" && line.entryDurationMs > 0)
                 || (line.exitAnimation == "glow_out" && line.exitDurationMs > 0));
         const bool affineComposition = transformedRuby
-            && ((line.exitDurationMs > 0 && (affineExit || waveScatter)) || stretchEntry || glowTransition);
+            && ((line.exitDurationMs > 0 && (affineExit || waveScatter))
+                || randomZoomEntry || stretchEntry || glowTransition);
         const bool pairedParticles = (features.contains("p07_ruby_energy_pair")
                 || features.contains("p07_ruby_particle_assembly_pair")
                 || features.contains("p07_ruby_particle_entry_exit")

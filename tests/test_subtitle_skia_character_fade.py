@@ -1149,3 +1149,47 @@ def test_character_fade_matches_actual_gpu(binary, project, case, dpr):
             delta = abs(premultiplied(expected) - premultiplied(actual))
             assert delta.mean() < .13, (case, target, t, delta.mean())
             assert np.mean(delta.max(axis=-1) > 16) < .003, (case, target, t)
+
+
+def test_skia_random_zoom_entry_exit_and_ruby(binary, annotated):
+    """Skia-only random_zoom renders deterministic staggered bottom-anchored scaling on body & ruby."""
+    track, base_style = annotated
+    style = replace(
+        base_style,
+        entry_anim="random_zoom",
+        entry_lead_ms=500,
+        exit_anim="random_zoom",
+        exit_fade_ms=500,
+        line_lead_in_ms=700,
+        line_tail_ms=700,
+        stroke_width_px=3,
+    )
+    ir = ir_for(binary, (track, style), dpr=1)
+    assert "p07_character_transform" in ir["required_features"]
+    assert "p07_ruby_character_affine_exit" in ir["required_features"]
+    line_ir = ir["track"]["lines"][0]
+    start, end = line_ir["display_start_ms"], line_ir["display_end_ms"]
+    entry_ms = max(int(line_ir["entry_duration_ms"]), 120)
+    exit_ms = max(int(line_ir["exit_duration_ms"]), 120)
+    # Sample before entry, early/mid entry, settled, mid/late exit, after exit.
+    times = [
+        start,
+        start + int(entry_ms * 0.25),
+        start + int(entry_ms * 0.55),
+        start + entry_ms + 40,
+        end - int(exit_ms * 0.55),
+        end - int(exit_ms * 0.25),
+        end,
+    ]
+    for target in ("gpu", "raster"):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, times)
+
+        masses = [int((f[..., 3] > 16).sum()) for f in frames]
+        # t == start: invisible (all chars at p=0); mid-entry grows monotonically; settled is fullest.
+        assert masses[0] == 0, target
+        assert 0 < masses[1] < masses[2] < masses[3], (target, masses)
+        # Mid-exit shrinks monotonically; t == end: invisible.
+        assert masses[3] > masses[4] > masses[5] > 0, (target, masses)
+        assert masses[6] == 0, target

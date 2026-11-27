@@ -209,8 +209,9 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
     const auto scanlineVersion = ir.value("skia_layout").toObject().value("scanline_band_schema").toDouble();
     const auto transformAnimation = [=](const QString& animation, bool entry) {
         return animation == "char_drip" || animation == "spin_flip"
-            || (allowGeometry && (entry ? animation == "tracking_in" || animation == "wave_in"
-                                       : animation == "scatter_out" || animation == "converge_out"))
+            || (allowGeometry && (animation == "random_zoom"
+                                  || (entry ? animation == "tracking_in" || animation == "wave_in"
+                                            : animation == "scatter_out" || animation == "converge_out")))
             || (allowHalo && (entry ? animation == "stretch_in" || animation == "glow_in"
                                     : animation == "stretch_out" || animation == "glow_out"))
             || (allowFalling && isSkiaFallingParticle(animation))

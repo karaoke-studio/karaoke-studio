@@ -595,7 +595,8 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
     const bool shapeTransition = activeGeometryKind == "tracking_in" || activeGeometryKind == "wave_in"
         || activeGeometryKind == "glow_in" || activeGeometryKind == "stretch_in"
         || activeGeometryKind == "scatter_out" || activeGeometryKind == "converge_out"
-        || activeGeometryKind == "glow_out" || activeGeometryKind == "stretch_out" || activeGeometryKind == "flame";
+        || activeGeometryKind == "glow_out" || activeGeometryKind == "stretch_out"
+        || activeGeometryKind == "flame" || activeGeometryKind == "random_zoom";
     for (const auto& group : line.roleGlows) {
         for (const auto& layer : group.phases) {
             const bool after = layer.visible(true);

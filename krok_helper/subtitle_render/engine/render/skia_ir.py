@@ -159,7 +159,7 @@ def _validate_noise_transition(plan, lines, ruby):
 
 
 _HALO_TRANSFORMS = {'stretch_in', 'stretch_out', 'glow_in', 'glow_out'}
-_GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out'} | _HALO_TRANSFORMS | PARTICLE_TRANSITIONS.keys()
+_GEOMETRY_TRANSFORMS = {'tracking_in', 'wave_in', 'scatter_out', 'converge_out', 'random_zoom'} | _HALO_TRANSFORMS | PARTICLE_TRANSITIONS.keys()
 _TRANSFORMS = {'char_drip', 'spin_flip'} | _GEOMETRY_TRANSFORMS
 
 
@@ -391,7 +391,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             leaving = source.get('exit_duration_ms', 0) > 0
             if entering and entry in {'tracking_in', 'wave_in'}:
                 translation_lines.add(index)
-            if leaving and leave in {'scatter_out', 'converge_out'}:
+            if (entering and entry == 'random_zoom') or (leaving and leave in {'scatter_out', 'converge_out', 'random_zoom'}):
                 affine_lines.add(index)
             if leaving and leave == 'stretch_out':
                 stretch_lines.add(index)

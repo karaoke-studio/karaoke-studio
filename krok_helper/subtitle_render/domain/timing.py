@@ -12,21 +12,21 @@ EntryAnimation = Literal[
     "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia", "noise",
     "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
-    "flame", "feather", "lightning",
+    "flame", "feather", "lightning", "random_zoom",
 ]
 ExitAnimation = Literal[
     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia", "noise",
     "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out",
     "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid",
-    "flame", "feather", "lightning",
+    "flame", "feather", "lightning", "random_zoom",
 ]
 
 # ---- 2026-09 新增线性特效注册表（增删特效只改这里 + transitions.py 求值器） ----
 # 逐字几何变换类入场：进入 _paint_line_with_character_transition 的通用变换分支
 # （dx/dy/rotation/scale 七元组），N3 语义之外的自研档位。
-ENTRY_GEO_ANIMS: frozenset[str] = frozenset({"tracking_in", "wave_in"})
+ENTRY_GEO_ANIMS: frozenset[str] = frozenset({"tracking_in", "wave_in", "random_zoom"})
 # 逐字几何变换类退场。
-EXIT_GEO_ANIMS: frozenset[str] = frozenset({"scatter_out", "converge_out"})
+EXIT_GEO_ANIMS: frozenset[str] = frozenset({"scatter_out", "converge_out", "random_zoom"})
 # 逐字拉伸（横向光条凝聚/弥散，\fscx+\blur 语言）。
 ENTRY_STRETCH_ANIMS: frozenset[str] = frozenset({"stretch_in"})
 EXIT_STRETCH_ANIMS: frozenset[str] = frozenset({"stretch_out"})

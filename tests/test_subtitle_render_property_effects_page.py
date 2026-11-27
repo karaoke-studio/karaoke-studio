@@ -114,9 +114,11 @@ def test_grouped_animation_combos_categorize_and_filter_all_options(qapp) -> Non
         assert combo.animation_groups == expected_groups
 
         menu = combo.build_grouped_menu()
-        # All 24 animations appear in the categorized menu (none + 4 groups), plus 4 non-selectable headers.
-        assert len(menu.visible_option_texts()) == 24
-        assert menu.visible_row_count() == 24 + len(expected_groups)
+        # All 25 animations appear in the categorized menu (none + 4 groups), plus 4 non-selectable headers.
+        assert len(menu.visible_option_texts()) == 25
+        assert menu.visible_row_count() == 25 + len(expected_groups)
+        assert combo.findData("random_zoom") != -1
+        assert combo.itemText(combo.findData("random_zoom")) == "随机缩放"
 
         # Filtering by each category shows only that group's animations and hides headers.
         for group in expected_groups:
@@ -124,9 +126,11 @@ def test_grouped_animation_combos_categorize_and_filter_all_options(qapp) -> Non
             assert menu.active_category == group.key
             assert len(menu.visible_option_texts()) == len(group.values)
             assert menu.visible_row_count() == len(group.values)
+            if group.key == "char":
+                assert "随机缩放" in menu.visible_option_texts()
 
         menu.set_category("all")
-        assert len(menu.visible_option_texts()) == 24
+        assert len(menu.visible_option_texts()) == 25
         menu.close()
         menu.deleteLater()
 
@@ -150,15 +154,15 @@ def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
 
     assert section.header.text() == "入退场/唱字动画"
     assert host._animation_grid._max_columns == 2
-    assert host._entry_anim_combo.count() == 24
+    assert host._entry_anim_combo.count() == 25
     assert host._entry_anim_combo.itemData(5) == "char_drip"
     assert host._entry_anim_combo.itemData(9) == "tracking_in"
-    assert host._exit_anim_combo.count() == 24
+    assert host._exit_anim_combo.count() == 25
     for combo in (host._entry_anim_combo, host._exit_anim_combo):
         assert combo.itemText(combo.findData("noise")) == "噪点溶解"
         assert combo.findData("noise") == combo.findData("utopia") + 1
-        assert [combo.itemData(i) for i in range(21, 24)] == [
-            "petal", "snow", "snow_solid"
+        assert [combo.itemData(i) for i in range(21, 25)] == [
+            "petal", "snow", "snow_solid", "random_zoom"
         ]
     assert host._exit_anim_combo.itemData(2) == "slide_out"
     assert host._exit_anim_combo.itemData(9) == "scatter_out"
@@ -301,8 +305,8 @@ def test_effects_section_edge_builder_defaults_and_order(qapp) -> None:
     assert host._section_edge_both_check.text() == "同时设置出入场"
     assert not host._section_edge_check.isChecked()
     assert not host._section_edge_both_check.isChecked()
-    assert host._section_head_anim_combo.count() == 24
-    assert host._section_tail_anim_combo.count() == 24
+    assert host._section_head_anim_combo.count() == 25
+    assert host._section_tail_anim_combo.count() == 25
     # 主开关默认关：两个下拉与子开关全部禁用；选项表含默认动画（具体显示值
     # 由 set_style 回显）。
     assert not host._section_head_anim_combo.isEnabled()

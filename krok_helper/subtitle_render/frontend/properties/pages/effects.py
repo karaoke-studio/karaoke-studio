@@ -72,6 +72,7 @@ ENTRY_ANIMATION_OPTIONS = (
     ("花瓣飘入", "petal"),
     ("雪花飘入·镂空", "snow"),
     ("雪花飘入·实心", "snow_solid"),
+    ("随机缩放", "random_zoom"),
 )
 
 EXIT_ANIMATION_OPTIONS = (
@@ -99,6 +100,7 @@ EXIT_ANIMATION_OPTIONS = (
     ("花瓣飘散", "petal"),
     ("雪花飘出·镂空", "snow"),
     ("雪花飘出·实心", "snow_solid"),
+    ("随机缩放", "random_zoom"),
 )
 
 FX_PARTICLE_OPTIONS = (

@@ -145,6 +145,7 @@ _ENTRY_ANIMATION_LABELS = {
     "petal": "花瓣飘入",
     "snow": "雪花飘入·镂空",
     "snow_solid": "雪花飘入·实心",
+    "random_zoom": "随机缩放",
 }
 _EXIT_ANIMATION_LABELS = {
     "none": "无",
@@ -171,6 +172,7 @@ _EXIT_ANIMATION_LABELS = {
     "petal": "花瓣飘散",
     "snow": "雪花飘出·镂空",
     "snow_solid": "雪花飘出·实心",
+    "random_zoom": "随机缩放",
 }
 
 

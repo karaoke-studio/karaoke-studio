@@ -664,6 +664,7 @@ def normalize_entry_animation(value: object) -> EntryAnimation:
         "snow_solid",
         "feather",
         "lightning",
+        "random_zoom",
     }:
         return value  # type: ignore[return-value]
     return "none"
@@ -695,6 +696,7 @@ def normalize_exit_animation(value: object) -> ExitAnimation:
         "snow_solid",
         "feather",
         "lightning",
+        "random_zoom",
     }:
         return value  # type: ignore[return-value]
     return "none"

@@ -734,17 +734,23 @@ def _geo_char_state(
         vanish = min(max(p / 0.55, 0.0), 1.0)
         return 1.0 - vanish * vanish * (3.0 - 2.0 * vanish), 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
 
-    # converge_out：向行中心收拢淡出；优先用调用方传入的真实中心坐标
-    #（painter 的字形布局 / C++ 的 CachedChar），缺省回退 index 归一化估算。
+    if transition.effect == "converge_out":
+        # converge_out：向行中心收拢淡出；优先用调用方传入的真实中心坐标
+        #（painter 的字形布局 / C++ 的 CachedChar），缺省回退 index 归一化估算。
+        p = _stagger_progress()
+        eased = p * p * (3.0 - 2.0 * p)
+        if char_center_x is not None and line_center_x is not None:
+            dx = (line_center_x - char_center_x) * eased
+        else:
+            half_width_em = count * 0.5
+            dx = -_center_norm(index, count) * font_px * half_width_em * eased
+        scale = 1.0 - CONVERGE_SHRINK * eased
+        return 1.0 - eased, dx, 0.0, 0.0, scale, scale, 0.0
+
+    # 旧渲染器（CPU Painter）安全兜底：未实现的 Skia 独占动画静默按普通淡入/淡出降级。
     p = _stagger_progress()
     eased = p * p * (3.0 - 2.0 * p)
-    if char_center_x is not None and line_center_x is not None:
-        dx = (line_center_x - char_center_x) * eased
-    else:
-        half_width_em = count * 0.5
-        dx = -_center_norm(index, count) * font_px * half_width_em * eased
-    scale = 1.0 - CONVERGE_SHRINK * eased
-    return 1.0 - eased, dx, 0.0, 0.0, scale, scale, 0.0
+    return (1.0 - eased if transition.phase == "exit" else eased), 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
 
 
 def transition_char_glow(

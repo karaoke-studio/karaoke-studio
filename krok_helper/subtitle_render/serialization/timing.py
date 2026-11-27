@@ -175,11 +175,11 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
     exit_ = value.get("exit_anim")
     valid_entry = {
         "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia", "noise",
-        "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "feather", "lightning",
+        "tracking_in", "wave_in", "stretch_in", "glow_in", "assemble_in", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "feather", "lightning", "random_zoom",
     }
     valid_exit = {
         "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia", "noise",
-        "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "feather", "lightning",
+        "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out", "sparkle", "ripple", "note", "heart", "petal", "snow", "snow_solid", "flame", "feather", "lightning", "random_zoom",
     }
     if entry not in valid_entry or exit_ not in valid_exit:
         return None

@@ -917,7 +917,10 @@ class ExportWorkspaceView(QWidget):
         skia_backend_check = CheckBox("使用 Skia 后端", settings_col)
         skia_backend_check.setChecked(skia_backend_checked)
         skia_backend_check.setVisible(skia_backend_visible)
-        skia_backend_check.setToolTip("本次运行的字幕预览和导出使用 Skia。GPU 开关分别决定使用 GPU 或 Skia Raster。")
+        skia_backend_check.setToolTip(
+            "本次运行的字幕预览和导出使用 Skia（GPU 开关分别决定使用 GPU 或 Skia Raster）。\n"
+            "取消勾选将切回旧版兼容渲染器（已停止功能更新，部分新增特效仅在 Skia 后端生效）。"
+        )
         gpu_preview_check = CheckBox("使用 GPU 渲染字幕预览", settings_col)
         gpu_preview_check.setChecked(gpu_preview_checked)
         gpu_preview_check.setVisible(gpu_controls_visible)

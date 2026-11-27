@@ -65,6 +65,49 @@ GeoCharState geoCharState(
         return p * p * (3.0f - 2.0f * p);
     };
 
+    if (effect == "random_zoom") {
+        // 逐字随机缩放（底边中心基点）：按确定性伪随机全排列错峰，
+        // 入场从底边中心弹出放大（0 → 1），退场向底边中心缩回消失（1 → 0）。
+        const std::uint32_t salt = (exitPhase ? 31u : 17u)
+            + static_cast<std::uint32_t>(std::max(count, 1)) * 13u;
+        const float myKey = fxUnitHash(static_cast<std::uint32_t>(index), salt);
+        int rank = 0;
+        for (int j = 0; j < count; ++j) {
+            if (j == index) {
+                continue;
+            }
+            const float otherKey = fxUnitHash(static_cast<std::uint32_t>(j), salt);
+            if (otherKey < myKey || (otherKey == myKey && j < index)) {
+                ++rank;
+            }
+        }
+        const int step = count <= 1 ? 0 : staggerMs / (count - 1);
+        const float p = clampedRatio(tMs - startMs - step * rank, travelMs);
+        if (exitPhase) {
+            if (p >= 1.0f) {
+                state.opacity = 0.0f;
+                return state;
+            }
+            const float q = p * p;
+            const float scale = std::max(1.0f - q, 0.001f);
+            state.opacity = std::min((1.0f - p) * 6.0f, 1.0f);
+            state.scaleX = scale;
+            state.scaleY = scale;
+            state.dy = (1.0f - scale) * font * 0.42f;
+            return state;
+        }
+        if (p <= 0.0f) {
+            state.opacity = 0.0f;
+            return state;
+        }
+        const float q = 1.0f - (1.0f - p) * (1.0f - p);
+        const float scale = std::max(q, 0.001f);
+        state.opacity = std::min(p * 6.0f, 1.0f);
+        state.scaleX = scale;
+        state.scaleY = scale;
+        state.dy = (1.0f - scale) * font * 0.42f;
+        return state;
+    }
     if (effect == "tracking_in") {
         const float p = staggerProgress;
         const float q = smoothstep(p);

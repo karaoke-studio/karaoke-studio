@@ -52,6 +52,7 @@ ENTRY_ANIMATION_GROUPS: tuple[AnimationGroupSpec, ...] = (
             "tracking_in",
             "wave_in",
             "stretch_in",
+            "random_zoom",
         ),
     ),
     AnimationGroupSpec(
@@ -98,6 +99,7 @@ EXIT_ANIMATION_GROUPS: tuple[AnimationGroupSpec, ...] = (
             "scatter_out",
             "converge_out",
             "stretch_out",
+            "random_zoom",
         ),
     ),
     AnimationGroupSpec(
