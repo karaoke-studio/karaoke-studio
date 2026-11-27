@@ -4857,20 +4857,20 @@ def test_n3_assembly_takeover_does_not_write_old_background(
 
 
 def test_io_timeout_is_reported_as_timeout_not_user_cancel(qapp, monkeypatch):
-    """执行器超时必须给出超时反馈，不能伪装成「已取消」。"""
+    """执行器超时必须给出常驻错误反馈，不能伪装成「已取消」。"""
     from krok_helper.subtitle_render.frontend.project.tasks import ProjectTaskTimeout
 
     win = _make_window(qapp, monkeypatch)
-    notices: list[str] = []
+    notices: list[dict] = []
     monkeypatch.setattr(
         mw.InfoBar,
-        "warning",
-        lambda **kwargs: notices.append(str(kwargs.get("title", ""))),
+        "error",
+        lambda **kwargs: notices.append(kwargs),
     )
     monkeypatch.setattr(
         mw.InfoBar,
         "info",
-        lambda **kwargs: notices.append("cancel:" + str(kwargs.get("title", ""))),
+        lambda **kwargs: notices.append({"title": "cancel:" + str(kwargs.get("title", ""))}),
     )
 
     def timed_out(work, *, label=""):
@@ -4879,8 +4879,10 @@ def test_io_timeout_is_reported_as_timeout_not_user_cancel(qapp, monkeypatch):
     monkeypatch.setattr(win, "_run_project_io", timed_out)
     try:
         assert win._run_cancelable_io(lambda: 1, label="x", owner="probe") is mw._IO_CANCELED
-        assert notices and "加载超时" in notices[0]
-        assert not any(item.startswith("cancel:") for item in notices)
+        assert notices and "加载超时" in str(notices[0].get("title", ""))
+        assert notices[0].get("duration") == -1
+        assert notices[0].get("isClosable") is True
+        assert not any(str(item.get("title", "")).startswith("cancel:") for item in notices)
     finally:
         win.close()
 
@@ -4888,7 +4890,7 @@ def test_io_timeout_is_reported_as_timeout_not_user_cancel(qapp, monkeypatch):
 def test_deferred_asset_timeout_is_reported_and_clears_queue(
     qapp, monkeypatch, tmp_path
 ):
-    """延迟素材超时：提示超时（不是「已取消」成功态），并清掉本队列。"""
+    """延迟素材超时：常驻错误提示超时（不是「已取消」成功态），并清掉本队列。"""
     from krok_helper.subtitle_render.frontend.project.tasks import ProjectTaskTimeout
 
     win = _make_window(qapp, monkeypatch)
@@ -4902,7 +4904,7 @@ def test_deferred_asset_timeout_is_reported_and_clears_queue(
     monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
     monkeypatch.setattr(
         mw.InfoBar,
-        "warning",
+        "error",
         lambda **kwargs: notices.append(str(kwargs.get("title", ""))),
     )
     try:
@@ -5373,4 +5375,118 @@ def test_gradient_window_apply_and_undo_reach_live_subtitle_preview(qapp, monkey
     finally:
         if panel._gradient_path_dialog is not None:
             panel._gradient_path_dialog.close()
+        win.close()
+
+
+def test_error_info_bar_persists_until_closed_and_deduplicates(qapp, monkeypatch):
+    """Skia/GPU 等错误提示必须常驻（duration=-1）、支持点 × 关闭、可复制且同类去重。"""
+    from PyQt6.QtCore import Qt
+
+    win = _make_window(qapp, monkeypatch)
+    try:
+        win.resize(960, 640)
+        win.show()
+        qapp.processEvents()
+
+        blocked = win._skia_backend_check.blockSignals(True)
+        try:
+            win._skia_backend_check.setChecked(True)
+        finally:
+            win._skia_backend_check.blockSignals(blocked)
+
+        win._show_gpu_preview_fallback("Skia 渲染失败详情 #1")
+        qapp.processEvents()
+
+        skia_key = "gpu-preview-fallback:Skia 字幕渲染"
+        assert skia_key in win._active_error_info_bars
+        first_bar = win._active_error_info_bars[skia_key]
+        assert first_bar.duration == -1
+        assert first_bar.isClosable is True
+        assert first_bar.orient == Qt.Orientation.Vertical
+        assert first_bar.position == mw.InfoBarPosition.BOTTOM_RIGHT
+        assert bool(
+            first_bar.contentLabel.textInteractionFlags()
+            & Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+
+        # 同类错误再次触发应替换旧条而不是堆叠两条。
+        win._show_gpu_preview_fallback("Skia 渲染失败详情 #2")
+        qapp.processEvents()
+        second_bar = win._active_error_info_bars[skia_key]
+        assert second_bar is not first_bar
+        assert len(win._active_error_info_bars) == 1
+        assert "详情 #2" in second_bar.content
+
+        # 不同类别的错误（如自动保存失败）应与渲染错误共存。
+        win._on_recovery_auto_save_failure(
+            Path("recovery.json"),
+            win._project_generation,
+            1,
+            1,
+            "磁盘空间不足",
+        )
+        qapp.processEvents()
+        assert len(win._active_error_info_bars) == 2
+        assert "auto-save-failed" in win._active_error_info_bars
+        assert win._active_error_info_bars["auto-save-failed"].duration == -1
+
+        # 用户点击右上角 × 后仅关闭对应错误条。
+        second_bar.closeButton.click()
+        qapp.processEvents()
+        assert skia_key not in win._active_error_info_bars
+        assert "auto-save-failed" in win._active_error_info_bars
+
+        # 关窗收尾会统一清理尚未关闭的常驻错误条。
+        win.shutdown_for_host_exit()
+        assert win._active_error_info_bars == {}
+    finally:
+        win.close()
+
+
+def test_warning_and_success_info_bars_remain_auto_dismiss(qapp, monkeypatch):
+    """warning（如字幕溢出画面）和 success（如跨模块转交）提示维持有限时长自动消失。"""
+    from PyQt6.QtWidgets import QWidget
+
+    import krok_helper.gui_qt as gui_qt
+
+    win = _make_window(qapp, monkeypatch)
+    warnings: list[dict] = []
+    errors: list[dict] = []
+    successes: list[dict] = []
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: warnings.append(kwargs))
+    monkeypatch.setattr(mw.InfoBar, "error", lambda **kwargs: errors.append(kwargs))
+    monkeypatch.setattr(
+        gui_qt.InfoBar, "success", lambda **kwargs: successes.append(kwargs)
+    )
+    host_widget = QWidget()
+    try:
+        win._on_layout_issues_ready(
+            win._margin_check_generation,
+            [
+                mw._LayoutIssue(
+                    track_index=0,
+                    source_name="",
+                    warning=mw.LayoutMarginWarning(
+                        line_index=0,
+                        text="溢出测试行",
+                        level="overflow",
+                        left=-12.0,
+                        right=1932.0,
+                    ),
+                )
+            ],
+        )
+        assert warnings and warnings[0]["title"] == "字幕溢出画面"
+        assert warnings[0]["duration"] > 0
+        assert errors == []
+
+        gui_qt.KrokHelperQtApp._show_handoff_toast(
+            SimpleNamespace(page_stack=host_widget),
+            "成片已交给下一步",
+            "已将成片放入第 6 步。",
+        )
+        assert successes and successes[0]["title"] == "成片已交给下一步"
+        assert successes[0]["duration"] > 0
+    finally:
+        host_widget.close()
         win.close()

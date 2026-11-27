@@ -1543,6 +1543,7 @@ class SubtitleRenderWindow(QWidget):
             self._apply_preview_style_now
         )
         self._last_margin_warning_key = ""
+        self._active_error_info_bars: dict[str, InfoBar] = {}
         self._layout_issues: list[_LayoutIssue | _TimingIssue] = []
         # 逐轨诊断缓存：key 为 (track 内容签名, 样式布局签名, 画面宽高)，
         # 纯绘制字段调整时直接复用上次结果，跳过整条测量链路。
@@ -1652,6 +1653,7 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.stop()
         self._layout_check_tooltip_timer.stop()
         self._dismiss_layout_check_tooltip()
+        self._dismiss_error_info_bars()
         if hasattr(self, "_source_watch_runtime"):
             # 先把 QFileSystemWatcher 摘掉，避免关窗后排队事件回调到已销毁对象。
             self._source_watch_runtime.shutdown()
@@ -2109,12 +2111,10 @@ class SubtitleRenderWindow(QWidget):
                 logging.getLogger(__name__).warning(
                     "保留字幕项目已放弃修改备份失败: %s", exc
                 )
-                InfoBar.warning(
-                    title="紧急备份失败",
-                    content=str(exc),
-                    parent=self,
-                    position=InfoBarPosition.BOTTOM_RIGHT,
-                    duration=5000,
+                self._show_error_info_bar(
+                    "紧急备份失败",
+                    str(exc),
+                    dedup_key="emergency-backup-failed",
                 )
         self._set_project_dirty(False)
         self._cleanup_recovery_file()
@@ -2281,12 +2281,10 @@ class SubtitleRenderWindow(QWidget):
         if generation != self._project_generation or error == self._last_auto_save_error:
             return
         self._last_auto_save_error = error
-        InfoBar.warning(
-            title="自动保存失败",
-            content=error,
-            parent=self,
-            position=InfoBarPosition.BOTTOM_RIGHT,
-            duration=5000,
+        self._show_error_info_bar(
+            "自动保存失败",
+            error,
+            dedup_key="auto-save-failed",
         )
 
     def _on_recovery_auto_save_rerun_requested(self) -> None:
@@ -2984,6 +2982,7 @@ class SubtitleRenderWindow(QWidget):
                 Path("(新建工程)"),
                 title="新建工程超时",
                 content="读取/初始化超时，已清空未命名工程。",
+                is_error=True,
             )
             return
         except ProjectTaskCanceled:
@@ -3275,12 +3274,10 @@ class SubtitleRenderWindow(QWidget):
         )
 
     def _notify_io_timeout(self) -> None:
-        InfoBar.warning(
-            title="加载超时",
-            content="读取/解析超时（磁盘或外置工具无响应），已中止本次操作。",
-            parent=self,
-            position=InfoBarPosition.BOTTOM_RIGHT,
-            duration=5000,
+        self._show_error_info_bar(
+            "加载超时",
+            "读取/解析超时（磁盘或外置工具无响应），已中止本次操作。",
+            dedup_key="io-timeout",
         )
 
     def _abort_project_open(
@@ -3289,6 +3286,7 @@ class SubtitleRenderWindow(QWidget):
         *,
         title: str = "已取消打开项目",
         content: str = "",
+        is_error: bool = False,
     ) -> None:
         """Return to a coherent empty project after a cancelled/superseded open."""
         # 旧工程在途的前/后黑素材回调按代际丢弃：取消也要推进代际。
@@ -3304,9 +3302,17 @@ class SubtitleRenderWindow(QWidget):
             disk_revision=None,
         )
         self._set_project_dirty(False)
+        message = content or f"已停止加载：\n{path}"
+        if is_error:
+            self._show_error_info_bar(
+                title,
+                message,
+                dedup_key=f"project-open-abort:{title}:{path}",
+            )
+            return
         InfoBar.warning(
             title=title,
-            content=content or f"已停止加载：\n{path}",
+            content=message,
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,
             duration=3500,
@@ -3364,18 +3370,17 @@ class SubtitleRenderWindow(QWidget):
                     path,
                     title="加载工程超时",
                     content=f"读取或解析超时，已停止加载：\n{path}",
+                    is_error=True,
                 )
             elif phase["mutating"]:
                 # 代际已变（新动作接管）：绝不清空新会话，只收掉本轮提示。
                 self._clear_project_load_progress(token)
             elif self._project_generation == attempt_generation:
                 self._clear_project_load_progress(token)
-                InfoBar.warning(
-                    title="加载工程超时",
-                    content=f"读取工程文件超时，当前工程保持不变：\n{path}",
-                    parent=self,
-                    position=InfoBarPosition.BOTTOM_RIGHT,
-                    duration=5000,
+                self._show_error_info_bar(
+                    "加载工程超时",
+                    f"读取工程文件超时，当前工程保持不变：\n{path}",
+                    dedup_key=f"project-open-timeout:{path}",
                 )
             return False
         except ProjectTaskCanceled:
@@ -3694,18 +3699,17 @@ class SubtitleRenderWindow(QWidget):
                     path,
                     title="导入 N3 项目超时",
                     content=f"读取或解析超时，已停止导入：\n{path}",
+                    is_error=True,
                 )
             elif self._project_generation == attempt_generation:
                 self._clear_project_deferred_loads(
                     finish_progress=False, expected_generation=attempt_generation
                 )
                 self._clear_project_load_progress(token)
-                InfoBar.warning(
-                    title="导入 N3 项目超时",
-                    content=f"读取或解析超时，已停止导入：\n{path}",
-                    parent=self,
-                    position=InfoBarPosition.BOTTOM_RIGHT,
-                    duration=5000,
+                self._show_error_info_bar(
+                    "导入 N3 项目超时",
+                    f"读取或解析超时，已停止导入：\n{path}",
+                    dedup_key=f"n3-import-timeout:{path}",
                 )
             # 代际已变：旧导入的超时不得碰新会话的队列/进度/提示。
         except ProjectTaskCanceled:
@@ -5313,12 +5317,10 @@ class SubtitleRenderWindow(QWidget):
             try:
                 self._reload_external_subtitle_source_blocking(key)
             except ProjectTaskTimeout:
-                InfoBar.warning(
-                    title="字幕源更新超时",
-                    content="外部字幕源仍在更新，已取消本次交接，请稍后重试。",
-                    parent=self,
-                    position=InfoBarPosition.BOTTOM_RIGHT,
-                    duration=5000,
+                self._show_error_info_bar(
+                    "字幕源更新超时",
+                    "外部字幕源仍在更新，已取消本次交接，请稍后重试。",
+                    dedup_key="subtitle-source-timeout",
                 )
                 return None
             except ProjectTaskCanceled:
@@ -5869,12 +5871,10 @@ class SubtitleRenderWindow(QWidget):
         disposition = preparation.disposition
         if disposition == SourceReloadDisposition.MISSING:
             if preparation.notify:
-                InfoBar.warning(
-                    title="字幕源不可用",
-                    content=f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
-                    parent=self,
-                    position=InfoBarPosition.BOTTOM_RIGHT,
-                    duration=5000,
+                self._show_error_info_bar(
+                    "字幕源不可用",
+                    f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
+                    dedup_key=f"subtitle-source-missing:{path}",
                 )
             return
         if disposition == SourceReloadDisposition.RETRYING:
@@ -5885,12 +5885,10 @@ class SubtitleRenderWindow(QWidget):
                 path,
                 preparation.error,
             )
-            InfoBar.warning(
-                title="字幕源更新失败",
-                content=f"无法读取更新后的字幕文件，已保留当前内容：\n{path}",
-                parent=self,
-                position=InfoBarPosition.BOTTOM_RIGHT,
-                duration=5000,
+            self._show_error_info_bar(
+                "字幕源更新失败",
+                f"无法读取更新后的字幕文件，已保留当前内容：\n{path}",
+                dedup_key=f"subtitle-source-failed:{path}",
             )
             return
         if disposition in {
@@ -6109,12 +6107,10 @@ class SubtitleRenderWindow(QWidget):
         disposition = preparation.disposition
         if disposition == SourceReloadDisposition.MISSING:
             if preparation.notify:
-                InfoBar.warning(
-                    title="字幕源不可用",
-                    content=f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
-                    parent=self,
-                    position=InfoBarPosition.BOTTOM_RIGHT,
-                    duration=5000,
+                self._show_error_info_bar(
+                    "字幕源不可用",
+                    f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
+                    dedup_key=f"subtitle-source-missing:{path}",
                 )
             return
         if disposition == SourceReloadDisposition.RETRYING:
@@ -6125,12 +6121,10 @@ class SubtitleRenderWindow(QWidget):
                 path,
                 preparation.error,
             )
-            InfoBar.warning(
-                title="字幕源更新失败",
-                content=f"无法读取更新后的 SUG 项目，已保留当前内容：\n{path}",
-                parent=self,
-                position=InfoBarPosition.BOTTOM_RIGHT,
-                duration=5000,
+            self._show_error_info_bar(
+                "字幕源更新失败",
+                f"无法读取更新后的 SUG 项目，已保留当前内容：\n{path}",
+                dedup_key=f"subtitle-source-failed:{path}",
             )
             return
         if disposition == SourceReloadDisposition.DUPLICATE:
@@ -9891,20 +9885,96 @@ class SubtitleRenderWindow(QWidget):
         """Persist GPU subtitle export independently from encoder selection."""
         self._save_persisted_state()
 
+    def _dismiss_error_info_bars(self) -> None:
+        """关窗/退出时收起仍在显示的常驻错误提示条。"""
+        active_bars = getattr(self, "_active_error_info_bars", None)
+        if not active_bars:
+            return
+        bars = list(active_bars.values())
+        active_bars.clear()
+        for bar in bars:
+            try:
+                bar.close()
+                bar.hide()
+            except RuntimeError:
+                pass
+
+    def _show_error_info_bar(
+        self,
+        title: str,
+        content: str,
+        *,
+        dedup_key: Optional[str] = None,
+    ) -> Optional[InfoBar]:
+        """在右下角展示常驻错误提示，必须由用户点击右上角 × 关闭。
+
+        同 ``dedup_key``（默认按 ``(title, content)``）尚未关闭的旧提示会被先关掉再展示
+        最新一条，避免同类错误反复触发时在右下角无限堆叠。
+        """
+        text = str(content)
+        key = dedup_key if dedup_key is not None else f"{title}\0{text}"
+        active_bars = getattr(self, "_active_error_info_bars", None)
+        if active_bars is None:
+            active_bars = {}
+            self._active_error_info_bars = active_bars
+        previous = active_bars.pop(key, None)
+        if previous is not None:
+            try:
+                previous.close()
+                previous.hide()
+            except RuntimeError:
+                pass
+
+        bar = InfoBar.error(
+            title=title,
+            content=text,
+            orient=Qt.Orientation.Vertical,
+            isClosable=True,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=-1,
+            parent=self,
+        )
+        if bar is None:
+            return None
+
+        # 允许用户选中复制错误细节（如 Skia stderr / 文件路径），方便排查或反馈。
+        content_label = getattr(bar, "contentLabel", None)
+        if content_label is not None and hasattr(content_label, "setTextInteractionFlags"):
+            content_label.setTextInteractionFlags(
+                content_label.textInteractionFlags()
+                | Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+        # 保险：与工作台其他 InfoBar 保持一致，避免滑入动画不推进时停在视口外。
+        ani = bar.property("slideAni") if hasattr(bar, "property") else None
+        if ani is not None and ani.endValue() is not None:
+            bar.move(ani.endValue())
+
+        active_bars[key] = bar
+
+        def _release(_obj=None, bar_key=key, target=bar) -> None:
+            if active_bars.get(bar_key) is target:
+                active_bars.pop(bar_key, None)
+
+        closed_signal = getattr(bar, "closedSignal", None)
+        if closed_signal is not None:
+            closed_signal.connect(_release)
+        destroyed_signal = getattr(bar, "destroyed", None)
+        if destroyed_signal is not None:
+            destroyed_signal.connect(_release)
+        return bar
+
     def _on_gpu_preview_fallback(self, message: str) -> None:
         self._preview_preference_controller.report_gpu_fallback(message)
 
     def _show_gpu_preview_fallback(self, message: str) -> None:
-        # 回退原因常带 sidecar 错误细节（stderr 尾巴等），10s 比 6s 更容易读完。
+        # 错误细节常带 sidecar 诊断（stderr 尾巴等），常驻显示直到用户手动关闭。
         is_skia_message = self._skia_backend_check.isChecked() or "Skia" in str(message)
         title = "Skia 字幕渲染" if is_skia_message else "GPU 预览已回退"
         logging.getLogger(__name__).warning("界面提示[%s]: %s", title, message)
-        InfoBar.warning(
-            title=title,
-            content=str(message),
-            parent=self,
-            position=InfoBarPosition.BOTTOM_RIGHT,
-            duration=10000,
+        self._show_error_info_bar(
+            title,
+            str(message),
+            dedup_key=f"gpu-preview-fallback:{title}",
         )
 
     def _on_scheme_selection_changed(self, key: str) -> None:
