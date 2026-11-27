@@ -48,7 +48,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
     if (!viewport_.isFinite())
         throw std::runtime_error("Skia 字幕视口变换无效");
     std::size_t totalPoints = 0, totalCells = 0, totalGroups = 0;
-    std::size_t remainingBitmapHaloBytes = std::size_t(256) << 20;
+    auto bitmapHaloCache = std::make_shared<BitmapHaloCache>(std::size_t(256) << 20);
     for (const auto& source : input.lines) {
         if (source.endMs < source.startMs) throw std::runtime_error("Skia: invalid resolved line time");
         Line line{{}, source.startMs, source.endMs};
@@ -186,7 +186,7 @@ PreparedScene::PreparedScene(const ResolvedSubtitleInput& input)
             line.cells.push_back({cell.path, cell.left, cell.right, cell.startMs, cell.endMs,
                                   cell.before, cell.after, cell.wipePoints, cell.adjustedWipeEnd,
                                   cell.top, cell.bottom, cell.outline, cell.outerOutline, cell.pivot, cell.strokeFlashWidth,
-                                  cell.bitmap ? std::make_shared<const PreparedBitmapGuide>(*cell.bitmap, remainingBitmapHaloBytes)
+                                  cell.bitmap ? std::make_shared<const PreparedBitmapGuide>(*cell.bitmap, bitmapHaloCache)
                                               : nullptr, cell.bodyPaintIndex});
         }
         for (const auto& group : source.roleGlows) {

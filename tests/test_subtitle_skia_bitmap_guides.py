@@ -1288,8 +1288,10 @@ def test_bitmap_guide_large_native_halo_keeps_previous_scene(binary, project, tm
     case, track = p00_guide(tmp_path, family=project[1].font_family)
     valid = ir_for(binary, (track, case.style))
     line = track.lines[0]
-    guide = replace(line.guide_symbol, bitmap_zoom_percent=1, bitmap_after_path=None,
-                    bitmap_before_path=image(tmp_path / 'magnified-halo.png', 256, 256))
+    # A guide whose working-resolution halo genuinely exceeds the 8192px cap
+    # must fail configure cleanly without corrupting the active scene.
+    guide = replace(line.guide_symbol, bitmap_fix_size=True, bitmap_after_path=None,
+                    bitmap_before_path=image(tmp_path / 'oversized-halo.png', 8180, 16))
     oversized = ir_for(binary, (replace(track, lines=[replace(line, guide_symbol=guide)]), case.style))
     with SkiaRendererProcess(binary, selection=selection('raster')) as process:
         configure(process, valid)
@@ -1410,3 +1412,48 @@ def test_bitmap_guide_halo_follows_the_glow_strength(binary, tmp_path):
             text_gain = plain_strong[target][index] - plain_base[target][index]
             assert guide_gain > text_gain + 2000, (target, times[index], guide_gain, text_gain)
     assert_glow_parity(times, None, *strong, 'bitmap_guide_strength', check_p00_edges=True)
+
+
+def test_many_lines_with_oversized_bitmap_guide_glow_fit_scene_budget(binary, project, tmp_path):
+    """High-res bitmap guides repeated across many lines share downscaled halos instead of blowing the 256 MiB budget."""
+    from krok_helper.subtitle_render.domain.timing import TimingChar, TimingLine, TimingTrack
+    from test_subtitle_skia_outline_ruby import render_skia
+    from test_subtitle_skia_static_glow import assert_glow_parity
+
+    _, base_style = project
+    hi_res = image(tmp_path / 'hi_res_guide.png', 1024, 1024, '#60FFB8')
+    symbol = GuideSymbol(
+        kind='bitmap',
+        bitmap_before_path=hi_res,
+        bitmap_after_path=hi_res,
+        bitmap_zoom_percent=100,
+        duration_ms=400,
+    )
+    style = replace(
+        base_style,
+        font_size_px=64,
+        decoration_kind='glow',
+        glow_radius_px=14,
+        glow_concentration_level=2,
+        entry_anim='none',
+        exit_anim='none',
+        karaoke_anim='none',
+    )
+    lines = []
+    for index in range(80):
+        start = index * 1000
+        lines.append(
+            TimingLine(
+                chars=[TimingChar('A', start + 400), TimingChar('字', start + 700)],
+                end_ms=start + 950,
+                guide_symbol=symbol,
+                display_start_override_ms=start,
+                display_end_override_ms=start + 950,
+            )
+        )
+    track = TimingTrack(lines=lines)
+    ir = ir_for(binary, (track, style))
+    times = (200, 500, 40200, 79500)
+    gpu, raster = render_skia(binary, ir, times)
+    assert all(frame[..., 3].sum() > 0 for frame in gpu)
+    assert_glow_parity(times, None, gpu, raster, 'oversized_bitmap_guide_budget', check_p00_edges=True)
