@@ -118,6 +118,7 @@ class DynamicStackedWidget(QStackedWidget):
         self._stable_width = (
             None if stable_width is None else max(1, int(stable_width))
         )
+        self.currentChanged.connect(lambda _index: self.updateGeometry())
 
     def set_stable_width(self, width: int) -> None:
         stable_width = max(1, int(width))

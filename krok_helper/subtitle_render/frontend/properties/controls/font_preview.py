@@ -30,7 +30,14 @@ from PyQt6.QtGui import (
     QPixmap,
     QTransform,
 )
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from krok_helper.subtitle_render.domain.models import Style
 from krok_helper.subtitle_render.engine.style.style_semantics import (
@@ -103,17 +110,36 @@ class _FontSampleCanvas(QWidget):
 
     _MAX_INK_SIZE = QSize(104, 96)
     _PADDING = 8
+    _COMPACT_MAX_INK_SIZE = QSize(156, 64)
+    _COMPACT_PADDING = 6
     _SUPERSAMPLE = 3.0
     _CANVAS_SIZE = QSize(
         _MAX_INK_SIZE.width() + _PADDING * 2,
         _MAX_INK_SIZE.height() + _PADDING * 2,
     )
+    _COMPACT_CANVAS_SIZE = QSize(
+        _COMPACT_MAX_INK_SIZE.width() + _COMPACT_PADDING * 2,
+        _COMPACT_MAX_INK_SIZE.height() + _COMPACT_PADDING * 2,
+    )
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        max_ink_size: Optional[QSize] = None,
+        padding: Optional[int] = None,
+    ) -> None:
         super().__init__(parent)
         self._sample = QPixmap()
         self._rendering = False
-        self.setFixedSize(self._CANVAS_SIZE)
+        self._max_ink_size = QSize(max_ink_size or self._MAX_INK_SIZE)
+        self._padding = self._PADDING if padding is None else int(padding)
+        self.setFixedSize(
+            QSize(
+                self._max_ink_size.width() + self._padding * 2,
+                self._max_ink_size.height() + self._padding * 2,
+            )
+        )
 
     def set_rendering(self, rendering: bool) -> None:
         if self._rendering == bool(rendering):
@@ -128,17 +154,20 @@ class _FontSampleCanvas(QWidget):
         self.update()
 
     @classmethod
-    def _fit_sample_image(cls, image: QImage) -> QImage:
+    def _fit_sample_image(
+        cls, image: QImage, *, max_ink_size: Optional[QSize] = None
+    ) -> QImage:
+        limit = max_ink_size or cls._MAX_INK_SIZE
         logical_size = image.deviceIndependentSize().toSize()
         if not image.isNull() and (
-            logical_size.width() > cls._MAX_INK_SIZE.width()
-            or logical_size.height() > cls._MAX_INK_SIZE.height()
+            logical_size.width() > limit.width()
+            or logical_size.height() > limit.height()
         ):
-            dpr = image.devicePixelRatio() or self._SUPERSAMPLE
+            dpr = image.devicePixelRatio() or cls._SUPERSAMPLE
             image = image.scaled(
                 QSize(
-                    round(cls._MAX_INK_SIZE.width() * dpr),
-                    round(cls._MAX_INK_SIZE.height() * dpr),
+                    round(limit.width() * dpr),
+                    round(limit.height() * dpr),
                 ),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
@@ -160,7 +189,8 @@ class _FontSampleCanvas(QWidget):
 
     @staticmethod
     def _color(value: str, fallback: str = "#FFFFFF") -> QColor:
-        color = QColor(value)
+        from ....domain.color import display_hex, linear_rgba
+        color = QColor(display_hex(value) if linear_rgba(value) is not None else value)
         return color if color.isValid() else QColor(fallback)
 
     @classmethod
@@ -221,7 +251,13 @@ class _FontSampleCanvas(QWidget):
         return QBrush(cls._color(fallback))
 
     @classmethod
-    def _render_sample_image(cls, style: Style, script: str) -> QImage:
+    def _render_sample_image(
+        cls,
+        style: Style,
+        script: str,
+        *,
+        max_ink_size: Optional[QSize] = None,
+    ) -> QImage:
         latin = script == "latin"
         main_text = "LinK" if latin else "人"
         ruby_text = "link" if latin else "ひと"
@@ -408,7 +444,7 @@ class _FontSampleCanvas(QWidget):
         finally:
             painter.end()
         image.setDevicePixelRatio(scale)
-        return cls._fit_sample_image(image)
+        return cls._fit_sample_image(image, max_ink_size=max_ink_size)
 
     @classmethod
     def _render_sample(cls, style: Style, script: str) -> QPixmap:
@@ -463,18 +499,34 @@ class _FontSampleRenderSignals(QObject):
 class _FontSampleRenderTask(QRunnable):
     """QImage-only worker; it never creates or touches a QWidget/QPixmap."""
 
-    def __init__(self, style: Style, script: str, generation: int) -> None:
+    def __init__(
+        self,
+        style: Style,
+        script: str,
+        generation: int,
+        *,
+        max_ink_size: Optional[QSize] = None,
+    ) -> None:
         super().__init__()
         self._style = style
         self._script = script
         self._generation = generation
+        self._max_ink_size = max_ink_size
         self.signals = _FontSampleRenderSignals()
 
     def run(self) -> None:
         try:
-            image = _FontSampleCanvas._render_sample_image(
-                self._style, self._script
-            )
+            if self._max_ink_size is None:
+                image = _FontSampleCanvas._render_sample_image(
+                    self._style,
+                    self._script,
+                )
+            else:
+                image = _FontSampleCanvas._render_sample_image(
+                    self._style,
+                    self._script,
+                    max_ink_size=self._max_ink_size,
+                )
         except Exception:
             self.signals.failed.emit(self._generation)
             return
@@ -491,20 +543,83 @@ def _scheme_display_name(scheme_key: str) -> str:
 class _FontPreviewWidget(QWidget):
     """Small embedded sample owned exclusively by ``PropertyPanel``."""
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget, *, compact: bool = False) -> None:
         super().__init__(parent)
         self.setObjectName("SubtitleFontPreviewWidget")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        self.canvas = _FontSampleCanvas(self)
-        layout.addWidget(self.canvas)
-        # 预览图常驻一行「编辑对象」题注：用户注意力在下方控件上时，
-        # 这里是页面上唯一持续标明当前改的是谁的地方。
-        self.target_caption = QLabel(self)
-        self.target_caption.setObjectName("SubtitleFontPreviewTargetCaption")
-        self.target_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.target_caption)
+        self._compact = bool(compact)
+        if self._compact:
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            strip = QFrame(self)
+            strip.setObjectName("SubtitleFontPreviewStrip")
+            themed(
+                strip,
+                lambda: (
+                    "QFrame#SubtitleFontPreviewStrip { "
+                    f"background: {palette().shell_bg}; "
+                    f"border: 1px solid {palette().input_border}; "
+                    "border-radius: 8px; "
+                    "}"
+                ),
+            )
+            strip_layout = QHBoxLayout(strip)
+            strip_layout.setContentsMargins(12, 6, 8, 6)
+            strip_layout.setSpacing(12)
+
+            info_layout = QVBoxLayout()
+            info_layout.setContentsMargins(0, 0, 0, 0)
+            info_layout.setSpacing(2)
+            info_layout.addStretch(1)
+            self.title_label = QLabel("样式预览", strip)
+            self.title_label.setObjectName("SubtitleFontPreviewTitle")
+            themed(
+                self.title_label,
+                lambda: (
+                    "QLabel#SubtitleFontPreviewTitle { "
+                    f"color: {palette().title_text}; "
+                    "font-size: 9pt; "
+                    "font-weight: 600; "
+                    "border: 0; "
+                    "}"
+                ),
+            )
+            info_layout.addWidget(self.title_label)
+            self.target_caption = QLabel(strip)
+            self.target_caption.setObjectName("SubtitleFontPreviewTargetCaption")
+            self.target_caption.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.target_caption.setMinimumWidth(80)
+            self.target_caption.setSizePolicy(
+                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+            )
+            info_layout.addWidget(self.target_caption)
+            info_layout.addStretch(1)
+            strip_layout.addLayout(info_layout, 1)
+
+            self.canvas = _FontSampleCanvas(
+                strip,
+                max_ink_size=_FontSampleCanvas._COMPACT_MAX_INK_SIZE,
+                padding=_FontSampleCanvas._COMPACT_PADDING,
+            )
+            strip_layout.addWidget(self.canvas, 0, Qt.AlignmentFlag.AlignVCenter)
+            outer.addWidget(strip)
+            self.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
+        else:
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(4)
+            self.canvas = _FontSampleCanvas(self)
+            layout.addWidget(self.canvas)
+            # 预览图常驻一行「编辑对象」题注：用户注意力在下方控件上时，
+            # 这里是页面上唯一持续标明当前改的是谁的地方。
+            self.target_caption = QLabel(self)
+            self.target_caption.setObjectName("SubtitleFontPreviewTargetCaption")
+            self.target_caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(self.target_caption)
         themed(
             self.target_caption,
             lambda: (
@@ -586,7 +701,12 @@ class _FontPreviewWidget(QWidget):
         generation, style, script = self._pending_render
         self._pending_render = None
         self._render_busy = True
-        task = _FontSampleRenderTask(style, script, generation)
+        task = _FontSampleRenderTask(
+            style,
+            script,
+            generation,
+            max_ink_size=self.canvas._max_ink_size if self._compact else None,
+        )
         self._active_render_task = task
         task.signals.completed.connect(
             self._on_render_completed,

@@ -4066,8 +4066,8 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     # 分配而不是 1:1 等分；等分会让色卡右侧的注音 tab 与取色按钮被裁。
     assert panel._color_section.width() >= panel._color_section.sizeHint().width()
     assert panel._font_section.width() >= panel._font_section.sizeHint().width()
-    # 描边尺寸进入字体页后字体卡片更高；两张卡片仍只做顶部对齐。
-    assert panel._font_section.height() > panel._color_section.height()
+    # 顶部只留单行角色导航，预览嵌入色卡下方；两张卡片仍做顶部对齐。
+    assert panel._color_section.isAncestorOf(panel._font_preview_widget)
     assert (
         panel._font_tab_panel.mapTo(panel._font_section, QPoint()).y()
         == panel._color_tab_panel.mapTo(panel._color_section, QPoint()).y()
@@ -4347,7 +4347,10 @@ def test_property_cards_keep_full_width_at_workspace_minimum_and_side_by_side(qa
 
     role_page = panel.widget(0)
     assert role_page.widget().width() <= role_page.viewport().width()
-    assert panel._role_header.is_stacked()
+    assert (
+        panel._role_navigation.geometry().right()
+        <= panel._scheme_section.contentsRect().right()
+    )
     assert panel._color_section.width() >= panel._color_section.minimumSizeHint().width()
 
     pair = panel._font_color_row
@@ -4873,17 +4876,24 @@ def test_font_preview_button_lives_in_role_navigation(qapp):
     assert button.text() == "显示/隐藏预览"
 
 
-def test_font_preview_widget_embeds_at_role_card_top_right(qapp):
+def test_font_preview_widget_embeds_below_color_panel(qapp):
     panel = PropertyPanel()
     preview = panel._font_preview_widget
     panel.resize(1200, 700)
     panel.show()
     qapp.processEvents()
 
-    assert panel._role_header.isAncestorOf(preview)
-    assert preview.geometry().right() == panel._role_header.contentsRect().right()
-    assert preview.canvas.size() == QSize(120, 112)
+    assert panel._color_section.isAncestorOf(preview)
+    assert preview.geometry().top() > panel._color_tab_panel.geometry().bottom()
+    assert panel._font_color_row.geometry().top() < 80
+    assert preview.canvas.size() == QSize(168, 76)
     assert preview.target_caption.text() == "编辑对象：全局默认"
+
+    height_with_preview = panel._color_section.sizeHint().height()
+    panel._font_preview_button.click()
+    qapp.processEvents()
+    assert not preview.isVisible()
+    assert panel._color_section.sizeHint().height() < height_with_preview
 
 
 def test_font_preview_canvas_geometry_is_stable_across_scripts(qapp):
@@ -4899,7 +4909,7 @@ def test_font_preview_canvas_geometry_is_stable_across_scripts(qapp):
     qapp.processEvents()
 
     assert preview.geometry() == japanese_geometry
-    assert preview.canvas.size() == japanese_canvas_size == QSize(120, 112)
+    assert preview.canvas.size() == japanese_canvas_size == QSize(168, 76)
     assert preview._sample_text == "LinK"
 
 
@@ -5296,6 +5306,45 @@ def test_stroke2_checkbox_sits_tightly_beside_width_input(qapp):
     assert checkbox.parentWidget() is width_spin.parentWidget()
     gap = width_spin.geometry().left() - checkbox.geometry().right() - 1
     assert 0 <= gap <= 2
+
+
+def test_font_japanese_tab_stays_compact_and_aligned_with_color_panel(qapp):
+    """日文页只有 3 行，不能被英数页（6 行）撑高，同排标签高度须对齐。"""
+    panel = PropertyPanel()
+    panel.resize(900, 800)
+    panel.show()
+    qapp.processEvents()
+
+    jp_page = panel._font_tab_stack.widget(0)
+    latin_page = panel._font_tab_stack.widget(1)
+    assert jp_page.sizeHint().height() < latin_page.sizeHint().height()
+    assert panel._font_tab_stack.height() == jp_page.sizeHint().height()
+
+    size_field = panel._font_size_spin.parentWidget()
+    weight_field = panel._font_weight_combo.parentWidget()
+    italic_field = panel._italic_check.parentWidget().parentWidget()
+    assert size_field.height() == weight_field.height() == italic_field.height()
+    assert size_field.geometry().top() == weight_field.geometry().top() == italic_field.geometry().top()
+
+    stroke_field = panel._stroke_width_spin.parentWidget()
+    stroke2_field = panel._stroke2_width_spin.parentWidget().parentWidget()
+    assert stroke_field.height() == stroke2_field.height()
+    assert stroke_field.geometry().top() == stroke2_field.geometry().top()
+
+    color_width_jp = panel._color_section.width()
+    font_width_jp = panel._font_section.width()
+    jp_stack_height = panel._font_tab_stack.height()
+
+    panel._font_tab_panel._buttons[("left", "latin")].click()
+    qapp.processEvents()
+    assert panel._font_tab_stack.height() == latin_page.sizeHint().height()
+    assert panel._font_tab_stack.height() > jp_stack_height
+    assert panel._color_section.width() == color_width_jp
+    assert panel._font_section.width() == font_width_jp
+
+    panel._font_tab_panel._buttons[("left", "japanese")].click()
+    qapp.processEvents()
+    assert panel._font_tab_stack.height() == jp_stack_height
 
 
 def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):

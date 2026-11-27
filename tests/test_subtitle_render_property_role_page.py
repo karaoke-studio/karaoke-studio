@@ -2,6 +2,9 @@
 
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
+    DynamicStackedWidget,
+)
 from krok_helper.subtitle_render.frontend.properties.roles.page import (
     RolePropertyPageBuilder,
 )
@@ -74,7 +77,7 @@ def test_role_builder_preserves_composition_order_and_contracts(qapp) -> None:
 
     assert section is host._scheme_section
     assert host._font_preview_requested is True
-    assert host._role_header.parts[1] is host._font_preview_widget
+    assert host._font_preview_widget.parentWidget() is host._color_section
     assert host._font_color_row.parts[0] is host._color_section
     assert host._font_color_row.parts[2] is host._font_section
     assert host._font_color_row.spacing == 6
@@ -95,6 +98,7 @@ def test_role_font_builder_preserves_page_order_and_flags(qapp) -> None:
     section = builder.make_font_section()
 
     assert section.header.text() == "字体"
+    assert isinstance(host._font_tab_stack, DynamicStackedWidget)
     assert host._font_tab_stack.count() == 4
     assert [host._font_tab_stack.widget(i).objectName() for i in range(4)] == [
         "main:japanese",

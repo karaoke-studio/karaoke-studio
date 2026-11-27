@@ -1068,7 +1068,9 @@ class PropertyPanel(QWidget):
             self,
             plain_card_factory=_plain_card,
             role_header_factory=_ResponsiveRoleHeader,
-            font_preview_factory=_FontPreviewWidget,
+            font_preview_factory=lambda parent: _FontPreviewWidget(
+                parent, compact=True
+            ),
             property_pair_factory=_ResponsivePropertyPair,
         )
         self._role_font_page_builder = RoleFontSettingsPageBuilder(

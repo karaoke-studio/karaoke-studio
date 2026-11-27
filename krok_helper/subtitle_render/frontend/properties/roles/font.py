@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import CheckBox
 
@@ -19,6 +20,7 @@ from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_
 
 
 FONT_SIZE_MAX_PX = 4096
+_COMPACT_CONTROL_HEIGHT = 32
 
 
 class RoleFontSettingsPageBuilder:
@@ -258,10 +260,11 @@ class RoleFontSettingsPageBuilder:
         row_layout.addWidget(property_field("字号", size_spin), 0, 0)
         row_layout.addWidget(property_field("字重", weight_combo), 0, 1)
         italic_control = QWidget(row)
+        italic_control.setFixedHeight(_COMPACT_CONTROL_HEIGHT)
         italic_control_layout = QHBoxLayout(italic_control)
         italic_control_layout.setContentsMargins(0, 0, 0, 0)
         italic_control_layout.setSpacing(0)
-        italic_control_layout.addWidget(italic_check, 0)
+        italic_control_layout.addWidget(italic_check, 0, Qt.AlignmentFlag.AlignVCenter)
         italic_control_layout.addStretch(1)
         row_layout.addWidget(property_field("斜体", italic_control), 0, 2)
         row_layout.setColumnStretch(0, 1)
@@ -327,11 +330,16 @@ class RoleFontSettingsPageBuilder:
         stroke_layout.setHorizontalSpacing(8)
         stroke_width_widget = property_field("描边宽度", stroke_width_spin)
         stroke2_control = QWidget(stroke_row)
+        stroke2_control.setFixedHeight(_COMPACT_CONTROL_HEIGHT)
         stroke2_control_layout = QHBoxLayout(stroke2_control)
         stroke2_control_layout.setContentsMargins(0, 0, 0, 0)
         stroke2_control_layout.setSpacing(2)
-        stroke2_control_layout.addWidget(stroke2_enabled_check, 0)
-        stroke2_control_layout.addWidget(stroke2_width_spin, 1)
+        stroke2_control_layout.addWidget(
+            stroke2_enabled_check, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        stroke2_control_layout.addWidget(
+            stroke2_width_spin, 1, Qt.AlignmentFlag.AlignVCenter
+        )
         stroke2_widget = property_field("描边 2", stroke2_control)
         setattr(host, f"_{attr_prefix}stroke_width_field", stroke_width_widget)
         setattr(host, f"_{attr_prefix}stroke2_field", stroke2_widget)
@@ -343,4 +351,5 @@ class RoleFontSettingsPageBuilder:
         for column in range(2):
             stroke_layout.setColumnStretch(column, 1)
         layout.addWidget(stroke_row)
+        layout.addStretch(1)
         return page

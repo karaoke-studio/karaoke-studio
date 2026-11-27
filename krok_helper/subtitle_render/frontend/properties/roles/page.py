@@ -5,9 +5,12 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QStackedWidget, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QWidget
 from qfluentwidgets import CheckBox, PushButton
 
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
+    DynamicStackedWidget,
+)
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     inline_property_section,
     property_section,
@@ -39,17 +42,21 @@ class RolePropertyPageBuilder:
         section, layout = self._plain_card_factory()
         host._scheme_section = section
         if not getattr(host, "_appearance_only", False):
-            host._role_header = self._role_header_factory(section)
-            role_navigation = host._make_scheme_navigation(host._role_header)
-            host._font_preview_requested = True
-            host._font_preview_widget = self._font_preview_factory(host._role_header)
-            host._role_header.set_widgets(role_navigation, host._font_preview_widget)
-            layout.addWidget(host._role_header)
+            role_navigation = host._make_scheme_navigation(section)
+            layout.addWidget(role_navigation, 0, Qt.AlignmentFlag.AlignLeft)
 
         row = self._property_pair_factory(section)
         row.set_spacing(6)
         host._font_color_row = row
         host._color_section = host._make_color_section(parent=row, inline=True)
+        if not getattr(host, "_appearance_only", False):
+            host._font_preview_requested = True
+            host._font_preview_widget = self._font_preview_factory(
+                host._color_section
+            )
+            color_layout = host._color_section.layout()
+            if color_layout is not None:
+                color_layout.addWidget(host._font_preview_widget)
         host._font_section = host._make_font_section(parent=row, inline=True)
         for child in (host._color_section, host._font_section):
             child.setSizePolicy(
@@ -95,25 +102,39 @@ class RolePropertyPageBuilder:
             (("main", "主文字"), ("ruby", "注音")),
             section,
         )
-        host._font_tab_stack = QStackedWidget(host._font_tab_panel)
+        host._font_tab_stack = DynamicStackedWidget(host._font_tab_panel)
         host._font_stroke_controls = {}
         host._font_controls = {}
         host._font_size_follow_checks = {}
         host._font_weight_follow_checks = {}
         host._font_italic_checks = {}
+        font_pages = []
         for subject, script in (
             ("main", "japanese"),
             ("main", "latin"),
             ("ruby", "japanese"),
             ("ruby", "latin"),
         ):
-            host._font_tab_stack.addWidget(
-                host._make_font_settings_page(
-                    subject,
-                    script,
-                    host._font_tab_stack,
-                )
+            page = host._make_font_settings_page(
+                subject,
+                script,
+                host._font_tab_stack,
             )
+            host._font_tab_stack.addWidget(page)
+            font_pages.append(page)
+        for page in font_pages:
+            page_layout = page.layout()
+            if page_layout is not None:
+                page_layout.activate()
+        # 四个字体页行数不同（日文 3 行、英数 6 行），用 DynamicStackedWidget 按当前页
+        # 报告高度，避免日文页被英数页撑高；同时锁定最宽最小宽度，切 tab 时两侧分栏
+        # 比例与断点不跳变。
+        max_page_width = max(
+            (page.minimumSizeHint().width() for page in font_pages),
+            default=0,
+        )
+        if max_page_width > 0:
+            host._font_tab_stack.set_stable_width(max_page_width)
         host._font_tab_panel.content_layout.addWidget(host._font_tab_stack)
         host._font_tab_panel.leftChanged.connect(host._on_font_script_changed)
         host._font_tab_panel.rightChanged.connect(
