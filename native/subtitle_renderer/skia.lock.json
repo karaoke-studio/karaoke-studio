@@ -97,6 +97,20 @@
         "binary_sha256": "09f0e5a8a2cf762b24b4d3ed464ffb2529e650d2efc36bab31da36aa93791efc"
       }
     },
+    "linux-arm64": {
+      "gn": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-arm64/+/git_revision:b2afae122eeb6ce09c52d63f67dc53fc517dbdc8",
+        "sha256": "376e1358ded109d955b8eb55ba2a7dec0e95ab1f8dfe0e18011e06eed78a011f",
+        "binary_sha256": "7a7931ee5d782b3e68f4388bc097eef7b51aed6320cdea23c2ca6b807d76854c",
+        "member": "gn"
+      },
+      "ninja": {
+        "url": "https://chrome-infra-packages.appspot.com/dl/infra/3pp/tools/ninja/linux-arm64/+/version:2@1.12.1.chromium.4",
+        "member": "ninja",
+        "sha256": "467bb097b2a0d343b13ec8bf158354b6cd54fbbd57d117967d1cb832da41e6c5",
+        "binary_sha256": "bfc06dbf119b98a3a586877bfb82cf7a3038cf0a5fa2723a45ceab88a3eb87b1"
+      }
+    },
     "mac-arm64": {
       "gn": {
         "url": "https://chrome-infra-packages.appspot.com/dl/gn/gn/mac-arm64/+/git_revision:b2afae122eeb6ce09c52d63f67dc53fc517dbdc8",
@@ -138,6 +152,11 @@
       "linker_sha256": "89c1209acd8d69b83d7c1a95173c59f036890de4cce713b508270ec4ac71c795"
     },
     "linux-x64": {
+      "compiler": "clang++",
+      "major": 21,
+      "version": "21.1.8"
+    },
+    "linux-arm64": {
       "compiler": "clang++",
       "major": 21,
       "version": "21.1.8"
