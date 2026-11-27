@@ -4028,7 +4028,7 @@ def _fx_fill_color_at(fill, position: float) -> QColor:
         else fill.gradient_stops
     ) or [(0, fill.start_color), (100, fill.end_color)]
     points = sorted(
-        (float(pos) / 100.0, QColor(str(color))) for pos, color in stops
+        (float(pos) / 100.0, _valid_color(str(color), "#FFFFFF")) for pos, color in stops
     )
     if not points:
         return QColor("#FFFFFF")
@@ -4586,7 +4586,7 @@ def _paint_line_fx_particles(
             color_key = str(burst["color"])
             fill_brush = brushes.get(color_key)
             if fill_brush is None:
-                fill_brush = QBrush(QColor(color_key))
+                fill_brush = QBrush(_valid_color(color_key, "#FFFFFF"))
                 brushes[color_key] = fill_brush
         if decor_kind == "glow":
             from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
@@ -4754,7 +4754,7 @@ def _paint_line_fx_particles(
                     color_key = str(char_colors[min(index, len(char_colors) - 1)])
                     brush = brushes.get(color_key)
                     if brush is None:
-                        brush = QBrush(QColor(color_key))
+                        brush = QBrush(_valid_color(color_key, "#FFFFFF"))
                         brushes[color_key] = brush
                     painter.setPen(Qt.PenStyle.NoPen)
                     painter.setBrush(brush)

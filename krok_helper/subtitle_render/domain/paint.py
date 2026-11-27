@@ -33,7 +33,7 @@ class GradientPath:
 
 @dataclass
 class PaintFill:
-    """One fill definition shared by text, stroke, second stroke and shadow."""
+    """One fill shared by visual layers; colors are legacy hex or explicit linear(r,g,b,a)."""
 
     mode: ColorFillMode = "solid"
     color: str = "#FFFFFF"

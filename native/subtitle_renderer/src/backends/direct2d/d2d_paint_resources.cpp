@@ -34,6 +34,10 @@ void checkHr(HRESULT value, const char *operation, const D2DDevice &device) {
 }
 
 D2D1_COLOR_F d2dColor(const RgbaColor &color) {
+    if (color.linear) {
+        const auto c = encodedColor(color);
+        return D2D1::ColorF(c[0], c[1], c[2], c[3]);
+    }
     return D2D1::ColorF(
         static_cast<float>(color.red) / 255.0f,
         static_cast<float>(color.green) / 255.0f,
@@ -141,19 +145,25 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
         return left.position < right.position;
     });
     std::vector<D2D1_GRADIENT_STOP> stops;
+    const bool linearColors = std::any_of(paint.stops.begin(), paint.stops.end(), [](const auto& stop) { return bool(stop.color.linear); });
+    const auto stopColor = [linearColors](const RgbaColor& color) -> D2D1_COLOR_F {
+        if (!linearColors) return d2dColor(color);
+        const auto c = linearColor(color);
+        return D2D1::ColorF(c[0], c[1], c[2], c[3]);
+    };
     if (paint.mode == "split_vertical") {
         stops.reserve(ordered.size() * 2);
         stops.push_back(D2D1::GradientStop(
             std::clamp(ordered.front().position, 0.0f, 1.0f),
-            d2dColor(ordered.front().color)
+            stopColor(ordered.front().color)
         ));
         for (std::size_t index = 1; index < ordered.size(); ++index) {
             const float position = std::clamp(ordered[index].position, 0.0f, 1.0f);
             stops.push_back(D2D1::GradientStop(
-                position, d2dColor(ordered[index - 1].color)
+                position, stopColor(ordered[index - 1].color)
             ));
             stops.push_back(D2D1::GradientStop(
-                position, d2dColor(ordered[index].color)
+                position, stopColor(ordered[index].color)
             ));
         }
     } else {
@@ -161,7 +171,7 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
         for (const PaintStop &stop : ordered) {
             stops.push_back(D2D1::GradientStop(
                 std::clamp(stop.position, 0.0f, 1.0f),
-                d2dColor(stop.color)
+                stopColor(stop.color)
             ));
         }
     }
@@ -169,6 +179,14 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
         stops.push_back(D2D1::GradientStop(1.0f, stops.front().color));
     }
     Microsoft::WRL::ComPtr<ID2D1GradientStopCollection> collection;
+    if (linearColors) {
+        Microsoft::WRL::ComPtr<ID2D1GradientStopCollection1> floating;
+        checkHr(context->CreateGradientStopCollection(stops.data(), static_cast<UINT32>(stops.size()),
+            D2D1_COLOR_SPACE_SCRGB, D2D1_COLOR_SPACE_SRGB, D2D1_BUFFER_PRECISION_16BPC_FLOAT,
+            D2D1_EXTEND_MODE_CLAMP, D2D1_COLOR_INTERPOLATION_MODE_STRAIGHT, floating.ReleaseAndGetAddressOf()),
+            "Create linear paint gradient stops", device);
+        checkHr(floating.As(&collection), "Query linear gradient stops", device);
+    } else {
     checkHr(
         context->CreateGradientStopCollection(
             stops.data(),
@@ -184,6 +202,7 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
         "Create paint gradient stops",
         device
     );
+    }
     const bool horizontal = paint.mode == "gradient_horizontal";
     const D2D1_POINT_2F start = horizontal
         ? D2D1::Point2F(rect.left, (rect.top + rect.bottom) * 0.5f)

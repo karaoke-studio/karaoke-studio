@@ -242,6 +242,8 @@ def _character_transforms(ir, plan, measured, character_warp_lines, composed_geo
 
 
 def build_skia_render_ir(track, style, *, measure, resolve_font, extra_tracks=None, **kwargs):
+    from .linear_paints import linear_paint_style
+    style = linear_paint_style(style)
     sources = tuple(extra_tracks or ())
     if len(sources) > 15:
         raise ValueError('Skia 规范布局最多支持 15 条附加轨道')

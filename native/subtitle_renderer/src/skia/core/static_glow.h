@@ -24,6 +24,7 @@ struct GlowState {
     std::uint32_t color = 0;
     // Glow strength multiplier (0-10). 1 leaves every blur pass untouched.
     float strength = 1.f;
+    bool extendedColor = false;
     bool operator==(const GlowState&) const = default;
 };
 
@@ -102,6 +103,7 @@ private:
     float strokeWidth_;
     SkPaint::Join join_;
     std::optional<bool> phase_;
+    bool extendedColor_ = false;
     std::vector<sk_sp<SkImageFilter>> filters_;
     std::vector<sk_sp<SkImageFilter>> byteFilters_;
     struct Cell { SkPath path; GlowGradients gradients; GlowImages images; };

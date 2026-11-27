@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import logging
+import colorsys
 from typing import Optional
+
+from ...domain.color import (MAX_LINEAR_CHANNEL, display_hex, hsv_linear, linear_color,
+                            linear_hsv, linear_rgba, rgba_float, srgb_to_linear, linear_to_srgb)
 
 from PyQt6 import sip
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QSignalBlocker, QTimer, Qt, pyqtSignal as Signal
@@ -57,6 +61,12 @@ COLOR_COMMIT_DEBOUNCE_MS = 250
 """Delay used to coalesce live hexadecimal color edits."""
 
 def _normalize_hex(value: str, fallback: str = "#000000") -> str:
+    try:
+        linear = linear_rgba(value)
+        if linear is not None:
+            return linear_color(linear)
+    except ValueError:
+        value = fallback
     color = QColor(value)
     if not color.isValid():
         color = QColor(fallback)
@@ -68,9 +78,36 @@ def _normalize_hex(value: str, fallback: str = "#000000") -> str:
     return color.name(name_format).upper()
 
 
+def display_color(value: str, exposure: float = 0) -> QColor:
+    try:
+        return QColor(display_hex(value, exposure)) if linear_rgba(value) is not None else QColor(value)
+    except ValueError:
+        return QColor()
+
+
+class ColorSelection(QColor):
+    """Qt display color plus the unquantized value committed by the editor."""
+    def __init__(self, color: QColor, value: str):
+        super().__init__(color)
+        self.color_value = value
+
+
+def editing_color(value: str) -> QColor:
+    return ColorSelection(display_color(value), value)
+
+
+def selected_color_value(color: QColor) -> str:
+    return color.color_value if isinstance(color, ColorSelection) else color.name(QColor.NameFormat.HexArgb)
+
+
 def _parse_hex_color(value: str) -> Optional[str]:
     """Parse common RGB/ARGB hex input, with or without a leading hash."""
     digits = value.strip()
+    try:
+        if linear_rgba(digits) is not None:
+            return _normalize_hex(digits)
+    except ValueError:
+        return None
     if digits.startswith("#"):
         digits = digits[1:]
     if len(digits) not in {3, 4, 6, 8} or any(
@@ -144,9 +181,10 @@ class _ColorSwatchButton(QPushButton):
         self._apply()
 
     def _apply(self) -> None:
-        color = QColor(self._color)
+        color = display_color(self._color)
         text_color = "#111827" if color.lightness() > 150 else "#FFFFFF"
-        self.setText(self._color)
+        self.setText("线性 RGB" if self._color.startswith('linear(') else self._color)
+        self.setToolTip(self._color)
         background = f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})"
         stylesheet = (
             f"""
@@ -230,7 +268,7 @@ class ColorButton(QWidget):
         )
         self._color_edit = _ColorHexEdit(self._swatch_stack)
         self._color_edit.setFixedHeight(30)
-        self._color_edit.setMaxLength(9)
+        self._color_edit.setMaxLength(160)
         self._color_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._color_edit.setPlaceholderText("RRGGBB / AARRGGBB")
         self._color_edit.textEdited.connect(self._schedule_live_color_entry)
@@ -715,7 +753,9 @@ class _RecentColorList(FluentScrollArea):
     """Scrollable RGBA color bars, with color/text drag-and-drop support."""
 
     colorPicked = Signal(QColor)
+    valuePicked = Signal(str)
     colorDropped = Signal(QColor)
+    valueDropped = Signal(str)
     selectionChanged = Signal(QColor)
 
     def __init__(self, parent: QWidget) -> None:
@@ -747,7 +787,8 @@ class _RecentColorList(FluentScrollArea):
             tile.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             tile.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             tile.setCheckable(True)
-            tile.clicked.connect(lambda checked=False, tile=tile: self._pick_color(tile.color))
+            tile.clicked.connect(lambda checked=False, tile=tile: self._pick_color(
+                ColorSelection(tile.color, tile.property('colorValue'))))
             rows.addWidget(tile, _index // 4 + 1, _index % 4)
             self.tiles.append(tile)
 
@@ -755,21 +796,23 @@ class _RecentColorList(FluentScrollArea):
         self._empty_hint.setVisible(not colors)
         for index, tile in enumerate(self.tiles):
             tile.set_color(colors[index] if index < len(colors) else QColor())
+            tile.setProperty('colorValue', selected_color_value(colors[index]) if index < len(colors) else '')
             tile.setVisible(index < len(colors))
         self.verticalScrollBar().setValue(0)
         self.set_selected_color(self._selected_color)
 
     @property
     def selected_color(self) -> QColor:
-        return QColor(self._selected_color)
+        return ColorSelection(self._selected_color, selected_color_value(self._selected_color))
 
     def set_selected_color(self, color: QColor) -> None:
         selected = QColor()
         for tile in self.tiles:
-            matches = color.isValid() and tile.color.isValid() and tile.color.rgba() == color.rgba()
+            matches = (color.isValid() and tile.color.isValid()
+                       and _normalize_hex(tile.property('colorValue')) == _normalize_hex(selected_color_value(color)))
             tile.setChecked(matches)
             if matches:
-                selected = QColor(tile.color)
+                selected = ColorSelection(tile.color, tile.property('colorValue'))
         changed = selected != self._selected_color
         self._selected_color = selected
         if changed:
@@ -777,7 +820,8 @@ class _RecentColorList(FluentScrollArea):
 
     def _pick_color(self, color: QColor) -> None:
         self.set_selected_color(color)
-        self.colorPicked.emit(QColor(color))
+        self.colorPicked.emit(color)
+        self.valuePicked.emit(selected_color_value(color))
 
     @staticmethod
     def _drop_color(mime) -> QColor:
@@ -786,7 +830,7 @@ class _RecentColorList(FluentScrollArea):
             if color.isValid():
                 return color
         parsed = _parse_hex_color(mime.text()) if mime.hasText() else None
-        return QColor(parsed) if parsed else QColor()
+        return editing_color(parsed) if parsed else QColor()
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if self._drop_color(event.mimeData()).isValid():
@@ -798,6 +842,7 @@ class _RecentColorList(FluentScrollArea):
         color = self._drop_color(event.mimeData())
         if color.isValid():
             self.colorDropped.emit(color)
+            self.valueDropped.emit(selected_color_value(color))
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -837,7 +882,7 @@ class _ProColorChannels(QWidget):
     editFinished = Signal()
     numericModeChanged = Signal(str)
 
-    # Signals retain conventional units, independent of the displayed range.
+    # Legacy modes retain conventional signal units; linear mode emits float channels.
     _SPECS = (("red", "R", 255, 0), ("green", "G", 255, 0), ("blue", "B", 255, 0),
               ("pro_alpha", "A", 100, 1), ("hue", "H", 359.9, 1),
               ("saturation", "S", 100, 1), ("pro_value", "V", 100, 1))
@@ -852,11 +897,11 @@ class _ProColorChannels(QWidget):
         self._active_channel = None
         self._numeric_mode = "standard"
         mode_row = QHBoxLayout()
-        mode_row.addWidget(CaptionLabel("数值范围", self))
+        mode_row.addWidget(CaptionLabel("数值表示", self))
         self._numeric_mode_switch = WorkspaceSwitcher(self)
         self._numeric_mode_switch.setAccessibleName("调色器数值范围")
-        self._numeric_mode_switch.setToolTip("归一化模式下所有通道使用 0–1；色相 1 表示一整圈")
-        for mode, label in (("standard", "常规"), ("normalized", "归一化")):
+        self._numeric_mode_switch.setToolTip("常规和归一化使用 sRGB；UE 线性使用线性 RGB，RGB 与 V 可超过 1，H 使用角度")
+        for mode, label in (("standard", "常规"), ("normalized", "归一化"), ("linear", "UE 线性")):
             self._numeric_mode_switch.addItem(mode, label).setAccessibleName(label)
         self._numeric_mode_switch.currentItemChanged.connect(self.numericModeChanged.emit)
         mode_row.addWidget(self._numeric_mode_switch)
@@ -879,7 +924,7 @@ class _ProColorChannels(QWidget):
             spin.setFixedWidth(88)
             spin.setAccessibleName(slider.accessibleName())
             scale = 10 if decimals else 1
-            slider.valueChanged.connect(lambda value, c=channel, scale=scale: self.channelChanged.emit(c, value / scale))
+            slider.valueChanged.connect(lambda value, c=channel, scale=scale: self._slider_channel(c, value / scale))
             spin.valueChanged.connect(lambda value, c=channel: self._edit_channel(c, value))
             spin.editingFinished.connect(self.editFinished.emit)
             row.addWidget(slider, 1)
@@ -894,17 +939,26 @@ class _ProColorChannels(QWidget):
         with QSignalBlocker(self._numeric_mode_switch):
             self._numeric_mode_switch.setCurrentItem(mode)
         normalized = mode == "normalized"
+        linear = mode == "linear"
         for channel, _label, maximum, decimals in self._SPECS:
             spin = self.spins[channel]
             with QSignalBlocker(spin):
-                spin.setDecimals(3 if normalized else decimals)
-                spin.setRange(0, 1 if normalized else maximum)
-                spin.setSingleStep(0.001 if normalized else 1)
-                spin.setSuffix("" if normalized else "°" if channel == "hue" else " %" if maximum == 100 else "")
+                spin.setDecimals(3 if linear or normalized else decimals)
+                upper = (359.999 if channel == 'hue' else 1 if channel in {'saturation', 'pro_alpha'}
+                         else MAX_LINEAR_CHANNEL) if linear else 1 if normalized else maximum
+                spin.setRange(0, upper)
+                spin.setSingleStep(.001 if normalized or linear else 1)
+                spin.setSuffix('°' if linear and channel == 'hue' else '' if normalized or linear
+                               else "°" if channel == "hue" else " %" if maximum == 100 else "")
 
     @staticmethod
     def _normalization_scale(channel: str) -> float:
         return 255 if channel in ("red", "green", "blue") else 360 if channel == "hue" else 100
+
+    def _slider_channel(self, channel, value):
+        if self._numeric_mode == 'linear' and channel != 'hue':
+            value = value / (255 if channel in ('red', 'green', 'blue') else 100) * self.sliders[channel].linear_max
+        self.channelChanged.emit(channel, value)
 
     def _edit_channel(self, channel: str, value: float) -> None:
         self._active_channel = channel
@@ -915,23 +969,33 @@ class _ProColorChannels(QWidget):
         finally:
             self._active_channel = None
 
-    def sync(self, color: QColor, hue: float, saturation: float, value: float) -> None:
+    def sync(self, color: QColor, hue: float, saturation: float, value: float, linear=None) -> None:
         values = {"red": color.red(), "green": color.green(), "blue": color.blue(),
                   "hue": hue, "saturation": saturation * 100, "pro_value": value * 100,
                   "pro_alpha": color.alphaF() * 100}
         if self._numeric_mode == "normalized":
             # Read the editing color's precision, not the quantized hex bytes.
             values.update(red=color.redF() * 255, green=color.greenF() * 255, blue=color.blueF() * 255)
+        if self._numeric_mode == 'linear':
+            linear = linear or (*[srgb_to_linear(c) for c in color.getRgbF()[:3]], color.alphaF())
+            h, s, v = linear_hsv(linear, hue, saturation)
+            values = dict(zip(('red', 'green', 'blue', 'pro_alpha'), linear))
+            values.update(hue=h, saturation=s, pro_value=v)
         full_value = QColor.fromHsvF(hue / 360, saturation, 1)
         for channel, actual in values.items():
             spin, slider = self.spins[channel], self.sliders[channel]
+            slider.linear_channels = linear if self._numeric_mode == 'linear' else None
+            if self._numeric_mode == 'linear' and channel in ('red', 'green', 'blue', 'pro_value'):
+                slider.linear_max = max(slider.linear_max, actual, 1.)
             displayed = actual / self._normalization_scale(channel) if self._numeric_mode == "normalized" else actual
             with QSignalBlocker(spin):
                 rounded = round(displayed, spin.decimals())
                 if spin.value() != rounded and not (self._active_channel == channel and spin.hasFocus()):
                     spin.setValue(rounded)
+            slider_actual = (actual / slider.linear_max * 255 if channel in ('red', 'green', 'blue')
+                             else actual if channel == 'hue' else actual / slider.linear_max * 100) if self._numeric_mode == 'linear' else actual
             slider.set_color(full_value if channel == "pro_value" else color,
-                             round(actual * (1 if channel in ("red", "green", "blue") else 10)))
+                             round(slider_actual * (1 if channel in ("red", "green", "blue") else 10)))
             if self._numeric_mode == "normalized":
                 slider.setToolTip(f"{slider.accessibleName()}：{displayed:.3f}")
 
@@ -945,6 +1009,7 @@ class _ColorDialog(FramelessDialog):
     """
 
     currentColorChanged = Signal(QColor)
+    colorValueChanged = Signal(str)
     def __init__(self, current: QColor, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setTitleBar(FluentTitleBar(self))
@@ -960,6 +1025,9 @@ class _ColorDialog(FramelessDialog):
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
         self.setMinimumWidth(700)
         self._current = QColor("#FFFFFF")
+        self._linear = None
+        self._linear_hue = self._linear_saturation = 0.
+        self._preview_exposure = 0.
         self._selected = QColor()
         self._hue, self._saturation, self._value = 0.0, 0.0, 1.0
         self._picker_settings = SubtitleRenderSettingsStore()
@@ -1010,7 +1078,7 @@ class _ColorDialog(FramelessDialog):
         self._pro_channels.channelChanged.connect(self._set_pro_channel)
         self._pro_channels.numericModeChanged.connect(self._switch_numeric_mode)
         self._pro_channels.editFinished.connect(lambda: self._pro_channels.sync(
-            self._current, self._hue, self._saturation, self._value))
+            self._current, self._hue, self._saturation, self._value, self._linear))
         self._pro_channels.hide()
         self._detail_mode_switch.currentItemChanged.connect(self._switch_detail_mode)
 
@@ -1043,11 +1111,11 @@ class _ColorDialog(FramelessDialog):
             column.addWidget(tile)
             compare.addLayout(column, 1)
         right.addLayout(compare)
-        self._original_swatch.clicked.connect(lambda: self.setCurrentColor(self._original_swatch.color))
+        self._original_swatch.clicked.connect(lambda: self.set_color_value(self._original_value))
         right.addWidget(CaptionLabel("最近使用", self))
         self._recent_list = _RecentColorList(self)
-        self._recent_list.colorPicked.connect(self.setCurrentColor)
-        self._recent_list.colorDropped.connect(self._record_dropped_color)
+        self._recent_list.valuePicked.connect(self.set_color_value)
+        self._recent_list.valueDropped.connect(lambda value: self._record_dropped_color(editing_color(value)))
         right.addWidget(self._recent_list, 1)
         self._delete_recent_button = FluentPushButton("删除当前色", self)
         self._delete_recent_button.setAutoDefault(False)
@@ -1065,6 +1133,21 @@ class _ColorDialog(FramelessDialog):
         # Channel controls span the complete dialog below both the color
         # surface and history. Neither column borrows space from the other.
         root.addWidget(self._pro_channels)
+        exposure_row = QHBoxLayout()
+        self._exposure_label = CaptionLabel('预览曝光（EV，仅影响色块）', self)
+        self._exposure_spin = _ChannelSpinBox(self)
+        self._exposure_spin.setSymbolVisible(False)
+        self._exposure_spin.setRange(-16, 16)
+        self._exposure_spin.setDecimals(2)
+        self._exposure_spin.setSingleStep(.25)
+        self._exposure_spin.setFixedWidth(100)
+        self._exposure_spin.valueChanged.connect(self._set_preview_exposure)
+        exposure_row.addWidget(self._exposure_label)
+        exposure_row.addWidget(self._exposure_spin)
+        exposure_row.addStretch()
+        self._linear_hint = CaptionLabel('线性 RGB / V 可超过 1；色号为 SDR sRGB，超范围裁切', self)
+        exposure_row.addWidget(self._linear_hint)
+        root.addLayout(exposure_row)
         hex_row.addWidget(self._delete_recent_button)
         self._delete_recent_button.setFixedWidth(200)
         root.addLayout(hex_row)
@@ -1102,19 +1185,61 @@ class _ColorDialog(FramelessDialog):
     def currentColor(self) -> QColor:  # noqa: N802
         return QColor(self._current)
 
+    def current_color_value(self) -> str:
+        return linear_color(self._linear) if self._linear is not None else _normalize_hex(self._current.name(QColor.NameFormat.HexArgb))
+
+    def set_color_value(self, value: str) -> None:
+        linear = linear_rgba(value)
+        if linear is None:
+            self.setCurrentColor(QColor(value))
+        else:
+            self._set_linear_color(linear)
+
+    def _set_linear_color(self, channels) -> None:
+        value = linear_color(channels)
+        self._linear = linear_rgba(value)
+        self._linear_hue, self._linear_saturation, _ = linear_hsv(
+            self._linear, self._linear_hue, self._linear_saturation)
+        color = display_color(value)
+        h, s, v, _ = color.getHsvF()
+        if h >= 0:
+            self._hue = h * 360
+        if v > 0:
+            self._saturation = s
+        self._value = v
+        self._apply_color(color, preserve_linear=True)
+
+    def _set_preview_exposure(self, value: float) -> None:
+        self._preview_exposure = value
+        self._sync_controls()
+
     def selectedColor(self) -> QColor:  # noqa: N802
-        return QColor(self._selected)
+        return (ColorSelection(self._selected, self._selected_value) if self._selected_value is not None
+                and self._selected_value.startswith('linear(') else QColor(self._selected))
 
     def set_initial_color(self, color: QColor) -> None:
+        original = selected_color_value(color) if color.isValid() else '#FFFFFF'
         self._restore_picker_mode()
         self._restore_detail_mode()
         self._restore_numeric_mode()
         color = QColor(color) if color.isValid() else QColor("#FFFFFF")
         self._selected = QColor()
+        self._selected_value = None
+        self._linear = None
+        self._linear_hue = self._linear_saturation = 0.
+        self._preview_exposure = 0.
+        with QSignalBlocker(self._exposure_spin):
+            self._exposure_spin.setValue(0)
         self._deleted_recent_rgba: set[int] = set()
+        self._deleted_recent_values: set[str] = set()
+        for slider in self._pro_channels.sliders.values():
+            slider.linear_max = 1.
         self._hue, self._saturation = 0.0, 0.0
         self._original_swatch.set_color(color)
         self.setCurrentColor(color)
+        self._original_value = original
+        if original.startswith('linear('):
+            self.set_color_value(original)
 
     def setCurrentColor(self, color: QColor) -> None:  # noqa: N802
         if not color.isValid():
@@ -1127,22 +1252,39 @@ class _ColorDialog(FramelessDialog):
         self._value = value
         self._apply_color(color)
 
-    def _apply_color(self, color: QColor) -> None:
+    def _apply_color(self, color: QColor, *, preserve_linear=False) -> None:
+        if not preserve_linear:
+            self._linear = None
         changed = color.getRgbF() != self._current.getRgbF()
         self._current = QColor(color)
         self._sync_controls()
         if changed:
             self.currentColorChanged.emit(QColor(color))
+        value = self.current_color_value()
+        if value != getattr(self, '_last_emitted_value', None):
+            self._last_emitted_value = value
+            self.colorValueChanged.emit(value)
 
     def _sync_controls(self) -> None:
-        self._color_wheel.set_color(self._hue, self._saturation)
-        self._color_plane.set_color(self._hue, self._saturation)
+        linear_mode = self._pro_channels._numeric_mode == 'linear'
+        hue, saturation = self._hue, self._saturation
+        if linear_mode:
+            channels = self._linear or rgba_float(self.current_color_value())
+            hue, saturation, _ = linear_hsv(channels, self._linear_hue, self._linear_saturation)
+        self._color_wheel.setProperty('linearEncoding', linear_mode)
+        self._color_wheel.set_color(hue, saturation)
+        self._color_plane.setProperty('linearEncoding', linear_mode)
+        self._color_plane.set_color(hue, saturation)
         full_value = QColor.fromHsvF(self._hue / 360, self._saturation, 1)
         self._value_slider.set_color(full_value, round(self._value * 255))
         self._alpha_slider.set_color(self._current)
-        self._current_swatch.set_color(self._current)
-        self._recent_list.set_selected_color(self._current)
-        self._pro_channels.sync(self._current, self._hue, self._saturation, self._value)
+        self._current_swatch.set_color(display_color(self.current_color_value(), self._preview_exposure)
+                                      if self._linear is not None else self._current)
+        self._recent_list.set_selected_color(editing_color(self.current_color_value()))
+        self._pro_channels.sync(self._current, self._hue, self._saturation, self._value, self._linear)
+        linear_mode = self._pro_channels._numeric_mode == 'linear'
+        for widget in (self._exposure_label, self._exposure_spin, self._linear_hint):
+            widget.setVisible(linear_mode and self._detail_mode_switch.currentRouteKey() == 'pro')
         self._hex_edit.setText(_normalize_hex(self._current.name(QColor.NameFormat.HexArgb)))
         self._hex_hint.hide()
         self._ok_button.setEnabled(True)
@@ -1170,6 +1312,9 @@ class _ColorDialog(FramelessDialog):
         # History may scroll within the upper pane on shorter screens; it must
         # not establish the minimum height of the channel area below it.
         self._recent_list.setMinimumHeight(40 if mode == "pro" else 100)
+        if hasattr(self, '_exposure_spin'):
+            for widget in (self._exposure_label, self._exposure_spin, self._linear_hint):
+                widget.setVisible(mode == 'pro' and self._pro_channels._numeric_mode == 'linear')
 
     def _switch_detail_mode(self, mode: str) -> None:
         self._show_detail_mode(mode)
@@ -1193,7 +1338,33 @@ class _ColorDialog(FramelessDialog):
         self._show_detail_mode(mode)
 
     def _set_pro_channel(self, channel: str, value: float) -> None:
+        if self._pro_channels._numeric_mode == 'linear':
+            channels = list(self._linear or (*[srgb_to_linear(c) for c in self._current.getRgbF()[:3]], self._current.alphaF()))
+            if channel in ('red', 'green', 'blue', 'pro_alpha'):
+                channels[{'red': 0, 'green': 1, 'blue': 2, 'pro_alpha': 3}[channel]] = value
+            else:
+                h, s, v = linear_hsv(channels, self._linear_hue, self._linear_saturation)
+                h, s, v = (value if channel == 'hue' else h,
+                           value if channel == 'saturation' else s, value if channel == 'pro_value' else v)
+                self._linear_hue, self._linear_saturation = h, s
+                channels = hsv_linear(h, s, v, channels[3])
+            self._set_linear_color(channels)
+            return
         normalized = self._pro_channels._numeric_mode == "normalized"
+        if self._linear is not None:
+            channels = list(self._linear)
+            if channel in ('red', 'green', 'blue'):
+                channels[{'red': 0, 'green': 1, 'blue': 2}[channel]] = srgb_to_linear(value / 255)
+            elif channel == 'pro_alpha':
+                channels[3] = value / 100
+            else:
+                h, s, v = colorsys.rgb_to_hsv(*[linear_to_srgb(c) for c in channels[:3]])
+                rgb = colorsys.hsv_to_rgb((value % 360) / 360 if channel == 'hue' else h,
+                                         value / 100 if channel == 'saturation' else s,
+                                         value / 100 if channel == 'pro_value' else v)
+                channels[:3] = [srgb_to_linear(c) for c in rgb]
+            self._set_linear_color(channels)
+            return
         if channel in ("red", "green", "blue"):
             color = self.currentColor()
             if normalized:
@@ -1218,10 +1389,19 @@ class _ColorDialog(FramelessDialog):
             self._apply_hsv()
 
     def _switch_numeric_mode(self, mode: str) -> None:
+        if mode == 'linear' and self._linear is None:
+            self._linear_hue, self._linear_saturation, _ = linear_hsv(
+                rgba_float(self.current_color_value()), self._hue, self._saturation)
         self._pro_channels.set_numeric_mode(mode)
         # Only update channel presentation: preserve unfinished hex input and
         # latent HSV state, and never emit a color change for a range switch.
-        self._pro_channels.sync(self._current, self._hue, self._saturation, self._value)
+        pending, cursor = self._hex_edit.text(), self._hex_edit.cursorPosition()
+        hint, enabled = self._hex_hint.isHidden(), self._ok_button.isEnabled()
+        self._sync_controls()
+        self._hex_edit.setText(pending)
+        self._hex_edit.setCursorPosition(cursor)
+        self._hex_hint.setHidden(hint)
+        self._ok_button.setEnabled(enabled)
         try:
             data = self._picker_settings.load()
             data["color_picker_numeric_mode"] = mode
@@ -1235,7 +1415,7 @@ class _ColorDialog(FramelessDialog):
         except Exception:
             logging.getLogger(__name__).warning("读取调色器数值范围失败", exc_info=True)
             mode = "standard"
-        if mode not in ("standard", "normalized"):
+        if mode not in ("standard", "normalized", "linear"):
             mode = "standard"
         self._pro_channels.set_numeric_mode(mode)
 
@@ -1254,18 +1434,35 @@ class _ColorDialog(FramelessDialog):
         )
 
     def _set_hue_saturation(self, hue: float, saturation: float) -> None:
+        if self._pro_channels._numeric_mode == 'linear':
+            channels = self._linear or rgba_float(self.current_color_value())
+            self._linear_hue, self._linear_saturation = hue, saturation
+            self._set_linear_color(hsv_linear(hue, saturation, max(channels[:3]), channels[3]))
+            return
         self._hue, self._saturation = hue, saturation
         self._apply_hsv()
 
     def _apply_hsv(self) -> None:
+        if self._linear is not None:
+            value = max(linear_to_srgb(c) for c in self._linear[:3])
+            rgb = colorsys.hsv_to_rgb(self._hue / 360, self._saturation, value)
+            self._set_linear_color((*[srgb_to_linear(c) for c in rgb], self._linear[3]))
+            return
         self._apply_color(QColor.fromHsvF(self._hue / 360, self._saturation, self._value,
                                          self._current.alphaF()))
 
     def _set_value(self, value: int) -> None:
+        if self._linear is not None:
+            rgb = colorsys.hsv_to_rgb(self._hue / 360, self._saturation, value / 255)
+            self._set_linear_color((*[srgb_to_linear(c) for c in rgb], self._linear[3]))
+            return
         self._value = value / 255
         self._apply_hsv()
 
     def _set_current_alpha(self, alpha: int) -> None:
+        if self._linear is not None:
+            self._set_linear_color((*self._linear[:3], alpha / 255))
+            return
         color = self.currentColor()
         color.setAlpha(alpha)
         self._apply_color(color)
@@ -1277,7 +1474,7 @@ class _ColorDialog(FramelessDialog):
             self._ok_button.setEnabled(False)
             return
         cursor = self._hex_edit.cursorPosition()
-        self.setCurrentColor(QColor(parsed))
+        self.set_color_value(parsed)
         # Keep the user's partially typed spelling and cursor while updating
         # the other controls; normalize once focus leaves the editor.
         self._hex_edit.setText(text)
@@ -1289,30 +1486,32 @@ class _ColorDialog(FramelessDialog):
 
     def set_recent_colors(self, colors: list[QColor]) -> None:
         self._recent_list.set_colors(colors)
-        self._recent_list.set_selected_color(self._current)
+        self._recent_list.set_selected_color(editing_color(self.current_color_value()))
 
     def _delete_current_color(self) -> None:
-        selected = self._recent_list.selected_color
+        selected = self._recent_list._selected_color
         if not selected.isValid():
             return
         self._deleted_recent_rgba.add(selected.rgba())
+        self._deleted_recent_values.add(_normalize_hex(selected_color_value(selected)))
         remove_recent_color(selected)
         self.set_recent_colors(recent_colors())
 
     def remember_selected_color(self, color: QColor) -> None:
         # Accepting the current preview must not immediately undo a deletion.
-        if color.rgba() not in self._deleted_recent_rgba:
+        if _normalize_hex(selected_color_value(color)) not in self._deleted_recent_values:
             record_recent_color(color)
 
     def _record_dropped_color(self, color: QColor) -> None:
         self._deleted_recent_rgba.discard(color.rgba())
+        self._deleted_recent_values.discard(_normalize_hex(selected_color_value(color)))
         record_recent_color(color)
         self.set_recent_colors(recent_colors())
 
     def _pick_screen_color(self) -> None:
         if self._screen_picker is not None:
             return
-        original = self.currentColor()
+        original = self.current_color_value()
         picked = False
         picker = ScreenColorPicker()
         picker.setParent(self, picker.windowFlags())
@@ -1327,7 +1526,7 @@ class _ColorDialog(FramelessDialog):
         def finish() -> None:
             self._screen_picker = None
             if not picked:
-                self.setCurrentColor(original)
+                self.set_color_value(original)
             self._ensure_active()
 
         picker.colorHovered.connect(self.setCurrentColor)
@@ -1340,6 +1539,7 @@ class _ColorDialog(FramelessDialog):
             self._hex_edit.setFocus()
             return
         self._selected = self.currentColor()
+        self._selected_value = self.current_color_value()
         super().accept()
 
     def done(self, result: int) -> None:
@@ -1379,7 +1579,7 @@ _recent_color_store = RecentColorStore()
 def recent_colors() -> list[QColor]:
     """Shared user history, newest first, including alpha and across restarts."""
     try:
-        return [QColor(color) for color in _recent_color_store.load()]
+        return [editing_color(color) for color in _recent_color_store.load()]
     except Exception:
         logging.getLogger(__name__).warning("读取最近颜色失败", exc_info=True)
         return []
@@ -1394,7 +1594,7 @@ def record_recent_color(color: QColor) -> None:
     if not color.isValid():
         return
     try:
-        _recent_color_store.remember(color.name(QColor.NameFormat.HexArgb))
+        _recent_color_store.remember(selected_color_value(color))
     except Exception:
         logging.getLogger(__name__).warning("保存最近颜色失败", exc_info=True)
 
@@ -1403,7 +1603,7 @@ def remove_recent_color(color: QColor) -> None:
     """Remove only the exact RGBA entry, leaving same-RGB variants alone."""
     if color.isValid():
         try:
-            _recent_color_store.remove(color.name(QColor.NameFormat.HexArgb))
+            _recent_color_store.remove(selected_color_value(color))
         except Exception:
             logging.getLogger(__name__).warning("删除最近颜色失败", exc_info=True)
 

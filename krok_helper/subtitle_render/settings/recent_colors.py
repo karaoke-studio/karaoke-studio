@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from .store import SubtitleRenderSettingsStore
+from ..domain.color import linear_color, linear_rgba
 
 
 RECENT_COLOR_LIMIT = 20
@@ -15,6 +16,11 @@ def _normalize_color(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     value = value.strip().upper()
+    if value.startswith('LINEAR('):
+        try:
+            return linear_color(linear_rgba(value.lower()))
+        except ValueError:
+            return None
     if not re.fullmatch(r"#[0-9A-F]{6}(?:[0-9A-F]{2})?", value):
         return None
     return "#FF" + value[1:] if len(value) == 7 else value

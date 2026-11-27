@@ -1,5 +1,6 @@
 """Materialize lower-reading provenance and appearance at the IR boundary."""
 from krok_helper.subtitle_render.domain.gradient_path import rgba
+from krok_helper.subtitle_render.domain.color import linear_rgba
 from krok_helper.subtitle_render.domain.models import normalize_glow_strength
 from krok_helper.subtitle_render.engine.ruby.style_semantics import ruby_stroke_width, ruby_stroke2_width
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
@@ -37,7 +38,8 @@ def _split_stops(fill):
 
 def _gradient_payload(fill):
     stops = _split_stops(fill) if fill.mode == 'split_vertical' else gradient_stops(fill)
-    return {'mode': fill.mode, 'stops': [[position, list(rgba(color))] for position, color in stops]}
+    return {'mode': fill.mode, 'stops': [[position, color if linear_rgba(color) is not None else list(rgba(color))]
+                                        for position, color in stops]}
 
 
 def _image_payload(fill):

@@ -757,6 +757,10 @@ style = Style(font_family='DejaVu Sans' if sys.platform == 'linux' else 'Arial',
 track = TimingTrack(lines=[TimingLine(chars=[TimingChar('A', 400), TimingChar('B', 700)],
     end_ms=1000, display_start_override_ms=0, display_end_override_ms=2000)])
 effect_styles = {
+    'linear-color': dict(karaoke_colors=KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color='linear(4,0.05,0.05,1)'), shadow=PaintFill(color='linear(4,0.05,0.05,1)')),
+        after=KaraokeColorState(text=PaintFill(color='linear(0.05,4,0.05,1)'), shadow=PaintFill(color='linear(0.05,4,0.05,1)'))),
+        decoration_kind='glow', decoration_kind_before='glow', glow_before_radius_px=8, glow_after_radius_px=8),
     'particle-scanline': dict(entry_anim='petal', entry_lead_ms=600, karaoke_anim='utopia_scanline',
                               sing_fx='flame', scanline_effect='star', ruby_decoration_kind='none'),
     'faded-scanline-particles': dict(entry_anim='fade', exit_anim='fade', entry_lead_ms=600, exit_fade_ms=600,
@@ -964,7 +968,7 @@ if '--compare-export' in sys.argv:
         process.configure(track, style, width=640, height=360, fps=60, duration_ms=2000, extra_tracks=extra_tracks)
         preview_reference = process
         if vertical_effect or effect in {'band-motion', 'particle-image-band', 'petal-sparkle', 'petal-ripple',
-                                        'faded-scanline-particles', 'drip-glow'}:
+                                        'faded-scanline-particles', 'drip-glow', 'linear-color'}:
             # Compare device-pixel strokes and feathering at the preview's actual
             # rendering scale and keep the export reference at 1x.
             preview_reference = stack.enter_context(SkiaRendererProcess(binary, selection=selection))
@@ -1075,6 +1079,11 @@ def run_floating_preview(qml_dir, *, require_hardware=False, compare_path=None, 
                             text=True, encoding='utf-8', errors='replace', timeout=90)
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout
+
+
+def test_linear_color_floating_preview_matches_offscreen_and_export_pipe(qml_dir, tmp_path):
+    assert 'Quick, offscreen GPU and export pipe compared' in run_floating_preview(
+        qml_dir, compare_path=tmp_path, effects='linear-color')
 
 
 def test_floating_preview_selects_opted_in_skia_quick_path(qml_dir):

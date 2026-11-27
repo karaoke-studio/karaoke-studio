@@ -674,6 +674,8 @@ from krok_helper.subtitle_render.frontend.properties.color_controls import (
     _normalize_hex,
     _parse_hex_color,
     _select_color,
+    editing_color,
+    selected_color_value,
     prewarm_color_dialog,
 )
 from krok_helper.subtitle_render.frontend.properties.preset_manager import (
@@ -4799,14 +4801,14 @@ class PropertyPanel(QWidget):
             self._begin_screen_color_pick(
                 preview_button,
                 lambda color: self._set_fx_color(
-                    slot, color.name(QColor.NameFormat.HexArgb)
+                    slot, selected_color_value(color)
                 ),
             )
             return
-        current = QColor(self._fx_color_value(slot))
+        current = editing_color(self._fx_color_value(slot))
         color = _select_color(current, self, "选择颜色")
         if color.isValid():
-            self._set_fx_color(slot, color.name(QColor.NameFormat.HexArgb))
+            self._set_fx_color(slot, selected_color_value(color))
 
     def _wire_color_edit_session(self, button: ColorButton) -> None:
         button.editStarted.connect(self._begin_color_edit_session)
@@ -4839,7 +4841,7 @@ class PropertyPanel(QWidget):
         self._screen_color_picker = picker
 
         def preview_color(color: QColor) -> None:
-            preview_button.set_color(color.name(QColor.NameFormat.HexArgb))
+            preview_button.set_color(selected_color_value(color))
 
         def accept_color(color: QColor) -> None:
             nonlocal accepted
@@ -4871,15 +4873,15 @@ class PropertyPanel(QWidget):
             self._begin_screen_color_pick(
                 preview_button,
                 lambda color: self._set_color(
-                    field_name, color.name(QColor.NameFormat.HexArgb)
+                    field_name, selected_color_value(color)
                 )
             )
             return
         # 颜色槽值缺失时回白色作对话框初始值（防御旧工程/未初始化字段）。
-        current = QColor(self._scheme_value(field_name) or "#FFFFFF")
+        current = editing_color(self._scheme_value(field_name) or "#FFFFFF")
         color = _select_color(current, self, "选择颜色")
         if color.isValid():
-            self._set_color(field_name, color.name(QColor.NameFormat.HexArgb))
+            self._set_color(field_name, selected_color_value(color))
 
     def _set_color(self, field_name: str, color: str) -> None:
         normalized = _normalize_hex(color, str(self._scheme_value(field_name)))
@@ -4913,11 +4915,11 @@ class PropertyPanel(QWidget):
             button = getattr(self, "_global_color_buttons", {}).get(field_name)
             if button is not None:
                 raw = button.color()
-        current = QColor(raw or "#FFFFFF")
+        current = editing_color(raw or "#FFFFFF")
         color = _select_color(current, self, "选择颜色")
         if color.isValid():
             self._set_global_color(
-                field_name, color.name(QColor.NameFormat.HexArgb)
+                field_name, selected_color_value(color)
             )
 
     def _band_effective_color(self, field_name: str) -> str:
@@ -4968,7 +4970,7 @@ class PropertyPanel(QWidget):
             lambda field=field_name, preview=button: self._begin_screen_color_pick(
                 preview,
                 lambda color, field=field: self._set_global_color(
-                    field, color.name(QColor.NameFormat.HexArgb)
+                    field, selected_color_value(color)
                 ),
             )
         )
@@ -4989,17 +4991,17 @@ class PropertyPanel(QWidget):
                 lambda color: self._update_current_fill(
                     **{
                         field_name: _normalize_hex(
-                            color.name(QColor.NameFormat.HexArgb)
+                            selected_color_value(color)
                         )
                     }
                 )
             )
             return
         fill = self._current_paint_fill()
-        current = QColor(getattr(fill, field_name))
+        current = editing_color(getattr(fill, field_name))
         color = _select_color(current, self, "选择颜色")
         if color.isValid():
-            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            normalized = _normalize_hex(selected_color_value(color))
             self._update_current_fill(**{field_name: normalized})
 
     def _choose_paint_image(self) -> None:
@@ -5667,14 +5669,14 @@ class PropertyPanel(QWidget):
             self._begin_screen_color_pick(
                 self._gradient_stop_color_btn,
                 lambda color: self._gradient_editor.set_selected_color(
-                    _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+                    _normalize_hex(selected_color_value(color))
                 )
             )
             return
-        current = QColor(self._gradient_editor.selected_stop[1])
+        current = editing_color(self._gradient_editor.selected_stop[1])
         color = _select_color(current, self, "选择颜色")
         if color.isValid():
-            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            normalized = _normalize_hex(selected_color_value(color))
             self._gradient_editor.set_selected_color(normalized)
 
     def _set_gradient_stop_position(self, value: float) -> None:
@@ -5715,14 +5717,14 @@ class PropertyPanel(QWidget):
             self._begin_screen_color_pick(
                 self._split_stop_color_btn,
                 lambda color: self._split_editor.set_selected_color(
-                    _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+                    _normalize_hex(selected_color_value(color))
                 )
             )
             return
-        current = QColor(self._split_editor.selected_stop[1])
+        current = editing_color(self._split_editor.selected_stop[1])
         color = _select_color(current, self, "选择分段颜色")
         if color.isValid():
-            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            normalized = _normalize_hex(selected_color_value(color))
             self._split_editor.set_selected_color(normalized)
 
     def _set_split_stop_position(self, value: float) -> None:

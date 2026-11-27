@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QConicalGradient, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
+from PyQt6.QtGui import QColor, QColorSpace, QConicalGradient, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
+from ...domain.color import hsv_linear, linear_hsv, linear_to_srgb
 from PyQt6.QtWidgets import QAbstractButton, QWidget
 
 from krok_helper.subtitle_render.frontend.widgets.theme import palette
@@ -108,7 +109,13 @@ class HueSaturationPlane(QWidget):
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
+        linear = bool(self.property('linearEncoding'))
+        if linear:
+            dpr = self.devicePixelRatioF()
+            image = QImage(math.ceil(self.width() * dpr), math.ceil(self.height() * dpr), QImage.Format.Format_ARGB32_Premultiplied)
+            image.setDevicePixelRatio(dpr)
+            image.fill(0)
+        painter = QPainter(image if linear else self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.surface_rect()
         path = QPainterPath()
@@ -122,6 +129,13 @@ class HueSaturationPlane(QWidget):
         saturation.setColorAt(0, QColor(255, 255, 255, 0))
         saturation.setColorAt(1, QColor("#FFFFFF"))
         painter.fillRect(rect, saturation)
+        if linear:
+            painter.end()
+            image.setColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgbLinear))
+            image.convertToColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgb))
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.drawImage(QPointF(0, 0), image)
         painter.setClipping(False)
         painter.setPen(QPen(QColor(palette().card_border), 1))
         painter.drawPath(path)
@@ -235,7 +249,7 @@ class HueSaturationWheel(QWidget):
         """Cache the static disk at device resolution; dragging only moves a handle."""
         side = self.surface_rect().width()
         dpr = self.devicePixelRatioF()
-        key = (side, dpr)
+        key = (side, dpr, self.property('linearEncoding'))
         if self._surface_key == key:
             return self._surface
         pixels = max(int(math.ceil(side * dpr)), 1)
@@ -257,6 +271,9 @@ class HueSaturationWheel(QWidget):
         saturation.setColorAt(1, QColor(255, 255, 255, 0))
         painter.fillRect(rect, saturation)
         painter.end()
+        if self.property('linearEncoding'):
+            image.setColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgbLinear))
+            image.convertToColorSpace(QColorSpace(QColorSpace.NamedColorSpace.SRgb))
         self._surface_key, self._surface = key, image
         return image
 
@@ -282,6 +299,8 @@ class ColorChannelSlider(QWidget):
         self.channel = channel
         self._maximum = 3599 if channel == "hue" else 1000 if channel in {"saturation", "pro_value", "pro_alpha"} else 255
         self._color = QColor("#FFFFFF")
+        self.linear_channels = None
+        self.linear_max = 1.
         self._value = 255
         self.setFixedHeight(30)
         self.setMinimumWidth(150)
@@ -372,10 +391,8 @@ class ColorChannelSlider(QWidget):
             paint_checkerboard(painter, rect, 6)
             start.setAlpha(0)
         elif self.channel in {"red", "green", "blue"}:
-            setter = {"red": "setRed", "green": "setGreen", "blue": "setBlue"}[self.channel]
-            start.setAlpha(255)
-            getattr(start, setter)(0)
-            getattr(end, setter)(255)
+            start = QColor("#000000")
+            end = QColor({"red": "#FF0000", "green": "#00FF00", "blue": "#0000FF"}[self.channel])
         elif self.channel == "saturation":
             hue = max(0, self._color.hsvHueF())
             start = QColor.fromHsvF(hue, 0, self._color.valueF())
@@ -383,9 +400,23 @@ class ColorChannelSlider(QWidget):
         else:
             start = QColor("#000000")
         gradient = QLinearGradient(rect.topLeft(), rect.topRight())
-        gradient.setColorAt(0, start)
-        gradient.setColorAt(1, end)
-        if self.channel == "hue":
+        if self.linear_channels is not None and self.channel not in {"red", "green", "blue"}:
+            channels = self.linear_channels
+            h, s, v = linear_hsv(channels)
+            for index in range(33):
+                t = index / 32
+                c = list(channels)
+                if self.channel in ('alpha', 'pro_alpha'):
+                    c[3] = t
+                else:
+                    c = hsv_linear(t * 360 if self.channel == 'hue' else h,
+                                   t if self.channel == 'saturation' else s,
+                                   t * self.linear_max if self.channel == 'pro_value' else v, 1.)
+                gradient.setColorAt(t, QColor.fromRgbF(*[min(1., linear_to_srgb(x)) for x in c[:3]], c[3]))
+        else:
+            gradient.setColorAt(0, start)
+            gradient.setColorAt(1, end)
+        if self.channel == "hue" and self.linear_channels is None:
             for index in range(7):
                 gradient.setColorAt(index / 6, QColor.fromHsvF((index % 6) / 6, 1, 1))
         painter.fillRect(rect, gradient)

@@ -24,6 +24,12 @@ bool usesSoftwareCanvas(const SkCanvas& canvas) {
 
 SkIRect alphaBounds(const SkPixmap& mask) {
     auto ink = SkIRect::MakeEmpty();
+    if (mask.colorType() != kN32_SkColorType) {
+        for (int y = 0; y < mask.height(); ++y)
+            for (int x = 0; x < mask.width(); ++x)
+                if (mask.getAlphaf(x, y) > 0) ink.join(SkIRect::MakeXYWH(x, y, 1, 1));
+        return ink;
+    }
     // Both N32 channel orders store alpha in the most significant byte.
     const auto hasAlpha = [](std::uint32_t pixel) { return SkColorGetA(pixel) != 0; };
     for (int row = 0; row < mask.height(); ++row) {
@@ -69,13 +75,31 @@ sk_sp<SkColorFilter> glowStrengthFilter(float strength) {
 
 PreparedGlow::PreparedGlow(const StaticGlow& spec, const GlowState& state, std::optional<bool> phase)
     : before_(spec.before.color), after_(spec.after.color), radius_(state.radius),
-      strokeWidth_(spec.outlineWidth + state.radius), join_(spec.join), phase_(phase) {
+      strokeWidth_(spec.outlineWidth + state.radius), join_(spec.join), phase_(phase),
+      extendedColor_(spec.before.extendedColor || spec.after.extendedColor) {
     const int passes = std::clamp(state.concentration, 0, 2) + 1;
     const auto strength = glowStrengthFilter(state.strength);
     for (int index = 0; index < passes; ++index) {
         const float sigma = float(radius_ - index * radius_ / passes);
         auto blur = SkImageFilters::Blur(sigma, sigma, SkTileMode::kDecal, nullptr);
-        filters_.push_back(strength ? SkImageFilters::ColorFilter(strength, std::move(blur)) : std::move(blur));
+        if (strength) blur = SkImageFilters::ColorFilter(strength, std::move(blur));
+        if (extendedColor_) {
+            // SDR straight-alpha exports cannot carry radiance above coverage.
+            // Preserve its visible premultiplied energy by expanding coverage
+            // at the final blur boundary; the float source itself stays intact.
+            static const auto mapped = [] {
+                const auto effect = SkRuntimeEffect::MakeForColorFilter(SkString(R"(
+                    half4 main(half4 c) {
+                        half3 rgb = clamp(c.rgb, half3(0), half3(1));
+                        return half4(rgb, max(c.a, max(rgb.r, max(rgb.g, rgb.b))));
+                    }
+                )"));
+                if (!effect.effect) throw std::runtime_error("Skia 线性光晕输出滤镜无效");
+                return effect.effect->makeColorFilter(nullptr);
+            }();
+            blur = SkImageFilters::ColorFilter(mapped, std::move(blur));
+        }
+        filters_.push_back(std::move(blur));
     }
 }
 
@@ -147,7 +171,7 @@ PreparedGlow::Source PreparedGlow::createSource(SkCanvas& canvas, const SkRect& 
         source = outputClip->makeOutset(expansion, expansion);
     }
     if (source.isEmpty() || !source.intersect(sampled)) return {};
-    auto layer = makeSource(canvas, source, kN32_SkColorType, canonical);
+    auto layer = makeSource(canvas, source, extendedColor_ ? kRGBA_F16_SkColorType : kN32_SkColorType, canonical);
     layer.outputClip = outputClip;
     return layer;
 }
@@ -223,6 +247,10 @@ void PreparedGlow::prepareBytePasses() {
 }
 
 void PreparedGlow::composite(SkCanvas& canvas, const Source& source, bool bytePasses, bool cropRaster) const {
+    if (extendedColor_ && canvas.imageInfo().colorType() != kRGBA_F16_SkColorType) {
+        compositeCanonical(canvas, source);
+        return;
+    }
     const bool crop = cropRaster && usesSoftwareCanvas(canvas) && canvas.getTotalMatrix().rectStaysRect();
     SkAutoCanvasRestore restore(&canvas, crop || source.outputClip.has_value());
     if (source.outputClip) canvas.clipRect(*source.outputClip);
@@ -285,7 +313,7 @@ void PreparedGlow::compositeCapturing(SkCanvas& canvas, const Source& source, Gl
     const auto clip = canvas.getDeviceClipBounds();
     // Evaluate each filter into a transparent device-aligned target with the
     // canvas transform, so the pass equals the filter output of a direct draw.
-    const auto info = canvas.imageInfo();
+    const auto info = extendedColor_ ? canvas.imageInfo().makeColorType(kRGBA_F16_SkColorType) : canvas.imageInfo();
     std::vector<CachedPass> passes;
     passes.reserve(filters_.size());
     for (const auto& filter : filters_) {
@@ -356,7 +384,7 @@ void PreparedGlow::compositeTransformedCell(SkCanvas& canvas, std::size_t index,
     // A drip shears an opaque, unscaled glyph. Use the same floating-point
     // blur before the shear so dark glow edges agree on both devices.
     const bool opaqueShear = opacity == 1.f && transform.getScaleX() == 1.f && transform.getSkewY() != 0.f;
-    const bool byteSource = usesSoftwareCanvas(canvas) && !opaqueShear;
+    const bool byteSource = !extendedColor_ && usesSoftwareCanvas(canvas) && !opaqueShear;
     // Blur in glyph space before applying the animation transform.
     imageDevice_ = canvas.getTotalMatrix();
     auto mask = makeSource(canvas, bounds, byteSource ? kN32_SkColorType : kRGBA_F16_SkColorType, true);

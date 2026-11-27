@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <QtCore/QFileInfo>
+#include <stdexcept>
 
 namespace krok::subtitle::native::scene {
 using protocol::ResolvedStyle;
@@ -10,6 +11,21 @@ using protocol::ResolvedLineLayout;
 using protocol::PaintFillSpec;
 
 krok::subtitle::native::RgbaColor projectColor(const QString &value, const QString &fallback) {
+    if (value.startsWith("linear(")) {
+        const auto parts = value.mid(7, value.size() - 8).split(',');
+        if (!value.endsWith(')') || parts.size() != 4) throw std::runtime_error("线性颜色格式无效");
+        std::array<float, 4> channels;
+        for (int i = 0; i < 4; ++i) {
+            bool valid = false;
+            const double number = parts[i].toDouble(&valid);
+            if (!valid || !std::isfinite(number) || number < 0 || number > (i == 3 ? 1 : 65504))
+                throw std::runtime_error("线性颜色通道必须为有限的 RGB 强度和 0–1 不透明度");
+            channels[i] = float(number);
+        }
+        const auto byte = [](float c) { return std::uint8_t(std::lround(std::clamp(c, 0.f, 1.f) * 255.f)); };
+        return {byte(linearToSrgb(channels[0])), byte(linearToSrgb(channels[1])),
+                byte(linearToSrgb(channels[2])), byte(channels[3]), channels};
+    }
     QColor color(value);
     if (!color.isValid()) {
         color = QColor(fallback);

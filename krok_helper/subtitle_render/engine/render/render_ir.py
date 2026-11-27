@@ -307,6 +307,8 @@ def build_render_ir(
     # 前一次性换算成本 IR 输出高度下的实画值(C++ 端继续直读,不感知基准
     # 语义)。
     from krok_helper.subtitle_render.engine.ruby.lower import snapshot_lower_romaji_options
+    from .linear_paints import linear_paint_style
+    style = linear_paint_style(style)
     style = snapshot_lower_romaji_options(style)
     style = style_with_output_signal_offsets(
         style_with_output_scanline(style, height), height

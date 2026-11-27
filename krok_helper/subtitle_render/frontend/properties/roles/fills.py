@@ -38,12 +38,14 @@ from qfluentwidgets import (
 
 from krok_helper.qfluent_compat import ModelessDialog
 from krok_helper.subtitle_render.domain.paint import PaintFill
+from krok_helper.subtitle_render.domain.color import linear_rgba, rgba_float, linear_color
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     fluent_button_row,
 )
 from krok_helper.subtitle_render.frontend.properties.color_controls import (
     _normalize_hex,
     _parse_hex_color,
+    display_color,
 )
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     compact_property_control,
@@ -203,7 +205,7 @@ class GradientStopsEditor(QWidget):
                     bottom = rect.top() + rect.height() * next_position / 100.0
                     painter.fillRect(
                         QRectF(rect.left(), top, rect.width(), max(bottom - top, 0.0)),
-                        QColor(color),
+                        display_color(color),
                     )
                 painter.restore()
                 painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -215,7 +217,7 @@ class GradientStopsEditor(QWidget):
                     else QLinearGradient(rect.left(), rect.top(), rect.left(), rect.bottom())
                 )
                 for position, color in self._stops:
-                    gradient.setColorAt(position / 100.0, QColor(color))
+                    gradient.setColorAt(position / 100.0, display_color(color))
                 painter.setBrush(gradient)
                 painter.drawRoundedRect(rect, 4, 4)
 
@@ -574,6 +576,9 @@ class GradientStopsEditor(QWidget):
         if self._hard_edges or left[0] == right[0]:
             return left[1]
         ratio = (pos - left[0]) / max(right[0] - left[0], 1e-9)
+        if linear_rgba(left[1]) is not None or linear_rgba(right[1]) is not None:
+            a, b = rgba_float(left[1]), rgba_float(right[1])
+            return linear_color(x + (y - x) * ratio for x, y in zip(a, b))
         a = QColor(left[1])
         b = QColor(right[1])
         return QColor(

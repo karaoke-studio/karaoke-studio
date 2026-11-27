@@ -8,6 +8,7 @@ import math
 from bisect import bisect_right
 
 from .paint import GradientPath
+from .color import linear_rgba, rgba_float, linear_color
 
 Point = tuple[float, float]
 MAX_PATH_POINTS = 1024
@@ -38,7 +39,8 @@ def anchor_route(colors: list[str], *, long: bool = False) -> GradientPath:
     """Smooth unwrapped HSV hue/saturation through every exact color anchor."""
     if not 2 <= len(colors) <= MAX_ANCHORS:
         raise ValueError("Invalid anchor count")
-    hsv = [colorsys.rgb_to_hsv(*(c / 255 for c in rgba(color)[:3])) for color in colors]
+    linear = any(linear_rgba(color) is not None for color in colors)
+    hsv = [colorsys.rgb_to_hsv(*(rgba_float(color)[:3] if linear else (c / 255 for c in rgba(color)[:3]))) for color in colors]
     chromatic = [i for i, (_, saturation, _) in enumerate(hsv) if saturation > 1e-9]
     hues = []
     for i, (hue, saturation, _) in enumerate(hsv):
@@ -80,6 +82,9 @@ def anchor_route(colors: list[str], *, long: bool = False) -> GradientPath:
 
 
 def rgba(color: str) -> tuple[int, int, int, int]:
+    from .color import display_hex, linear_rgba
+    if linear_rgba(color) is not None:
+        color = display_hex(color)
     digits = color.lstrip("#")
     if len(digits) in (3, 4):
         digits = "".join(c * 2 for c in digits)
@@ -97,6 +102,10 @@ def color_hex(color: tuple[int, ...]) -> str:
 
 
 def disk_point(color: str, fallback_hue: float = 0) -> Point:
+    if linear_rgba(color) is not None:
+        hue, saturation, _ = colorsys.rgb_to_hsv(*rgba_float(color)[:3])
+        angle = (hue if saturation > 1e-9 else fallback_hue) * math.tau
+        return math.cos(angle) * saturation, math.sin(angle) * saturation
     r, g, b, _a = rgba(color)
     hue, saturation, _value = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
     angle = (hue if saturation > 1e-9 else fallback_hue) * math.tau
@@ -112,7 +121,8 @@ def clamp_point(point: Point) -> Point:
 
 def hue_route(start: str, end: str, *, long: bool = False) -> list[Point]:
     """Interpolate hue around the disk, retaining endpoint saturation."""
-    first, last = rgba(start), rgba(end)
+    linear = linear_rgba(start) is not None or linear_rgba(end) is not None
+    first, last = (tuple(c * 255 for c in rgba_float(value)) if linear else rgba(value) for value in (start, end))
     h0, s0, _ = colorsys.rgb_to_hsv(*(c / 255 for c in first[:3]))
     h1, s1, _ = colorsys.rgb_to_hsv(*(c / 255 for c in last[:3]))
     if s0 < 1e-9:
@@ -168,14 +178,15 @@ def smooth_points(points: list[Point]) -> list[Point]:
     return simplify_points(result, .003)
 
 
-def path_samples(points: list[Point], start: str, end: str, count: int = 1025) -> list[tuple[int, int, int, int]]:
+def path_samples(points: list[Point], start: str, end: str, count: int = 1025, *, linear=False) -> list[tuple[int, int, int, int]]:
     """Sample by arc length, independent of drawing speed and event density."""
     if not 2 <= len(points) <= MAX_PATH_POINTS:
         raise ValueError("Invalid gradient path length")
     lengths = [0.0]
     for a, b in zip(points, points[1:]):
         lengths.append(lengths[-1] + math.dist(a, b))
-    first, last = rgba(start), rgba(end)
+    linear = linear or linear_rgba(start) is not None or linear_rgba(end) is not None
+    first, last = (tuple(c * 255 for c in rgba_float(value)) if linear else rgba(value) for value in (start, end))
     v0, v1 = max(first[:3]) / 255, max(last[:3]) / 255
     result = []
     for i in range(count):
@@ -188,17 +199,19 @@ def path_samples(points: list[Point], start: str, end: str, count: int = 1025) -
         y = points[index][1] + (points[index + 1][1] - points[index][1]) * u
         hue = math.atan2(y, x) / math.tau % 1
         rgb = colorsys.hsv_to_rgb(hue, min(1, math.hypot(x, y)), v0 + (v1 - v0) * t)
-        result.append(tuple(round(c * 255) for c in rgb) + (round(first[3] + (last[3] - first[3]) * t),))
+        result.append(tuple(c * 255 if linear else round(c * 255) for c in rgb)
+                      + ((first[3] + (last[3] - first[3]) * t) if linear else round(first[3] + (last[3] - first[3]) * t),))
     result[0], result[-1] = first, last
     return result
 
 
 def bake_path(route: GradientPath, start: str, end: str) -> list[tuple[float, str]]:
     """Subdivide on RGBA error, rather than only at geometric turning points."""
+    linear = any(linear_rgba(c) is not None for c in [start, end, *(c for _, c in route.anchors)])
     if route.anchors:
-        samples, positions, mandatory = anchored_samples(route)
+        samples, positions, mandatory = anchored_samples(route, linear=linear)
     else:
-        samples = path_samples(route.points, start, end)
+        samples = path_samples(route.points, start, end, linear=linear)
         positions = [i / (len(samples) - 1) for i in range(len(samples))]
         mandatory = {0, len(samples) - 1}
     keep = set(mandatory)
@@ -225,15 +238,16 @@ def bake_path(route: GradientPath, start: str, end: str) -> list[tuple[float, st
         heapq.heappush(pending, interval_error(left, selected))
         heapq.heappush(pending, interval_error(selected, right))
     width = route.end_pct - route.start_pct
-    return [(round(route.start_pct + width * positions[i], 6), color_hex(samples[i])) for i in sorted(keep)]
+    return [(round(route.start_pct + width * positions[i], 6),
+             linear_color(c / 255 for c in samples[i]) if linear else color_hex(samples[i])) for i in sorted(keep)]
 
 
-def anchored_samples(route: GradientPath) -> tuple[list, list[float], set[int]]:
+def anchored_samples(route: GradientPath, *, linear=False) -> tuple[list, list[float], set[int]]:
     """Sample each anchor interval, with exact colors pinned at its boundaries."""
     lengths = []
     for (a, first), (b, last) in zip(route.anchors, route.anchors[1:]):
         disk_length = sum(math.dist(p, q) for p, q in zip(route.points[a:b], route.points[a + 1:b + 1]))
-        start, end = rgba(first), rgba(last)
+        start, end = (tuple(c * 255 for c in rgba_float(value)) if linear else rgba(value) for value in (first, last))
         # A gray/black or alpha-only segment may have zero disk length but
         # still needs visible room in the ramp for its value/opacity change.
         length = math.hypot(disk_length, (max(end[:3]) - max(start[:3])) / 255,
@@ -244,14 +258,14 @@ def anchored_samples(route: GradientPath) -> tuple[list, list[float], set[int]]:
     offset = 0.0
     for segment, ((a, first), (b, last)) in enumerate(zip(route.anchors, route.anchors[1:])):
         count = max(3, math.ceil(1024 * lengths[segment] / total) + 1)
-        colors = path_samples(route.points[a:b + 1], first, last, count)
+        colors = path_samples(route.points[a:b + 1], first, last, count, linear=linear)
         mandatory.add(len(samples))
         for i, color in enumerate(colors[:-1]):
             samples.append(color)
             positions.append((offset + lengths[segment] * i / (count - 1)) / total)
         offset += lengths[segment]
     mandatory.add(len(samples))
-    samples.append(rgba(route.anchors[-1][1]))
+    samples.append(tuple(c * 255 for c in rgba_float(route.anchors[-1][1])) if linear else rgba(route.anchors[-1][1]))
     positions.append(1.0)
     return samples, positions, mandatory
 

@@ -6,6 +6,7 @@ import math
 from typing import Optional
 
 from krok_helper.subtitle_render.domain.gradient_path import MAX_ANCHORS, MAX_PATH_POINTS, rgba
+from krok_helper.subtitle_render.domain.color import linear_rgba
 from krok_helper.subtitle_render.domain.paint import (
     GradientPath,
     KaraokeColors,
@@ -113,7 +114,7 @@ def gradient_path_from_dict(payload: object) -> Optional[GradientPath]:
                 return None
             index, color = item
             if (type(index) is not int or not 0 <= index < len(clean)
-                    or not isinstance(color, str) or not color.startswith("#")):
+                    or not isinstance(color, str) or not (color.startswith("#") or linear_rgba(color) is not None)):
                 return None
             rgba(color)
             if anchors and index <= anchors[-1][0]:

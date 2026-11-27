@@ -23,7 +23,13 @@ sk_sp<SkShader> subtitleGradient(const krok::subtitle::native::PaintStyle& paint
     std::stable_sort(stops.begin(), stops.end(), [](const auto& a, const auto& b) {
         return a.position < b.position;
     });
-    const auto color = [](auto c) {
+    const bool linear = std::ranges::any_of(stops, [](const auto& stop) { return bool(stop.color.linear); });
+    const auto space = linear ? SkColorSpace::MakeSRGBLinear() : SkColorSpace::MakeSRGB();
+    const auto color = [linear](auto c) {
+        if (linear) {
+            const auto v = krok::subtitle::native::linearColor(c);
+            return SkColor4f{v[0], v[1], v[2], v[3]};
+        }
         return SkColor4f{float(c.red)/255, float(c.green)/255, float(c.blue)/255, float(c.alpha)/255};
     };
     std::vector<SkColor4f> colors;
@@ -39,14 +45,15 @@ sk_sp<SkShader> subtitleGradient(const krok::subtitle::native::PaintStyle& paint
         positions.push_back(stops[i].position);
     }
     if (colors.size() == 1 || (horizontal ? bounds.width() : bounds.height()) <= 0)
-        return SkShaders::Color(colors.front(), SkColorSpace::MakeSRGB());
+        return SkShaders::Color(colors.front(), space);
     const SkPoint points[2] = {
         {bounds.left(), bounds.top()},
         horizontal ? SkPoint{bounds.right(), bounds.top()} : SkPoint{bounds.left(), bounds.bottom()},
     };
     SkGradient::Interpolation interpolation;
-    interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kSRGB;
-    const SkGradient gradient({colors, positions, SkTileMode::kClamp}, interpolation);
+    interpolation.fColorSpace = linear ? SkGradient::Interpolation::ColorSpace::kSRGBLinear
+                                      : SkGradient::Interpolation::ColorSpace::kSRGB;
+    const SkGradient gradient({colors, positions, SkTileMode::kClamp, space}, interpolation);
     auto shader = SkShaders::LinearGradient(points, gradient);
     if (!shader) throw std::runtime_error("Skia 无法创建字幕渐变");
     return shader;

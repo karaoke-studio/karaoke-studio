@@ -441,6 +441,22 @@ def test_each_freehand_stroke_replaces_old_route_and_samples_its_own_ends(qapp):
     dialog.reject()
 
 
+def test_freehand_linear_route_preserves_hdr_intensity_and_opacity(qapp):
+    from krok_helper.subtitle_render.domain.color import rgba_float
+    from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
+    dialog = GradientPathDialog(_fill('linear(10,0,0,0.4)', 'linear(0,4,0,0.7)'))
+    wheel = dialog.wheel
+    assert wheel.property('linearEncoding')
+    _mouse(wheel, QEvent.Type.MouseButtonPress, (.5, 0.))
+    _mouse(wheel, QEvent.Type.MouseMove, (.3, .4))
+    _mouse(wheel, QEvent.Type.MouseButtonRelease, (0., .5), pressed=False)
+    for raw, intensity, alpha in zip(dialog._colors(), (10, 4), (.4, .7)):
+        color = rgba_float(raw)
+        assert max(color[:3]) == pytest.approx(intensity)
+        assert color[3] == pytest.approx(alpha)
+    dialog.reject()
+
+
 def test_applied_gradients_can_be_undone_immediately_without_closing_dialog(qapp):
     from copy import deepcopy
     from krok_helper.subtitle_render.frontend.properties.property_panel import PropertyPanel

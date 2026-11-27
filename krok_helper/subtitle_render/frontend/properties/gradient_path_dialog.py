@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from ...domain.color import linear_rgba, rgba_float, linear_color, hsv_linear
 from copy import deepcopy
 from dataclasses import replace
 
@@ -21,7 +22,7 @@ from krok_helper.subtitle_render.domain.paint import GradientPath, PaintFill
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import fluent_button_row
 from krok_helper.subtitle_render.frontend.properties.color_picker_widgets import HueSaturationWheel
 from krok_helper.subtitle_render.frontend.properties.color_controls import (
-    ScreenColorPicker, _eyedropper_icon, _normalize_hex, _parse_hex_color,
+    ScreenColorPicker, _eyedropper_icon, _normalize_hex, _parse_hex_color, display_color,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 from krok_helper.workspace_switcher import WorkspaceSwitcher
@@ -256,7 +257,7 @@ class _PointColorEditor(QWidget):
         layout.addWidget(self.point_combo)
         self.hex_edit = LineEdit(self)
         self.hex_edit.setMinimumWidth(90)
-        self.hex_edit.setMaxLength(9)
+        self.hex_edit.setMaxLength(160)
         self.hex_edit.setAccessibleName(f"{label}十六进制色号")
         self.hex_edit.setPlaceholderText("#RRGGBB")
         self.hex_edit.setToolTip("支持 RGB 色号；#AARRGGBB 可同时设置透明度")
@@ -276,7 +277,8 @@ class _PointColorEditor(QWidget):
         layout.addWidget(self.delete_button)
 
     def set_color(self, color: str):
-        self._color = QColor(color)
+        self._color_value = _normalize_hex(color)
+        self._color = display_color(color)
         if not (self._editing and self.hex_edit.hasFocus()):
             self.hex_edit.setText(_normalize_hex(color))
 
@@ -286,6 +288,10 @@ class _PointColorEditor(QWidget):
         self._editing = True
         parsed = _parse_hex_color(self.hex_edit.text())
         if parsed is not None:
+            if linear_rgba(parsed) is not None:
+                self.colorChanged.emit(parsed)
+                self.entryChanged.emit()
+                return
             color = QColor(parsed)
             if len(self.hex_edit.text().strip().lstrip("#")) in (3, 6):
                 color.setAlpha(self._entry_alpha)
@@ -298,7 +304,7 @@ class _PointColorEditor(QWidget):
     def _finish_edit(self):
         if self.is_valid():
             self._edit_color()
-            self.hex_edit.setText(_normalize_hex(self._color.name(QColor.NameFormat.HexArgb)))
+            self.hex_edit.setText(self._color_value)
         self._editing = False
 
 
@@ -317,7 +323,7 @@ class _GradientPreview(QWidget):
                 painter.fillRect(x, y, 8, 8, QColor("#CCCCCC" if (x // 8 + y // 8) % 2 else "#FFFFFF"))
         gradient = QLinearGradient(0, 0, rect.width(), 0)
         for position, color in self.stops:
-            gradient.setColorAt(position / 100, QColor(color))
+            gradient.setColorAt(position / 100, display_color(color))
         painter.fillRect(rect, gradient)
         painter.end()
 
@@ -477,8 +483,15 @@ class GradientPathDialog(ModelessDialog):
             # endpoints. Previous endpoint brightness must not anchor the line.
             first, last = path_segment_indices(self._base, 0, 100)
             for stop_index, point in ((first, self.wheel.points[0]), (last, self.wheel.points[-1])):
-                color = QColor(self._base[stop_index][1])
+                raw = self._base[stop_index][1]
                 hue = math.atan2(point[1], point[0]) / math.tau % 1
+                if linear_rgba(raw) is not None:
+                    color = rgba_float(raw)
+                    picked = linear_color(hsv_linear(hue * 360, min(1, math.hypot(*point)),
+                                                      max(color[:3]), color[3]))
+                    self._base[stop_index] = (self._base[stop_index][0], picked)
+                    continue
+                color = QColor(raw)
                 picked = QColor.fromHsvF(hue, min(1, math.hypot(*point)), 1, color.alphaF())
                 self._base[stop_index] = (self._base[stop_index][0], picked.name(QColor.NameFormat.HexArgb).upper())
             self._anchors = [(0, self._colors()[0]), (len(self.wheel.points) - 1, self._colors()[1])]
@@ -525,7 +538,13 @@ class GradientPathDialog(ModelessDialog):
                                 else "按住鼠标自由画线，新线会完整替换当前路径。")
 
     def _pick_anchor(self, index, x, y):
-        previous = QColor(self._anchors[index][1])
+        raw = self._anchors[index][1]
+        if linear_rgba(raw) is not None:
+            c = rgba_float(raw)
+            value = linear_color(hsv_linear(math.degrees(math.atan2(y, x)), min(1, math.hypot(x, y)), max(c[:3]), c[3]))
+            self._set_anchor_color(index, value, remember=False, point=(x, y))
+            return
+        previous = QColor(raw)
         hue = math.atan2(y, x) / math.tau % 1
         color = QColor.fromHsvF(hue, min(1, math.hypot(x, y)),
                                previous.valueF(), previous.alphaF())
@@ -533,14 +552,13 @@ class GradientPathDialog(ModelessDialog):
                                  remember=False, point=(x, y))
 
     def _set_anchor_color(self, index, color, *, remember=True, point=None):
-        old = QColor(self._anchors[index][1])
-        current = QColor(color)
-        if current == old and point is None:
+        value = _normalize_hex(color)
+        if value == _normalize_hex(self._anchors[index][1]) and point is None:
             return
         if remember:
             self._remember()
         vertex = self._anchors[index][0]
-        self._anchors[index] = (vertex, current.name(QColor.NameFormat.HexArgb).upper())
+        self._anchors[index] = (vertex, value)
         self._update_base_ends()
         points = list(self.wheel.points)
         points[vertex] = point if point is not None else disk_point(color)
@@ -558,6 +576,7 @@ class GradientPathDialog(ModelessDialog):
 
     def _sync_anchor_handles(self):
         self._selected = max(0, min(self._selected, len(self._anchors) - 1))
+        self.wheel.setProperty('linearEncoding', any(linear_rgba(color) is not None for _, color in self._anchors))
         self.wheel.anchor_indices = [index for index, _ in self._anchors]
         self.wheel.selected_anchor = self._selected
         self.wheel.anchor_labels = ["起"] + [str(i) for i in self._waypoint_ids] + ["终"]
@@ -621,14 +640,22 @@ class GradientPathDialog(ModelessDialog):
                 right = stop
                 break
         ratio = (position - left[0]) / (right[0] - left[0]) if right[0] > left[0] else 0
-        first, last = QColor(left[1]), QColor(right[1])
-        value = first.valueF() + (last.valueF() - first.valueF()) * ratio
-        alpha = first.alphaF() + (last.alphaF() - first.alphaF()) * ratio
-        color = QColor.fromHsvF(math.atan2(point[1], point[0]) / math.tau % 1,
-                               min(1, math.hypot(*point)), value, alpha)
+        if linear_rgba(left[1]) is not None or linear_rgba(right[1]) is not None:
+            a, b = rgba_float(left[1]), rgba_float(right[1])
+            value = max(a[:3]) + (max(b[:3]) - max(a[:3])) * ratio
+            alpha = a[3] + (b[3] - a[3]) * ratio
+            inserted = linear_color(hsv_linear(math.degrees(math.atan2(point[1], point[0])),
+                                               min(1, math.hypot(*point)), value, alpha))
+        else:
+            first, last = QColor(left[1]), QColor(right[1])
+            value = first.valueF() + (last.valueF() - first.valueF()) * ratio
+            alpha = first.alphaF() + (last.alphaF() - first.alphaF()) * ratio
+            color = QColor.fromHsvF(math.atan2(point[1], point[0]) / math.tau % 1,
+                                   min(1, math.hypot(*point)), value, alpha)
+            inserted = color.name(QColor.NameFormat.HexArgb).upper()
         insert_at = next((i for i, (vertex, _) in enumerate(self._anchors) if vertex > segment), len(self._anchors) - 1)
         self._remember()
-        self._anchors.insert(insert_at, (segment, color.name(QColor.NameFormat.HexArgb).upper()))
+        self._anchors.insert(insert_at, (segment, inserted))
         self._waypoint_ids.insert(insert_at - 1, max(self._waypoint_ids, default=0) + 1)
         self._selected = insert_at
         self._route_mode = self._route_mode or "short"
@@ -653,7 +680,8 @@ class GradientPathDialog(ModelessDialog):
     def _begin_screen_color_pick(self, index: int) -> None:
         self._cancel_screen_picker()
         editor = self.point_editor
-        original = QColor(self._anchors[index][1])
+        original_value = self._anchors[index][1]
+        original = display_color(original_value)
         original_text = editor.hex_edit.text()
         accepted = False
         picker = ScreenColorPicker()
@@ -683,7 +711,7 @@ class GradientPathDialog(ModelessDialog):
             if sip.isdeleted(self) or sip.isdeleted(editor):
                 return
             if not accepted:
-                editor.set_color(original.name(QColor.NameFormat.HexArgb))
+                editor.set_color(original_value)
                 editor.hex_edit.setText(original_text)
             self._validate_color_entries()
             if self.isVisible():

@@ -1,6 +1,7 @@
 #include "qt_fill_brush.h"
 
 #include "qt_render_types.h"
+#include "../../scene/paint_projection.h"
 
 #include <QtCore/QFileInfo>
 #include <QtGui/QColor>
@@ -17,11 +18,16 @@ namespace krok::subtitle::native::legacy_qt {
 using protocol::PaintFillSpec;
 
 QColor colorValue(const QString &value, const QColor &fallback) {
+    if (value.startsWith("linear(")) {
+        const auto color = scene::projectColor(value, "#FFFFFF");
+        return QColor(color.red, color.green, color.blue, color.alpha);
+    }
     const QColor color(value);
     return color.isValid() ? color : fallback;
 }
 
 QColor validColor(const QString &value, const QString &fallback) {
+    if (value.startsWith("linear(")) return colorValue(value, QColor(fallback));
     const QColor color(value);
     if (color.isValid()) {
         return color;

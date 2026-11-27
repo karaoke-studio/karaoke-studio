@@ -120,9 +120,15 @@ PaintStyle lowerGradient(const QJsonObject& authored, const char* phase, const Q
         const double position = pair.size() == 2 ? pair[0].toDouble(-1) : -1;
         if (!std::isfinite(position) || position < 0 || position > 100 || position < previous)
             throw BackendError("Skia 下方注音渐变色标位置无效");
-        const auto color = rgbaPaint(pair[1]);
-        fill.stops.push_back({float(position / 100), {std::uint8_t(color >> 16), std::uint8_t(color >> 8),
-                                                      std::uint8_t(color), std::uint8_t(color >> 24)}});
+        RgbaColor value;
+        if (pair[1].isString() && pair[1].toString().startsWith("linear(")) {
+            value = scene::projectColor(pair[1].toString(), "#FFFFFF");
+        } else {
+            const auto color = rgbaPaint(pair[1]);
+            value = {std::uint8_t(color >> 16), std::uint8_t(color >> 8),
+                     std::uint8_t(color), std::uint8_t(color >> 24)};
+        }
+        fill.stops.push_back({float(position / 100), value});
         previous = position;
     }
     return fill;
@@ -310,7 +316,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color),
-                    paint.glowStrength};
+                    paint.glowStrength, bool(decor.color.linear)
+                        || std::ranges::any_of(decor.stops, [](const auto& stop) { return bool(stop.color.linear); })};
         };
         ::subtitle::skia::StaticGlow glow{
             glowState(false), glowState(true), paint.rubyStrokeWidth + paint.rubyStroke2Width};
@@ -599,6 +606,12 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto lowerGlowBefore = lowerGradient(lowerGlowGradients, "before");
         const auto lowerGlowAfter = lowerGradient(lowerGlowGradients, "after");
         const bool lowerGlowGradient = lower && object.contains("lower_glow_gradient") && hasGlow;
+        if (lowerGlowGradient) {
+            const auto extended = [](const PaintStyle& p) { return bool(p.color.linear)
+                || std::ranges::any_of(p.stops, [](const auto& stop) { return bool(stop.color.linear); }); };
+            glow.before.extendedColor = extended(lowerGlowBefore);
+            glow.after.extendedColor = extended(lowerGlowAfter);
+        }
         SkRect ink = SkRect::MakeEmpty();
         if (gradientFill || gradientOutlines || beforeShadowGradient || afterShadowGradient || lowerGlowGradient
             || (hasGlow && glowPaints != GlowPaintSupport::Solid))

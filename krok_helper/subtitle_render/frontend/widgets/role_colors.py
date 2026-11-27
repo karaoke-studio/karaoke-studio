@@ -14,6 +14,7 @@ from krok_helper.subtitle_render.engine.render.effects.fills import (
     fill_signature,
     gradient_stops,
     split_gradient_stops,
+    valid_color,
 )
 from krok_helper.subtitle_render.engine.render.image_resource import image_file_signature
 
@@ -111,7 +112,7 @@ def scheme_swatch_color(style: Style, role: str) -> QColor | None:
     if fill is None:
         return None
     if fill.mode == "solid":
-        return QColor(fill.color)
+        return valid_color(fill.color, '#FFFFFF')
     key = swatch_key(fill)
     if key in _TINT_CACHE:
         _TINT_CACHE.move_to_end(key)

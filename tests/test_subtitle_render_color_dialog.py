@@ -100,6 +100,79 @@ def use_normalized_channels(dialog):
     return dialog._pro_channels
 
 
+def test_ue_linear_rgb_hsv_hdr_and_exposure_preserve_the_authored_value(dialog):
+    from krok_helper.subtitle_render.domain.color import linear_rgba
+    dialog.setCurrentColor(QColor('#808080'))
+    before = dialog.current_color_value()
+    dialog._detail_mode_switch.setCurrentItem('pro')
+    controls = dialog._pro_channels
+    controls._numeric_mode_switch.setCurrentItem('linear')
+    assert controls.spins['red'].value() == .216
+    assert all(spin.decimals() == 3 for spin in controls.spins.values())
+    assert dialog.current_color_value() == before
+    dialog.set_color_value('linear(1,0.045,0,0.5)')
+    assert controls.spins['hue'].value() == pytest.approx(2.7)
+    controls.spins['red'].setValue(10)
+    assert linear_rgba(dialog.current_color_value()) == (10, .045, 0, .5)
+    assert controls.spins['hue'].value() == pytest.approx(.27)
+    assert controls.spins['pro_value'].value() == 10
+    controls.editFinished.emit()
+    assert controls.spins['red'].value() == 10
+    value = dialog.current_color_value()
+    dialog._exposure_spin.setValue(-4)
+    assert dialog.current_color_value() == value
+    for mode in ('standard', 'normalized', 'linear'):
+        controls._numeric_mode_switch.setCurrentItem(mode)
+        assert dialog.current_color_value() == value
+    dialog.accept()
+    selected = dialog.selectedColor()
+    assert colors.selected_color_value(selected) == value
+    dialog.remember_selected_color(selected)
+    reopened = colors._ColorDialog(colors.editing_color(value))
+    assert reopened.current_color_value() == value
+    assert colors.selected_color_value(colors.recent_colors()[0]) == value
+    reopened._recent_list.tiles[0].click()
+    assert reopened.current_color_value() == value
+    reopened.close()
+
+
+def test_ue_linear_black_retains_hue_and_hdr_edits_emit_with_same_sdr_preview(dialog):
+    dialog._pro_channels._numeric_mode_switch.setCurrentItem('linear')
+    dialog.set_color_value('linear(0,0,0,1)')
+    for channel, value in [('hue', 210), ('saturation', .8), ('pro_value', 2)]:
+        dialog._pro_channels.spins[channel].setValue(value)
+    assert dialog._pro_channels.spins['hue'].value() == pytest.approx(210)
+    dialog.set_color_value('linear(2,0,0,1)')
+    changes = []
+    dialog.colorValueChanged.connect(changes.append)
+    dialog._pro_channels.spins['red'].setValue(3)
+    assert changes == ['linear(3.0,0.0,0.0,1.0)']
+
+
+def test_srgb_edits_of_linear_colors_preserve_unedited_hdr_channels_and_alpha(dialog):
+    from krok_helper.subtitle_render.domain.color import linear_rgba, srgb_to_linear
+    dialog.set_color_value('linear(10,5,0,0.5)')
+    dialog._pro_channels._numeric_mode_switch.setCurrentItem('standard')
+    dialog._pro_channels.spins['blue'].setValue(128)
+    assert linear_rgba(dialog.current_color_value()) == pytest.approx((10, 5, srgb_to_linear(128/255), .5))
+    dialog._pro_channels._numeric_mode_switch.setCurrentItem('normalized')
+    dialog._pro_channels.spins['pro_alpha'].setValue(.25)
+    assert linear_rgba(dialog.current_color_value()) == pytest.approx((10, 5, srgb_to_linear(128/255), .25))
+
+
+def test_property_paint_picker_commits_linear_value_instead_of_its_display_hex(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.properties import property_panel as pp
+    from krok_helper.subtitle_render.domain.models import Style
+    panel = pp.PropertyPanel()
+    panel.set_style(Style())
+    value = 'linear(10.0,0.045,0.0,0.5)'
+    monkeypatch.setattr(pp, '_select_color', lambda *args: colors.editing_color(value))
+    panel._choose_paint_color('color')
+    assert panel._current_paint_fill().color == value
+    assert panel._paint_solid_btn.color == value
+    panel.close()
+
+
 @pytest.mark.parametrize("value", ["#00123456", "#804093E9", "#FFFFFFFF", "#00000000"])
 def test_numeric_range_switch_preserves_color_hsv_and_pending_hex(dialog, value):
     dialog.setCurrentColor(QColor(value))

@@ -10,6 +10,7 @@ from PyQt6.QtCore import QPointF, QRectF
 from PyQt6.QtGui import QColor, QBrush, QImage, QLinearGradient, QTransform
 
 from krok_helper.subtitle_render.domain.paint import KaraokeColorState, PaintFill
+from krok_helper.subtitle_render.domain.color import display_hex, linear_rgba
 from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature,
     warn_image_resource_skipped,
@@ -261,8 +262,10 @@ def gradient_stops(fill: PaintFill) -> list[tuple[float, str]]:
 
 
 def valid_color(value: str, fallback: str) -> QColor:
+    if linear_rgba(value) is not None:
+        value = display_hex(value)
     color = QColor(value)
     if color.isValid():
         return color
-    fallback_color = QColor(fallback)
+    fallback_color = QColor(display_hex(fallback) if linear_rgba(fallback) is not None else fallback)
     return fallback_color if fallback_color.isValid() else QColor("#FF5A6F")
