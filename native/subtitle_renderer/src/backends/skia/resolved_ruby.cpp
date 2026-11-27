@@ -186,8 +186,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const QJsonObject& source, const QJsonObject& ir, const ResolvedGlyphContext& glyphs,
         const RenderScene& scene, int lineIndex, int offset, RubyTransition transition, SkiaImageFillCache& imageCache,
         GlowPaintSupport glowPaints,
-        const RolePaintBounds* roleBounds, RubyDecorationMotion decorationMotion, std::size_t& totalCells,
-        std::size_t& totalGroups) {
+        const RolePaintBounds* roleBounds, std::size_t& totalCells, std::size_t& totalGroups) {
     if (!source.contains("ruby_groups")) return {};
     if (!source.value("ruby_groups").isArray())
         throw BackendError("Skia 注音最终布局缺少逐行注音组");
@@ -196,10 +195,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool vertical = scene.lineStyles[lineIndex].vertical;
     const bool rtl = scene.lineStyles[lineIndex].rightToLeft;
     const auto features = ir.value("required_features").toArray();
-    const bool allowOutlines = features.contains("p06_ruby_solid_outline");
     const bool fadeOnly = (line.entryAnimation == "none" || line.entryAnimation == "fade")
         && (line.exitAnimation == "none" || line.exitAnimation == "fade");
-    const bool verticalFade = vertical && features.contains("p07_vertical_decoration_fade") && fadeOnly;
     const bool staticLine = line.entryAnimation == "none" && line.exitAnimation == "none";
     const bool roleLineFade = features.contains("p07_role_line_fade") && fadeOnly;
     const auto& scanlineStyle = scene.lineStyles[lineIndex];
@@ -207,82 +204,25 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
     const bool fadedUtopiaScanline = usesFadedUtopiaScanline(line, scanlineStyle);
     const bool roleFadedScanline = fadedUtopiaScanline && fixedScanlinePaint && line.bursts.empty()
         && features.contains("p07_inline_role_faded_scanline");
-    const bool fadedScanlineGradient = fadedUtopiaScanline && fixedScanlinePaint
-        && features.contains("p06_faded_scanline_gradient_fill")
-        && (line.bursts.empty() ? features.contains("p07_faded_scanline_prefix_guides")
-                                : features.contains("p07_faded_scanline_singing_particles"));
     const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
         && scanlineStyle.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
     // Outline gradients span the reading's own ink (or the shared role
     // domain), so they compose with every line layout and transition.
     const bool allowOutlineGradient = features.contains("p06_ruby_outline_gradient");
     const bool allowHorizontalOutline = features.contains("p06_ruby_horizontal_outline");
-    const bool gradientLineFade = !vertical && fadeOnly && features.contains("p06_gradient_glow")
-        && features.contains("p07_ruby_line_animation");
-    const bool verticalNoWipe = line.karaokeAnimation == "no_wipe"
-        && (staticLine || (features.contains("p07_vertical_decoration_no_wipe_animation")
-                           && (verticalFade || decorationMotion.upper)));
-    const bool verticalMixedNoWipe = features.contains("p07_vertical_mixed_decoration_no_wipe");
-    const bool verticalGlowNoWipe = verticalNoWipe && (features.contains("p07_vertical_glow_no_wipe") || verticalMixedNoWipe);
-    const bool verticalShadowNoWipe = verticalNoWipe && (features.contains("p07_vertical_shadow_no_wipe") || verticalMixedNoWipe);
     const bool verticalSinging = vertical && line.karaokeAnimation == "utopia"
         && features.contains("p07_vertical_singing_scale");
-    const bool verticalSingingShadow = verticalSinging && features.contains("p07_vertical_ruby_singing_shadow");
-    const bool allowVerticalDecoration = features.contains("p06_vertical_ruby_decoration")
-        && ((line.karaokeAnimation == "none" && (staticLine || verticalFade || decorationMotion.upper))
-            || verticalSinging || verticalGlowNoWipe || verticalShadowNoWipe)
-        && !line.wipeReverse && (!line.scanlineEnabled || features.contains("p07_vertical_scanline_decoration"))
-        && !line.strokeFlashEnabled
-        && (line.bursts.empty() || features.contains("p07_vertical_decorated_singing_particles"));
-    const bool rtlShadow = rtl && features.contains("p06_rtl_ruby_shadow")
-        && (line.karaokeAnimation == "none" || line.karaokeAnimation == "no_wipe");
-    const bool allowShadow = features.contains("p06_ruby_shadow")
-        && (!rtl || rtlShadow) && (!vertical || (allowVerticalDecoration && (!verticalSinging || verticalSingingShadow)))
-        && (line.karaokeAnimation != "no_wipe" || verticalShadowNoWipe || rtlShadow || decorationMotion.upper)
-        && (!line.zoomPulseEnabled || verticalSingingShadow)
-        && (staticLine || verticalFade || decorationMotion.upper || decorationMotion.singingGradient
-            || (roleLineFade && features.contains("p05_role_vector_guides"))
-            || (verticalSingingShadow && features.contains("p07_vertical_singing_line_animation")));
-    const bool allowShadowGradient = features.contains("p06_ruby_gradient_shadow")
-        && roleBounds && !vertical && !rtl && !line.wipeReverse && staticLine && line.karaokeAnimation == "none"
-        && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
-    const bool allowShadowImage = features.contains("p06_ruby_image_shadow")
-        && !vertical && !rtl && !line.wipeReverse && staticLine && line.karaokeAnimation == "none"
-        && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
     const bool zoom = !vertical && line.zoomPulseEnabled && features.contains("p07_ruby_zoom_pulse");
     const bool allowSingingGlow = features.contains("p07_singing_glow")
         && line.karaokeAnimation == "utopia"
         && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
-    const bool lineGlow = allowSingingGlow && features.contains("p07_utopia_line_animation");
-    const bool unscaledScanlineGlow = line.scanlineEnabled && line.karaokeAnimation == "none"
-        && features.contains("p07_scanline_unscaled_line_animation");
-    const bool noiseGlow = features.contains("p07_noise_composition")
-        && (line.entryAnimation == "noise" || line.exitAnimation == "noise");
-    const bool noWipeGlow = line.karaokeAnimation == "no_wipe" && features.contains("p07_no_wipe_decoration");
     const bool roleGlow = features.contains("p06_ruby_role_glow") && !vertical && (staticLine || roleLineFade)
         && (line.karaokeAnimation == "none" || (allowSingingGlow && features.contains("p07_role_singing_glow")))
         && !line.wipeReverse && !line.zoomPulseEnabled
         && (!line.scanlineEnabled || roleFadedScanline) && !line.strokeFlashEnabled && line.bursts.empty();
-    const bool latinGuideGlow = lineGlow && features.contains("p06_latin_primary_outline")
-        && features.contains("p05_vector_guide_composition") && !features.contains("p06_role_solid_outlines");
-    const bool allowGlow = features.contains("p06_ruby_glow")
-        && (!vertical || allowVerticalDecoration) && (line.karaokeAnimation == "none" || allowSingingGlow || noWipeGlow)
-        && (lineGlow || transition != RubyTransition::None || noiseGlow || staticLine || verticalFade
-            || decorationMotion.upper || decorationMotion.lower || unscaledScanlineGlow || roleLineFade || gradientLineFade)
-        && (scene.charStyles.empty() || roleGlow || latinGuideGlow);
-    // Karaoke modes only change the reading clock, not which paints a reading may use.
-    const bool lowerWipe = true;
-    const bool lowerScanline = line.scanlineEnabled && line.karaokeAnimation != "no_wipe"
-        && features.contains("p07_lower_ruby_scanline")
-        && (staticLine || (decorationMotion.lower && features.contains("p07_lower_ruby_scanline_line_animation")));
-    const bool lowerScanlineParticles = lowerScanline && fadedUtopiaScanline && fixedScanlinePaint && !line.bursts.empty()
-        && features.contains("p07_lower_ruby_scanline_singing_particles");
-    // Lower reading decorations compose with the line's animation and effects.
-    const bool allowLowerDecoration = lowerWipe;
     const double verticalSchema = ir.value("skia_layout").toObject().value("vertical_ruby_schema").toDouble(-1);
     const bool allowVerticalShift = features.contains("p05_vertical_shifted_ruby");
     const bool allowVerticalRotation = features.contains("p05_vertical_rotated_ruby");
-    const bool allowVerticalOutlines = features.contains("p06_vertical_ruby_outline");
     const auto rubyGroups = source.value("ruby_groups").toArray();
     const bool multipleVertical = vertical && rubyGroups.size() > 1;
     const bool overlapping = source.contains("vertical_overlapping_ruby");
@@ -293,7 +233,6 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         || line.zoomPulseEnabled || line.strokeFlashEnabled || !line.bursts.empty()))
         throw BackendError("Skia 竖排重叠注音缺少布局能力或走字模式无效");
     int previousSpanEnd = 0;
-    std::optional<::subtitle::skia::StaticGlow> lowerGlowSpec;
     double previousInkBottom = -std::numeric_limits<double>::infinity();
     if (rubyGroups.size() > 4096 - totalGroups)
         throw BackendError("Skia 注音组总数超限");
@@ -380,7 +319,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             throw BackendError("Skia 下方注音渐变缺少对应画笔能力");
         const auto staticLowerGradients = object.value("static_fill_gradient").toObject();
         const auto shareLowerGradient = object.value("fill_gradient_with_main");
-        if (object.contains("static_fill_gradient") && (!lower || !allowLowerDecoration
+        if (object.contains("static_fill_gradient") && (!lower
             || !validPhases(staticLowerGradients) || !shareLowerGradient.isBool()))
             throw BackendError("Skia 下方注音渐变缺少对应布局或画笔能力");
         if (!object.contains("static_fill_gradient") && object.contains("fill_gradient_with_main"))
@@ -389,7 +328,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         auto lowerAfter = lowerGradient(staticLowerGradients, "after", lowerGradients);
         if (object.contains("static_fill_image")) {
             const auto payload = object.value("static_fill_image").toObject();
-            if (!lower || !allowLowerDecoration || !validPhases(payload)
+            if (!lower || !validPhases(payload)
                 || (payload.contains("before") && lowerBefore.mode != "solid")
                 || (payload.contains("after") && lowerAfter.mode != "solid"))
                 throw BackendError("Skia 下方注音图片画笔缺少对应布局能力或与其他画笔重叠");
@@ -400,14 +339,10 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto& afterFill = lower ? lowerAfter : paint.rubyAfterFillPaint;
         const bool gradientFill = rubyFillGradientMode(beforeFill) || rubyFillGradientMode(afterFill);
         const bool imageFill = beforeFill.mode == "image" || afterFill.mode == "image";
-        // Reading paints compose with any line animation, as their body paints do.
-        const bool allowFillPaint = lowerWipe;
         const bool allowRoleFill = roleBounds && features.contains("p06_ruby_role_paints")
             && (line.karaokeAnimation == "none" || features.contains("p07_role_singing_scale"));
         const bool independentFill = staticLine && roleBounds && !rtl && scene.charStyles.empty()
             && features.contains("p06_independent_ruby_fill");
-        const bool allowGradientFill = allowFillPaint;
-        const bool allowImageFill = allowFillPaint;
         const auto validFill = [](const auto& fill) {
             return fill.mode == "solid" || rubyFillGradientMode(fill) || fill.mode == "image";
         };
@@ -484,15 +419,14 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const float outerWidth = float((primary.width + secondary.width) * glyphs.dpr);
         const auto lowerGlow = object.value("lower_glow").toObject();
         if (object.contains("lower_glow")) {
-            if (!lower || !allowLowerDecoration || !validPhases(lowerGlow))
+            if (!lower || !validPhases(lowerGlow))
                 throw BackendError("Skia 下方注音实色光晕缺少对应布局能力");
             glow = {lowerGlowState(lowerGlow, "before", glyphs.dpr),
                     lowerGlowState(lowerGlow, "after", glyphs.dpr), outerWidth};
-            lowerGlowSpec = glow;
         }
         const auto lowerShadow = object.value("lower_shadow").toObject();
         if (object.contains("lower_shadow")) {
-            if (!lower || !allowLowerDecoration || !validPhases(lowerShadow)
+            if (!lower || !validPhases(lowerShadow)
                 || (lowerGlow.contains("before") && lowerShadow.contains("before"))
                 || (lowerGlow.contains("after") && lowerShadow.contains("after")))
                 throw BackendError("Skia 下方注音实色阴影缺少对应布局能力或同一阶段重复装饰");

@@ -127,15 +127,11 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         .bodyShadowGradients = true, .bodyShadowImages = true, .roleShadowPaints = true,
         .glowPaints = GlowPaintSupport::LineGradients});
     const bool staticGlow = features.contains("p06_static_glow");
-    const bool scriptStylesOnly = projected.charStyles.empty()
-        && (latinSecondaryOutline || (latinPrimaryOutline && features.contains("p05_vector_guide_composition")
-            && features.contains("p07_utopia_line_animation")));
     if ((latinPrimaryOutline || latinSecondaryOutline) && (roleBodyPaints || roleStaticGlow || staticGlow))
         splitLatinOutlineStyles(projected, latinPrimaryOutline, latinSecondaryOutline);
     const auto layout = ir.value("skia_layout").toObject();
     const auto transformVersion = layout.value("character_transform_schema").toDouble();
     const bool allowTransformedWipe = transformVersion >= 2;
-    const bool allowAnimatedOutlines = transformVersion >= 3;
     const auto verticalVersion = layout.value("vertical_solid_schema").toDouble(-1);
     const bool japaneseGlyphs = ir.value("required_features").toArray().contains("p05_vertical_japanese_glyphs");
     const bool verticalTextCells = features.contains("p05_vertical_text_cells");
@@ -148,7 +144,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         ? scene::FontResourceTable{} : scene::loadSkiaFontResources(layout.value("fonts").toObject());
     const auto originalTrack = ir.value("track").toObject();
     const auto originalLines = originalTrack.value("lines").toArray();
-    const bool anyReadings = !originalTrack.value("rubies").toArray().isEmpty();
     if (lines.size() != int(projected.lines.size()) || lines.size() > 4096)
         throw BackendError("Skia 最终布局行数不一致或超限");
     const auto runs = layout.value("runs").toArray();
@@ -171,12 +166,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             features.contains("p08_animated_staff_line_band") || features.contains("p08_animated_line_band")
                 || features.contains("p08_line_band_image_sequence"));
     std::size_t totalCells = 0, totalPoints = 0, totalGroups = 0;
-    const bool columnDecoration = !features.contains("p05_vertical_columns")
-        || (features.contains("p06_vertical_columns_decoration")
-            && (features.contains("p06_vertical_mixed_column_decoration")
-                || std::ranges::all_of(projected.lines, [&](const auto& other) {
-                    return other.wipeReverse == projected.lines.front().wipeReverse;
-                })));
     for (int index = 0; index < lines.size(); ++index) {
         const auto source = lines[index].toObject();
         const auto& line = projected.lines[index];
@@ -185,20 +174,12 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         const bool fixedFadedScanline = fadedUtopiaScanline && (style.scanlineMode == "default" || style.scanlineMode == "color");
         const bool roleFadedScanline = fixedFadedScanline && line.bursts.empty()
             && features.contains("p07_inline_role_faded_scanline");
-        const bool vectorFadedScanline = fixedFadedScanline
-            && (line.bursts.empty() || features.contains("p07_faded_scanline_singing_particles"))
-            && features.contains("p07_faded_scanline_prefix_guides");
         const bool brightenedScanlineGradient = fadedUtopiaScanline && line.bursts.empty()
             && style.scanlineMode == "brighten" && features.contains("p06_faded_scanline_palette_gradient");
         const bool ordinaryLineAnimation = (line.entryAnimation == "none" || line.entryAnimation == "fade"
                 || line.entryAnimation == "slide_in" || line.entryAnimation == "rise")
             && (line.exitAnimation == "none" || line.exitAnimation == "fade" || line.exitAnimation == "slide_out"
                 || line.exitAnimation == "rise");
-        const bool animatedGuideGradients = features.contains("p05_vector_guide_composition")
-            && features.contains("p06_animated_singing_gradient_fill") && line.karaokeAnimation == "utopia"
-            && !style.vertical && !style.rightToLeft && !line.wipeReverse && !line.scanlineEnabled
-            && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty()
-            && ordinaryLineAnimation;
         if (!source.value("cells").isArray()) throw BackendError("Skia 最终布局缺少单元");
         const auto cells = source.value("cells").toArray();
         const auto original = originalLines[index].toObject();
@@ -246,32 +227,18 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         const bool geoExit = particleExit || line.exitAnimation == "scatter_out" || line.exitAnimation == "converge_out"
             || line.exitAnimation == "stretch_out" || line.exitAnimation == "glow_out";
         const bool noiseEntry = line.entryAnimation == "noise", noiseExit = line.exitAnimation == "noise";
-        const bool noiseComposition = (noiseEntry || noiseExit) && features.contains("p07_noise_composition");
         const bool singingScale = line.karaokeAnimation == "utopia";
         const bool utopiaEntry = line.entryAnimation == "utopia", utopiaExit = line.exitAnimation == "utopia";
         const bool utopia = singingScale || utopiaEntry || utopiaExit;
         const bool annotated = !source.value("ruby_groups").toArray().isEmpty();
         const bool hasInlineRoles = std::ranges::any_of(line.chars, [](const auto& cell) { return cell.styleIndex >= 0; });
-        const bool rtlRuby = style.rightToLeft && features.contains("p05_horizontal_rtl_ruby");
-        const bool rtlRubySinging = rtlRuby && singingScale && features.contains("p07_rtl_ruby_singing_scale");
-        const bool rtlRubyNoWipe = rtlRuby && prepared.noWipe && features.contains("p07_rtl_ruby_no_wipe");
-        const bool rtlRubyMotion = rtlRubySinging && features.contains("p07_rtl_ruby_line_animation");
         // Cell order does not change the per-cell singing pose on lines without readings.
-        const bool rtlPlainSinging = style.rightToLeft && singingScale && !annotated && !line.wipeReverse
-            && !line.zoomPulseEnabled && features.contains("p07_rtl_singing_scale");
-        const bool verticalMotion = style.vertical && features.contains("p07_vertical_decoration_line_motion")
-            && ordinaryLineAnimation && (line.karaokeAnimation == "none"
-                || (prepared.noWipe && features.contains("p07_vertical_decoration_no_wipe_animation")));
-        const bool rtlRubyUnscaledMotion = rtlRuby && !singingScale && ordinaryLineAnimation
-            && features.contains("p07_rtl_ruby_unscaled_line_animation");
         const bool vectorGuides = std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         // A bitmap guide's glow takes the line's glow paint on any line.
         const bool bitmapGradientGlow = features.contains("p08_bitmap_guide_gradient_glow") && !staticTitle;
         const bool reverseBitmapLine = line.wipeReverse && features.contains("p08_reverse_bitmap_guides")
             && !line.chars.empty()
             && std::ranges::all_of(line.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
-        const bool mixedReverseBitmaps = line.wipeReverse && features.contains("p08_mixed_reverse_bitmap_guides")
-            && std::ranges::any_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
         const bool verticalSingingAnimation = style.vertical && singingScale && ordinaryLineAnimation
             && !line.wipeReverse && features.contains("p07_vertical_singing_line_animation")
             && (!line.scanlineEnabled || features.contains("p07_vertical_singing_scanline_line_animation"));
@@ -298,20 +265,10 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         };
         const bool horizontalDecorationMotion = unscaledLineMotion && !line.scanlineEnabled
             && !features.contains("p05_lower_ruby");
-        const bool horizontalShadowMotion = horizontalDecorationMotion
-            && features.contains("p07_horizontal_shadow_line_animation") && usesDecoration("shadow");
         const bool horizontalGlowMotion = horizontalDecorationMotion && glowPaints == GlowPaintSupport::Solid
             && features.contains("p07_horizontal_glow_line_animation")
             && (!prepared.noWipe || features.contains("p07_no_wipe_decoration"))
             && usesDecoration("glow") && !usesDecoration("shadow");
-        const bool lowerUnscaledMotion = unscaledLineMotion && features.contains("p07_lower_ruby_unscaled_line_animation")
-            && (!line.scanlineEnabled || features.contains("p07_lower_ruby_scanline_line_animation"))
-            && std::ranges::any_of(source.value("ruby_groups").toArray(), [](const auto& value) {
-                const auto group = value.toObject();
-                return group.value("lower").toBool() && (group.contains("lower_glow") || group.contains("lower_shadow"));
-            });
-        const bool lowerUtopiaMotion = singingScale && ordinaryLineAnimation
-            && features.contains("p07_lower_ruby_decoration_line_animation");
         const bool noteExit = line.exitAnimation == "note" && features.contains("p07_ruby_petal_scanline_note_exit");
         const bool petalScanlineImage = noteExit && style.scanlineShape == "image"
             && features.contains("p07_ruby_petal_scanline_image");
@@ -340,7 +297,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         const bool dripExit = line.exitAnimation == "char_drip" && line.exitDurationMs > 0;
         const bool dripComposition = transformedRuby && features.contains("p07_ruby_character_drip")
             && (dripEntry || dripExit) && (!(dripEntry && dripExit) || features.contains("p07_ruby_character_drip_pair"));
-        const bool warpComposition = spinComposition || dripComposition;
         // Readings take each geometry phase of their owner whatever the other
         // phase, karaoke mode or particles do.
         const bool translationComposition = transformedRuby && features.contains("p07_ruby_character_translation")
@@ -376,18 +332,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         const bool particleEntryGlow = particleGlowAllowed && features.contains("p07_ruby_particle_entry_glow")
             && (!symbolEntry || features.contains("p07_ruby_symbol_entry_glow"))
             && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow");
-        const bool readingEntryGlow = particleEntryGlow
-            || (particleGlowAllowed && features.contains("p07_ruby_particle_entry_reading_glow"));
-        const auto supportsParticleEntryDecoration = [](const auto& kind, bool glow) {
-            return kind == "none" || (glow && kind == "glow");
-        };
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         // Without readings the singing pose and per-character transition are independent layers.
-        const bool singingTransform = !annotated && singingScale && features.contains("p07_singing_character_transform")
-            && !line.zoomPulseEnabled && !line.wipeReverse && !style.vertical && !style.rightToLeft
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && (line.bursts.empty() || particleEntry || particleExit)
-            && !usesDecoration("shadow") && !usesDecoration("glow")
-            && (charEntry || charExit || geoEntry || geoExit);
         const bool fadeComposition = (fadeEntry || fadeExit)
             && (line.entryAnimation == "none" || fadeEntry
                 || (fadeExit && (line.entryAnimation == "fade" || line.entryAnimation == "rise")))
@@ -398,19 +344,11 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             && projected.charStyles.empty()
             && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.vectorGlyph); });
         const bool rubyParticles = annotated && layout.value("sing_twinkle_schema").toDouble(-1) >= 12;
-        const bool fadedScanlineParticles = features.contains("p07_faded_scanline_singing_particles")
-            && !line.bursts.empty() && fadedUtopiaScanline;
-        const bool fadedScanlineGradientFill = fixedFadedScanline && (fadedScanlineParticles || vectorFadedScanline)
-            && features.contains("p06_faded_scanline_gradient_fill");
         const bool rubyZoomLineAnimation = annotated && features.contains("p07_ruby_zoom_line_animation")
             && !style.vertical && !style.rightToLeft && !line.wipeReverse && !hasInlineRoles && !vectorGuides
             && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool lineAnimation = verticalSingingAnimation || (singingScale && (!line.zoomPulseEnabled || rubyZoomLineAnimation)
             && features.contains("p07_utopia_line_animation") && ordinaryLineAnimation);
-        const bool movingSingingGradientFill = lineAnimation && singingScale && !style.vertical
-            && (line.entryAnimation != "none" || line.exitAnimation != "none")
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
-            && features.contains("p06_animated_singing_gradient_fill");
         const bool roleSinging = features.contains("p07_role_singing_scale") && singingScale && !line.zoomPulseEnabled
             && ((line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled)
                 || roleFadedScanline || ((inlineAvatars || roleVectorGuides)
@@ -418,40 +356,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
                     && (line.entryAnimation == "none" || line.entryAnimation == "fade")
                     && (line.exitAnimation == "none" || line.exitAnimation == "fade")))
             && !line.strokeFlashEnabled && line.bursts.empty();
-        if (line.scanlineEnabled && !features.contains("p07_scanline_static_cells")) {
-        }
-        const bool reverseRoleSinging = hasInlineRoles && roleSinging && !line.scanlineEnabled
-            && features.contains("p07_reverse_role_singing")
-            && std::ranges::all_of(line.chars, [&](const auto& cell) {
-                if (cell.styleIndex < 0) return true;
-                const auto& look = projected.charStyles[cell.styleIndex];
-                return look.strokeWidth == 0 && look.stroke2Width == 0
-                    && look.beforeFillPaint.mode == "solid" && look.afterFillPaint.mode == "solid"
-                    && look.decorationKindForState(false) == "none" && look.decorationKindForState(true) == "none";
-            });
-        const bool reverseBitmapGlow = mixedReverseBitmaps && features.contains("p08_reverse_bitmap_singing_glow");
-        const bool reverseSingingOutline = features.contains("p07_reverse_singing_outline")
-            && line.wipeReverse && !hasInlineRoles && !line.scanlineEnabled
-            && std::ranges::all_of(line.chars, [&](const auto& cell) {
-                return !cell.bitmapGuide || ((cell.bitmapGuide->noDecor || reverseBitmapGlow) && mixedReverseBitmaps
-                    && features.contains("p08_reverse_bitmap_singing_outline"));
-            });
-        const bool reverseSingingParticles = features.contains("p07_plain_scaled_singing_particles")
-            && features.contains("p07_reverse_singing_particles") && !line.scanlineEnabled
-            && !hasInlineRoles && !reverseSingingOutline;
-        const bool reverseHorizontalSinging = features.contains("p07_horizontal_reverse_singing")
-            && !style.vertical && !style.rightToLeft && !annotated && (!hasInlineRoles || reverseRoleSinging)
-            && line.karaokeAnimation == "utopia" && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && !line.strokeFlashEnabled && !line.zoomPulseEnabled && (line.bursts.empty() || reverseSingingParticles)
-            && ((style.strokeWidth == 0 && style.stroke2Width == 0) || reverseSingingOutline);
-        const bool unannotatedSingingPaint = features.contains("p06_unannotated_singing_paints")
-            && singingScale && !annotated && !style.vertical && !style.rightToLeft
-            && (!line.wipeReverse || reverseHorizontalSinging)
-            && !hasInlineRoles && !vectorGuides && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && (!line.zoomPulseEnabled || (!line.wipeReverse && features.contains("p06_unannotated_zoom_paints")))
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty()
-            && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none"
-            && std::ranges::none_of(line.chars, [](const auto& cell) { return bool(cell.bitmapGuide); });
         prepared.singingScale = {singingScale, line.zoomPulseEnabled, style.zoomPulseCurveLevel, style.zoomPulsePeakPct};
         if ((singingScale || ((rubyUtopiaEntry || rubyUtopiaExit) && source.contains("utopia_origin_x")))
             && annotated && !verticalSinging) {
@@ -479,14 +383,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         const bool geometry = prepared.characterGeometry.active();
         prepared.particleVisibility = {particleEntry ? effects::fallEntryLeadMs(line.entryAnimation) : 0,
                                        particleExit && exitParticleKind != "dissolve"};
-        const auto energyOrNone = [](std::string_view kind) {
-            return kind == "none" || kind == "flame" || kind == "lightning";
-        };
-        const bool outlinedEnergy = features.contains("p07_energy_transition_outlines") && !annotated
-            && energyOrNone(line.entryAnimation) && energyOrNone(line.exitAnimation)
-            && (particleEntry || particleExit);
-        const bool outlinedGeometry = !annotated && line.exitAnimation != "glow_out"
-            && features.contains("p07_outlined_character_geometry");
         prepared.rubyGeometryComposition = geometryComposition || (annotated && (geoEntry || geoExit));
         // Inside its window a geometry transition owns the cell pose, whatever else the line sings.
         prepared.geometryOwnsPose = geoEntry || geoExit;
@@ -566,8 +462,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             const auto& paint = line.chars[j].styleIndex >= 0 ? projected.charStyles[line.chars[j].styleIndex] : style;
             // A script-slot override has no effect on non-Latin cells or guides.
             const bool latin = isLatinText(line.chars[j].text);
-            if (latin) {
-            }
             if (roleFadedScanline) {
                 const auto supported = [](const PaintStyle& fill) {
                     return fill.mode == "solid" || fill.mode == "gradient_vertical";
@@ -644,17 +538,6 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
                     throw BackendError("Skia 逐字变换的版面单元轴心无效");
                 if (utopia) glyph.pivot.baseline = verticalSinging ? glyph.pivot.centerY : pivot("baseline_y");
                 if ((transforms || utopia) && (glyph.outline || glyph.outerOutline)) {
-                    const auto opaque = [](const ::subtitle::skia::SolidOutline& stroke) {
-                        return !stroke.protectBody && (stroke.before >> 24) == 255 && (stroke.after >> 24) == 255;
-                    };
-                    const bool paintedSinging = singingScale && !transforms
-                        && (unannotatedSingingPaint || (!line.zoomPulseEnabled
-                            && (features.contains("p06_utopia_main_paint") || fadedScanlineGradientFill
-                                || (roleSinging && roleBodyPaints))));
-                    const bool translucentOutline = !utopia && !geometry && !annotated && !hasInlineRoles
-                        && features.contains("p07_translucent_character_outline");
-                    const bool reverseProtectedOutline = reverseHorizontalSinging && reverseSingingOutline
-                        && singingScale && !transforms;
                     const auto ink = glyph.path.computeTightBounds();
                     glyph.pivot.inkLeft = ink.fLeft;
                     glyph.pivot.inkRight = ink.fRight;
@@ -735,35 +618,9 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,
-            {rtlRubyUnscaledMotion || horizontalShadowMotion || horizontalGlowMotion || verticalMotion,
-             lowerUnscaledMotion || lowerUtopiaMotion, movingSingingGradientFill},
             totalCells, totalGroups);
         resolveSkiaParticleAnchors(source.value("particle_box_height"), features, line, style,
                                    rubyParticles, particleSprites, imageCache, glyphs.dpr, prepared);
-        if (transforms) {
-            // Transformed cells are never wiping: entry finishes before each cell starts,
-            // exit begins after every cell ends. Overlap uses a per-glyph front (unverified).
-            const auto& fade = prepared.characterFade;
-            for (std::size_t i = 0; !allowTransformedWipe && i < prepared.cells.size(); ++i) {
-                const auto& c = prepared.cells[i];
-                const int start = c.wipePoints.empty() ? c.startMs : c.wipePoints.front().timeMs;
-                const int end = c.wipePoints.empty() ? c.endMs : c.wipePoints.back().timeMs;
-            }
-            const auto simpleTransform = [](std::string_view animation) {
-                return animation == "none" || animation == "char_drip" || animation == "spin_flip";
-            };
-            const bool simpleBodyTransform = !geometry && !annotated && !hasInlineRoles && !vectorGuides
-                && simpleTransform(line.entryAnimation) && simpleTransform(line.exitAnimation)
-                && !line.strokeFlashEnabled && !line.zoomPulseEnabled && line.bursts.empty();
-            const bool transformBand = features.contains("p07_scanline_character_transform")
-                && simpleBodyTransform && line.karaokeAnimation == "none"
-                && style.scanlineShape == "band" && (style.scanlineMode == "default" || style.scanlineMode == "color");
-            const bool wholeCellTransform = simpleBodyTransform && features.contains("p07_no_wipe_character_transform");
-            const bool directionalTransform = simpleBodyTransform && features.contains("p07_directional_character_transform")
-                && line.karaokeAnimation == "none" && !line.scanlineEnabled
-                && style.strokeWidth == 0 && style.stroke2Width == 0
-                && style.decorationKindForState(false) == "none" && style.decorationKindForState(true) == "none";
-        }
         const bool primaryOutline = style.strokeWidth > 0, secondaryOutline = style.stroke2Width > 0;
         // Drawn layers in before/after pairs: body, primary outline, outer ring.
         const PaintStyle* layers[] = {&style.beforeFillPaint, &style.afterFillPaint,
@@ -774,25 +631,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         };
         const bool gradient = anyLayer([](const PaintStyle& p) { return p.mode != "solid" && p.mode != "image"; });
         const bool image = anyLayer([](const PaintStyle& p) { return p.mode == "image"; });
-        const bool movingGradient = (fadedScanlineGradientFill || movingSingingGradientFill || brightenedScanlineGradient)
-            && !anyLayer([](const PaintStyle& paint) { return paint.mode != "solid" && paint.mode != "gradient_vertical"; });
-        const bool bitmapGuideGradientShadow = features.contains("p08_bitmap_guide_gradient_shadow");
-        const bool bitmapGuideImageShadow = features.contains("p08_bitmap_guide_image_shadow");
         const bool hasBitmapGuide = std::ranges::any_of(prepared.cells, [](const auto& cell) { return bool(cell.bitmap); });
         const bool staticShadowLine = line.entryAnimation == "none" && line.exitAnimation == "none";
-        const bool roleShadowMotion = !staticShadowLine && ordinaryLineAnimation
-            && features.contains("p07_role_shadow_line_animation");
-        const bool roleShadowRuby = staticShadowLine && features.contains("p06_role_shadow_ruby");
-        const auto solidRoleShadows = [&] {
-            return style.beforeDecorPaint.mode == "solid" && style.afterDecorPaint.mode == "solid"
-                && std::ranges::all_of(line.chars, [&](const auto& cell) {
-                    if (cell.styleIndex < 0) return true;
-                    const auto& look = projected.charStyles[cell.styleIndex];
-                    return look.beforeDecorPaint.mode == "solid" && look.afterDecorPaint.mode == "solid";
-                });
-        };
-        const bool roleSingingShadow = staticShadowLine && roleSinging && !anyReadings
-            && features.contains("p07_role_singing_shadow") && solidRoleShadows();
         // Each role keeps its own shadow (or none) on every line, as in Direct2D.
         const bool inlineShadow = roleStaticShadow && hasInlineRoles;
         prepared.shadow = skiaStaticShadow(style);
@@ -877,106 +717,13 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
                                imageCache, projected.layoutReferenceScale);
         const bool hasShadow = prepared.shadow.before.enabled || prepared.shadow.after.enabled || !prepared.cellShadows.empty();
         const bool hasDecoration = hasGlow || hasShadow;
-        const bool singingGlow = singingScale && features.contains("p07_singing_glow")
-            && (!line.zoomPulseEnabled || features.contains("p07_zoom_pulse_decoration"));
-        const bool particleGlow = (rubyParticles || fadedScanlineParticles) && !hasShadow;
-        const bool unscaledScanlineMotion = line.scanlineEnabled && line.karaokeAnimation == "none" && ordinaryLineAnimation
-            && features.contains("p07_scanline_unscaled_line_animation");
-        const bool lineGlow = (lineAnimation || lowerUnscaledMotion || unscaledScanlineMotion || horizontalGlowMotion
-            || fadeComposition || noiseComposition || warpComposition
-            || geometryComposition || rubyUtopiaEntry || rubyUtopiaExit)
-            && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled;
-        const bool flashGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
-            && features.contains("p07_composed_stroke_flash");
         // The band repaints the glyph stack above its existing static glow.
-        const bool roleScanlineGlow = features.contains("p07_role_scanline_layers")
-            && line.karaokeAnimation == "none"
-            && ((line.entryAnimation == "none" && line.exitAnimation == "none")
-                || (unscaledScanlineMotion && features.contains("p07_role_scanline_line_animation")))
-            && !line.strokeFlashEnabled && (line.bursts.empty() || features.contains("p07_role_scanline_particles"));
-        const bool scanlineGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
-            && layout.value("scanline_band_schema").toDouble(-1) >= 6
-            && (style.scanlineMode != "role" || roleScanlineGlow);
-        const bool scanlineShadow = features.contains("p07_scanline_shadow") && hasShadow && !hasGlow
-            && !style.vertical && !style.rightToLeft && !line.wipeReverse
-            && style.scanlineShape == "band" && (style.scanlineMode == "color" || style.scanlineMode == "default")
-            && line.karaokeAnimation == "none" && line.entryAnimation == "none" && line.exitAnimation == "none"
-            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty()
-            && !hasInlineRoles && !features.contains("p05_lower_ruby");
-        const bool noWipeGlow = hasGlow && !prepared.shadow.before.enabled && !prepared.shadow.after.enabled
-            && features.contains("p07_no_wipe_decoration");
-        const bool rubyMainPaint = !prepared.rubyGroups.empty() && features.contains("p06_ruby_main_paint")
-            && (!features.contains("p05_lower_ruby")
-                || (fadedScanlineParticles && features.contains("p07_lower_ruby_scanline_singing_particles")));
-        const bool singingMainPaint = unannotatedSingingPaint || movingGradient
-            || (rubyMainPaint && singingScale && !line.zoomPulseEnabled
-            && features.contains("p06_utopia_main_paint"));
-        const bool movingGradientShadow = movingSingingGradientFill && movingGradient && hasShadow && !hasGlow;
         const bool stationaryPaint = staticShadowLine && line.karaokeAnimation == "none"
             && !line.zoomPulseEnabled && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
-        const bool paintedDecoration = (stationaryPaint && !style.vertical && !style.rightToLeft && !line.wipeReverse)
-            || ((rubyMainPaint || movingGradient) && (!hasShadow || movingGradientShadow));
-        const bool verticalFade = style.vertical && features.contains("p07_vertical_decoration_fade")
-            && (line.entryAnimation == "none" || line.entryAnimation == "fade")
-            && (line.exitAnimation == "none" || line.exitAnimation == "fade");
-        const bool verticalGlowNoWipe = noWipeGlow && features.contains("p07_vertical_glow_no_wipe");
-        const bool verticalShadowNoWipe = hasShadow && prepared.noWipe && !hasGlow
-            && features.contains("p07_vertical_shadow_no_wipe");
-        const bool verticalMixedNoWipe = style.vertical && prepared.noWipe
-            && features.contains("p07_vertical_mixed_decoration_no_wipe");
-        const bool verticalScanlineDecoration = style.vertical && line.scanlineEnabled
-            && features.contains("p07_vertical_scanline_decoration");
-        const bool verticalSingingShadow = verticalSinging && features.contains("p07_vertical_singing_shadow");
-        const bool verticalDecorationAnimation = verticalFade || verticalMotion || verticalSingingAnimation;
-        const bool verticalParticleDecoration = style.vertical && features.contains("p07_vertical_decorated_singing_particles");
-        const bool verticalDecoration = style.vertical && columnDecoration
-            && (!annotated || features.contains("p06_vertical_ruby_decoration"))
-            && (!hasGlow || features.contains("p06_vertical_glow"))
-            && (!hasShadow || features.contains("p06_vertical_shadow"))
-            && (line.karaokeAnimation == "none" || (verticalSinging && (!hasShadow || verticalSingingShadow))
-                || verticalGlowNoWipe || verticalShadowNoWipe || verticalMixedNoWipe)
-            && (verticalDecorationAnimation || (line.entryAnimation == "none" && line.exitAnimation == "none"))
-            && (!line.scanlineEnabled || verticalScanlineDecoration) && !line.strokeFlashEnabled
-            && (line.bursts.empty() || verticalParticleDecoration);
-        const bool reverseVerticalDecoration = verticalDecoration && !annotated
-            && (!hasGlow || features.contains("p06_vertical_reverse_glow"))
-            && (!hasShadow || features.contains("p06_vertical_reverse_shadow"));
-        const bool reverseHorizontalNoWipe = line.wipeReverse && prepared.noWipe
-            && features.contains("p07_reverse_decoration_no_wipe");
-        const bool reverseHorizontalMotion = line.wipeReverse && ordinaryLineAnimation
-            && features.contains("p07_reverse_decoration_line_animation");
-        const bool reverseHorizontalDecoration = features.contains("p06_reverse_decoration")
-            && !style.vertical && !style.rightToLeft && !annotated
-            && (line.karaokeAnimation == "none" || reverseHorizontalNoWipe)
-            && (reverseHorizontalMotion || (line.entryAnimation == "none" && line.exitAnimation == "none"))
-            && !line.scanlineEnabled && !line.strokeFlashEnabled && line.bursts.empty();
         const bool staticPaintStack = stationaryPaint && !hasDecoration && !hasBitmapGuide && !annotated && !hasInlineRoles;
-        const bool staticDirectional = staticPaintStack && !style.vertical && style.rightToLeft != line.wipeReverse;
         const bool verticalPaints = staticPaintStack && style.vertical && !vectorGuides
             && features.contains("p06_vertical_body_paints");
-        const bool directionalPaints = staticDirectional && features.contains("p06_directional_body_paints");
-        const bool directionalOutlines = directionalPaints
-            || (staticDirectional && !gradient && !image && features.contains("p06_directional_solid_outline"));
-        const bool rtlShadow = rtlRuby && !utopia && hasShadow && features.contains("p06_rtl_ruby_shadow");
-        const bool rtlBitmapDecoration = style.rightToLeft && hasBitmapGuide
-            && features.contains("p08_rtl_bitmap_guide_decoration") && !annotated && !hasInlineRoles
-            && !vectorGuides && !line.wipeReverse && line.karaokeAnimation == "none"
-            && line.entryAnimation == "none" && line.exitAnimation == "none" && !line.scanlineEnabled
-            && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty();
-        const bool reverseSingingGlow = singingGlow && reverseHorizontalSinging && hasGlow && !hasShadow
-            && !gradientGlow && !line.scanlineEnabled && !hasInlineRoles && (!hasBitmapGuide || reverseBitmapGlow)
-            && features.contains("p07_reverse_singing_glow");
         if (!roleBodyPaints && (gradient || image)) {
-            const bool unscaledPaintFade = features.contains("p06_unscaled_paint_fade")
-                && (line.entryAnimation == "none" || line.entryAnimation == "fade")
-                && (line.exitAnimation == "none" || line.exitAnimation == "fade")
-                && line.karaokeAnimation == "none" && !line.scanlineEnabled && !line.zoomPulseEnabled
-                && line.bursts.empty() && prepared.rubyGroups.empty();
-            const bool unscaledPaintScanline = features.contains("p06_unscaled_paint_scanline")
-                && line.entryAnimation == "none" && line.exitAnimation == "none" && line.karaokeAnimation == "none"
-                && line.scanlineEnabled && style.scanlineShape == "band"
-                && (style.scanlineMode == "default" || style.scanlineMode == "color")
-                && !line.zoomPulseEnabled && line.bursts.empty() && prepared.rubyGroups.empty();
             // Image paints need no line domain: the existing GPU tiles them on the canvas.
             for (int i = 0; i < 6 && image; ++i)
                 if (layers[i] && layers[i]->mode == "image")
