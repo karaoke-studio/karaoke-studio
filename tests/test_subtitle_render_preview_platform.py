@@ -26,7 +26,7 @@ def qapp():
 def test_gpu_platform_gate_preserves_explicit_source_skia(monkeypatch, platform_name, skia, frozen, expected):
     monkeypatch.setattr(pa, 'os', SimpleNamespace(name=platform_name, environ=os.environ))
     monkeypatch.setattr(sys, 'frozen', frozen, raising=False)
-    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia' if skia else '')
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'skia' if skia else 'native')
     monkeypatch.setenv('KROK_SUBTITLE_GPU_PREVIEW', '1')
     assert pa.gpu_preview_supported() is expected
     assert pa.gpu_preview_enabled() is expected
@@ -36,7 +36,7 @@ def test_unsupported_toggle_keeps_painter_and_reports_rejection(qapp, monkeypatc
     from krok_helper.subtitle_render.frontend.preview import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview.preview_view import PreviewPanel
 
-    monkeypatch.delenv('KROK_SUBTITLE_RENDER_BACKEND', raising=False)
+    monkeypatch.setenv('KROK_SUBTITLE_RENDER_BACKEND', 'native')
     monkeypatch.setenv('KROK_SUBTITLE_GPU_PREVIEW', '1')
     monkeypatch.setenv('KROK_SUBTITLE_NATIVE_RENDER', '0')
     monkeypatch.setenv('KROK_SUBTITLE_ASYNC_PREVIEW', '1')

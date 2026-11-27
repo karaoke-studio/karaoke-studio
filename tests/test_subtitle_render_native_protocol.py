@@ -5422,23 +5422,28 @@ def test_font_preparation_resolves_other_slots_before_reporting_failure(monkeypa
 
 
 @pytest.mark.parametrize("frozen", [False, True])
-@pytest.mark.parametrize("bundled", [False, True])
+@pytest.mark.parametrize("sidecar", [False, True])
 @pytest.mark.parametrize("requested", ["", "native", "skia", " SKIA "])
-def test_skia_selection_defaults_on_only_for_packaged_sidecars(monkeypatch, tmp_path, frozen, bundled, requested):
+def test_skia_selection_defaults_on_when_sidecar_is_available(monkeypatch, tmp_path, frozen, sidecar, requested):
+    from pathlib import Path
     from krok_helper.subtitle_render.native import backend_selection
     from krok_helper.subtitle_render.native.backend import skia_requested
 
     executable = tmp_path / ("Lin-K Lyrics.exe" if sys.platform == "win32" else "Lin-K Lyrics")
     executable.write_bytes(b"")
-    if bundled:
+    if sidecar:
         name = "krok_skia_subtitle_renderer" + (".exe" if sys.platform == "win32" else "")
         (tmp_path / name).write_bytes(b"")
+    # Isolate source-mode probes away from the developer machine's real cache/build dirs.
+    monkeypatch.delenv("KROK_SUBTITLE_SKIA_RENDERER", raising=False)
+    monkeypatch.setattr(backend_selection, "_repository_root", lambda: tmp_path / "repo")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
     monkeypatch.setattr(sys, "frozen", frozen, raising=False)
     monkeypatch.setattr(sys, "executable", str(executable))
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", requested)
     choice = requested.strip().lower()
-    # An explicit choice wins; otherwise only a packaged build with its sidecar defaults to Skia.
-    expected = choice == "skia" if choice else (frozen and bundled)
+    # Explicit choice wins; otherwise both packaged and source runs default to Skia when a sidecar exists.
+    expected = choice == "skia" if choice else sidecar
     assert skia_requested() is expected
     assert skia_requested(True) is True and skia_requested(False) is False
     backend_selection.set_session_skia_backend(not expected)

@@ -18,6 +18,9 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# 测试套件默认保持 native 后端，避免依赖本机是否编过 Skia sidecar；
+# 测 Skia 或测默认行为的用例自行设置或删除该环境变量。
+os.environ.setdefault("KROK_SUBTITLE_RENDER_BACKEND", "native")
 
 # 先把 Qt/qfluentwidgets 的导入链预热好，再让 pytest 去导入测试模块。
 # 直接在 pytest 的导入环境里首次加载 PyQt6.QtSvg 会报

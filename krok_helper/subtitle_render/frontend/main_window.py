@@ -9705,13 +9705,14 @@ class SubtitleRenderWindow(QWidget):
         )
 
     def _restore_skia_backend_choice(self) -> None:
-        """打包版恢复上次的「使用 Skia 后端」；显式环境变量与源码运行不受影响。"""
+        """恢复上次持久化的「使用 Skia 后端」选择；显式环境变量优先。"""
         from krok_helper.subtitle_render.native.backend_selection import (
             RENDER_BACKEND_ENV,
             set_session_skia_backend,
+            skia_sidecar_available,
         )
 
-        if not getattr(sys, "frozen", False) or os.environ.get(RENDER_BACKEND_ENV):
+        if os.environ.get(RENDER_BACKEND_ENV) or not skia_sidecar_available():
             return
         try:
             data = self._settings_store.load()

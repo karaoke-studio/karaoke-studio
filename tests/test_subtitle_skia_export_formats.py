@@ -83,24 +83,25 @@ def test_export_page_skia_checkbox_switches_preview_and_freezes_export(binary, s
     from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
     from krok_helper.subtitle_render.frontend.preview.skia_async import SkiaAsyncSubtitleRenderer
 
+    saved_choices: list[object] = []
+
     class Settings:
         def load(self):
             return {}
 
         def save(self, state):
-            assert 'use_skia_backend' not in state.get('output', {})
+            if 'use_skia_backend' in state.get('output', {}):
+                saved_choices.append(state['output']['use_skia_backend'])
 
     monkeypatch.delenv('KROK_SUBTITLE_RENDER_BACKEND', raising=False)
     monkeypatch.setenv('KROK_SUBTITLE_SKIA_FALLBACK', 'none')
     window = SubtitleRenderWindow(embedded=True, settings_provider=Settings())
     try:
         controls = window._export_controls
-        assert not controls.skia_backend_check.isChecked()
+        assert controls.skia_backend_check.isChecked()
         track, style = supported_project
         window._timing_track = track
         window._style = style
-        controls.skia_backend_check.click()
-        assert controls.skia_backend_check.isChecked()
         controls.gpu_preview_check.setChecked(True)
         controls.gpu_export_check.setChecked(True)
         panel = window._preview_panel
@@ -130,6 +131,7 @@ def test_export_page_skia_checkbox_switches_preview_and_freezes_export(binary, s
         controls.skia_backend_check.click()
         assert not isinstance(panel.canvas._async_renderer, SkiaAsyncSubtitleRenderer)
         assert not window._build_render_job().use_skia_backend
+        assert saved_choices and saved_choices[-1] is False
         job = replace(job, width=WIDTH, height=HEIGHT, fps=30, duration_ms=1000)
         result, count = export(job, export_ffmpeg(tmp_path), 'gpu')
         assert count == 30 and any(read_png(path)[..., 3].any() for path in result.glob('*.png'))
