@@ -715,6 +715,7 @@ class PreviewPanel(DropPanel):
     """
 
     gpuFallback = Signal(str)
+    skiaFallback = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
@@ -741,6 +742,9 @@ class PreviewPanel(DropPanel):
         gpu_fallback = getattr(self._canvas, "gpuFallback", None)
         if gpu_fallback is not None:
             gpu_fallback.connect(self.gpuFallback.emit)
+        skia_fallback = getattr(self._canvas, "skiaFallback", None)
+        if skia_fallback is not None:
+            skia_fallback.connect(self.skiaFallback.emit)
         self.set_content(self._canvas)
 
     # ------------------------------------------------------------------ public

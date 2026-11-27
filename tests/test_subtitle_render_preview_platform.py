@@ -68,24 +68,98 @@ def test_unsupported_player_does_not_offer_gpu_retry(qapp, monkeypatch):
     monkeypatch.delenv('KROK_SUBTITLE_RENDER_BACKEND', raising=False)
     monkeypatch.setenv('KROK_SUBTITLE_NATIVE_RENDER', '0')
     monkeypatch.setattr(pa, 'gpu_preview_supported', lambda **_: False)
-    monkeypatch.setattr(pw, 'gpu_preview_supported', lambda: False)
+    monkeypatch.setattr(pw, 'skia_sidecar_available', lambda: False)
     owner = QWidget()
     window = pw.PreviewPlayerWindow(owner)
     try:
-        requests = []
-        window.gpuPreviewRequested.connect(lambda: requests.append(True))
-        window._set_render_backend_label('CPU')
-        assert not window._backend_label.isEnabled()
-        assert '建议开启' not in window._backend_label.text()
-        assert '当前平台' in window._backend_label.toolTip()
-        window._backend_label.click()
-        window._confirm_gpu_preview()  # Also protect programmatic requests.
-        assert requests == []
+        gpu_requests = []
+        skia_requests = []
+        window.gpuPreviewRequested.connect(lambda: gpu_requests.append(True))
+        window.skiaBackendRequested.connect(lambda: skia_requests.append(True))
+        for label in ('CPU', 'GPU'):
+            window._set_render_backend_label(label)
+            assert window._backend_label.property('backendAlert') == 'true'
+            assert not window._backend_label.isEnabled()
+            assert '建议切换' not in window._backend_label.text()
+            assert 'Skia 后端暂不可用' in window._backend_label.text()
+            assert '未找到 Skia' in window._backend_label.toolTip()
+            window._backend_label.click()
+            window._confirm_gpu_preview()  # Also protect programmatic requests.
+        assert gpu_requests == []
+        assert skia_requests == []
     finally:
         window.preview_panel.canvas.close()
         window.close()
         window.deleteLater()
         owner.deleteLater()
+        qapp.processEvents()
+
+
+def test_skia_backend_enable_syncs_gpu_toggles_and_fallback_preserves_persisted_preference(qapp, monkeypatch, tmp_path):
+    """开启 Skia 同步开启 GPU 预览与导出；运行时回退取消勾选但不覆盖磁盘持久化偏好。"""
+    from pathlib import Path
+    from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
+    from krok_helper.subtitle_render.native import skia_process
+
+    saved_outputs: list[dict[str, object]] = []
+
+    class Settings:
+        def load(self):
+            return {}
+
+        def save(self, state):
+            output = state.get("output")
+            if isinstance(output, dict):
+                saved_outputs.append(dict(output))
+
+    fake_skia = tmp_path / "krok_skia_subtitle_renderer.exe"
+    fake_skia.write_bytes(b"MZ")
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_BACKEND", "native")
+    monkeypatch.setattr(skia_process, "resolve_skia_renderer_path", lambda: fake_skia)
+
+    window = SubtitleRenderWindow(embedded=True, settings_provider=Settings())
+    try:
+        preview_calls = []
+        monkeypatch.setattr(
+            window._preview_panel,
+            "set_skia_backend_enabled",
+            lambda enabled, *, gpu_enabled: preview_calls.append((enabled, gpu_enabled)) or True,
+        )
+        # 初始处于旧渲染器且关闭 GPU 预览与 GPU 导出
+        assert not window._skia_backend_check.isChecked()
+        window._gpu_preview_check.setChecked(False)
+        window._gpu_export_check.setChecked(False)
+
+        # 通过预览窗标题栏信号切换 Skia → 同时打开 GPU 预览与 GPU 导出并持久化
+        window._preview_window.skiaBackendRequested.emit()
+        assert window._skia_backend_check.isChecked()
+        assert window._gpu_preview_check.isChecked()
+        assert window._gpu_export_check.isChecked()
+        assert preview_calls[-1] == (True, True)
+        assert saved_outputs[-1]["use_skia_backend"] is True
+        assert saved_outputs[-1]["gpu_preview_enabled"] is True
+        assert saved_outputs[-1]["gpu_export_enabled"] is True
+
+        # 运行时 Skia 回退：勾选框取消、当前导出任务随之切旧后端，但不把磁盘偏好改写为 False
+        save_count_before = len(saved_outputs)
+        window._preview_panel.skiaFallback.emit("Skia 预览后端启动或运行失败")
+        assert not window._skia_backend_check.isChecked()
+        assert len(saved_outputs) == save_count_before
+        window._save_persisted_state()
+        assert saved_outputs[-1]["use_skia_backend"] is True
+
+        # 回退后再次点击预览窗黄标可重新勾回 Skia 与双 GPU 开关
+        window._gpu_preview_check.setChecked(False)
+        window._gpu_export_check.setChecked(False)
+        window._preview_window.skiaBackendRequested.emit()
+        assert window._skia_backend_check.isChecked()
+        assert window._gpu_preview_check.isChecked()
+        assert window._gpu_export_check.isChecked()
+        assert preview_calls[-1] == (True, True)
+    finally:
+        window._preview_window.close()
+        window.close()
+        window.deleteLater()
         qapp.processEvents()
 
 

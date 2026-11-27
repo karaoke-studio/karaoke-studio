@@ -30,7 +30,7 @@ from krok_helper.subtitle_render.frontend.preview.preview_view import (
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import themed
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import FluentMessageDialog
-from krok_helper.subtitle_render.frontend.preview.preview_async import gpu_preview_supported
+from krok_helper.subtitle_render.native.backend_selection import skia_sidecar_available
 
 def fit_size_to_aspect(box: QSize, aspect_ratio: float) -> QSize:
     """把 ``box`` 缩到给定宽高比的最大内接尺寸（用于跟随画布形状的下限/建议值）。"""
@@ -165,6 +165,7 @@ class PreviewPlayerWindow(QWidget):
 
     userClosed = Signal()
     gpuPreviewRequested = Signal()
+    skiaBackendRequested = Signal()
     _TITLE_BAR_HEIGHT = 42
     _MIN_VIDEO_BOX = QSize(426, 240)
     _COLLAPSED_SIZE = QSize(220, 44)
@@ -182,6 +183,7 @@ class PreviewPlayerWindow(QWidget):
         self._last_control_move_pos: Optional[QPoint] = None
         self._collapsed = False
         self._gpu_preview_confirmation_open = False
+        self._backend_action = "none"
         self._output_aspect = 16 / 9
         self._media_title = "字幕视频预览"
         self.setWindowTitle("字幕视频预览")
@@ -307,18 +309,18 @@ class PreviewPlayerWindow(QWidget):
                     font-size: 9pt;
                     font-family: "Microsoft YaHei UI";
                 }
-                #PreviewTopControls QPushButton#PreviewBackendLabel[renderBackend="CPU"] {
+                #PreviewTopControls QPushButton#PreviewBackendLabel[backendAlert="true"] {
                     color: #653600;
                     background: #FFE2A8;
                     border: 1px solid #E4A33C;
                     font-size: 8.5pt;
                     font-weight: 600;
                 }
-                #PreviewTopControls QPushButton#PreviewBackendLabel[renderBackend="CPU"]:hover {
+                #PreviewTopControls QPushButton#PreviewBackendLabel[backendAlert="true"]:hover {
                     background: #FFD58A;
                     border-color: #F0B34A;
                 }
-                #PreviewTopControls QPushButton#PreviewBackendLabel[renderBackend="CPU"]:pressed {
+                #PreviewTopControls QPushButton#PreviewBackendLabel[backendAlert="true"]:pressed {
                     background: #F5C06A;
                 }
                 #PreviewTopControls QComboBox#PreviewQualityCombo {
@@ -522,34 +524,86 @@ class PreviewPlayerWindow(QWidget):
             self._title_label.setText(self._media_title)
 
     def _set_render_backend_label(self, label: str) -> None:
-        """跟随真实出帧后端更新指示，并突出 CPU 状态及 GPU 恢复建议。"""
-        is_cpu = label == "CPU"
-        can_request_gpu = is_cpu and gpu_preview_supported()
-        self._backend_label.setEnabled(can_request_gpu and not self._gpu_preview_confirmation_open)
+        """跟随真实出帧后端更新指示，突出旧版后端与 CPU 状态及快捷切换建议。"""
+        is_legacy_cpu = label == "CPU"
+        is_legacy_d2d = label == "GPU"
+        is_legacy = is_legacy_cpu or is_legacy_d2d
+        is_skia_cpu = label == "Skia Raster CPU"
+        is_alert = is_legacy or is_skia_cpu
+        skia_available = skia_sidecar_available() if is_legacy else False
+
+        if is_legacy:
+            action = "skia" if skia_available else "none"
+        elif is_skia_cpu:
+            action = "gpu"
+        else:
+            action = "none"
+        self._backend_action = action
+        can_trigger = action != "none"
+
+        self._backend_label.setEnabled(
+            can_trigger and not self._gpu_preview_confirmation_open
+        )
         self._backend_label.setCursor(
-            Qt.CursorShape.PointingHandCursor if can_request_gpu else Qt.CursorShape.ArrowCursor
+            Qt.CursorShape.PointingHandCursor
+            if can_trigger
+            else Qt.CursorShape.ArrowCursor
         )
         self._backend_label.setFocusPolicy(
-            Qt.FocusPolicy.StrongFocus if can_request_gpu else Qt.FocusPolicy.NoFocus
+            Qt.FocusPolicy.StrongFocus if can_trigger else Qt.FocusPolicy.NoFocus
         )
-        self._backend_label.setText(
-            ("CPU渲染中\n建议开启 GPU 渲染" if can_request_gpu else
-             "CPU渲染中\n字幕 GPU 暂不可用") if is_cpu else f"{label}渲染中"
+        if is_legacy_cpu:
+            text = (
+                "CPU渲染中\n建议切换 Skia"
+                if skia_available
+                else "CPU渲染中\nSkia 后端暂不可用"
+            )
+            tooltip = (
+                "当前使用旧版 CPU 渲染，建议在「导出」页开启「使用 Skia 后端」，"
+                "以获得完整特效支持与更高性能。\n"
+                "点击此处确认后可一键切换到 Skia 后端，并同步开启 GPU 预览与 GPU 导出。"
+                if skia_available
+                else "当前环境未找到 Skia 渲染后端，正在使用旧版 CPU 绘制。"
+                "可降低预览质量以改善流畅度。"
+            )
+        elif is_legacy_d2d:
+            text = (
+                "D2D渲染中\n建议切换 Skia"
+                if skia_available
+                else "D2D渲染中\nSkia 后端暂不可用"
+            )
+            tooltip = (
+                "当前使用旧版 D2D GPU 渲染（已停止功能更新，部分新增特效仅在 Skia 后端生效），"
+                "建议在「导出」页开启「使用 Skia 后端」。\n"
+                "点击此处确认后可一键切换到 Skia 后端，并同步开启 GPU 预览与 GPU 导出。"
+                if skia_available
+                else "当前使用旧版 D2D GPU 渲染；本地未找到 Skia 渲染后端，暂无法切换。"
+            )
+        elif is_skia_cpu:
+            text = "Skia CPU渲染中\n建议开启 GPU"
+            tooltip = (
+                "当前使用 Skia CPU（Raster）渲染，建议在「导出」页开启「使用 GPU 渲染字幕预览」，"
+                "以提升预览流畅度。\n"
+                "如果是从 Skia GPU 初始化失败自动降级到 CPU，"
+                "可以点击此处确认后重新尝试开启 GPU 渲染。"
+            )
+        else:
+            text = f"{label}渲染中"
+            tooltip = (
+                "当前实际渲染后端：Skia 渲染失败或工程包含暂不支持的功能时，"
+                "预览自动回退旧渲染器。"
+            )
+        self._backend_label.setText(text)
+        self._backend_label.setToolTip(tooltip)
+
+        alert_value = "true" if is_alert else "false"
+        props_changed = (
+            self._backend_label.property("renderBackend") != label
+            or self._backend_label.property("backendAlert") != alert_value
         )
-        self._backend_label.setToolTip(
-            "当前平台尚未提供正式 GPU 字幕渲染后端，正在使用 CPU 绘制。"
-            "可降低预览质量以改善流畅度。"
-            if is_cpu and not can_request_gpu else
-            "当前使用 CPU 渲染，建议在「导出」页开启「使用 GPU 渲染字幕预览」，"
-            "以提升预览流畅度。\n"
-            "如果是从 GPU 渲染回退到 CPU 渲染，可以尝试先关闭再开启该选项。\n"
-            "也可以点击此处，确认后重新尝试开启 GPU 渲染。"
-            if is_cpu else
-            "当前实际渲染后端：GPU 渲染器故障或工程包含暂不支持的功能时，"
-            "预览自动回退 CPU（Painter）绘制"
-        )
-        if self._backend_label.property("renderBackend") != label:
+        if props_changed:
             self._backend_label.setProperty("renderBackend", label)
+            self._backend_label.setProperty("backendAlert", alert_value)
             style = self._backend_label.style()
             style.unpolish(self._backend_label)
             style.polish(self._backend_label)
@@ -558,32 +612,48 @@ class PreviewPlayerWindow(QWidget):
         self._update_quality_label_visibility()
 
     _BACKEND_LABEL_MIN_WIDTH = 76
+    _BACKEND_ALERT_MIN_WIDTH = 128
     _BACKEND_LABEL_PADDING = 10
 
     def _fit_backend_label(self) -> None:
-        """按样式表字体实测文字宽度，避免「Vulkan GPU渲染中」等长后端名被截断。"""
+        """按样式表字体实测文字宽度，避免「Vulkan GPU渲染中」或双行提醒被截断。"""
         label = self._backend_label
-        if label.property("renderBackend") == "CPU":
-            label.setFixedSize(144, 34)
-            return
         label.ensurePolished()
         text_width = max(
             (label.fontMetrics().horizontalAdvance(line) for line in label.text().split("\n")),
             default=0,
         )
+        if label.property("backendAlert") == "true":
+            label.setFixedSize(
+                max(self._BACKEND_ALERT_MIN_WIDTH, text_width + 2 * self._BACKEND_LABEL_PADDING),
+                34,
+            )
+            return
         label.setFixedSize(
             max(self._BACKEND_LABEL_MIN_WIDTH, text_width + 2 * self._BACKEND_LABEL_PADDING),
             28,
         )
 
+    def _can_trigger_backend_action(self) -> bool:
+        if self._backend_action == "skia":
+            return skia_sidecar_available()
+        return self._backend_action == "gpu"
+
     def _confirm_gpu_preview(self) -> None:
-        if (self._backend_label.property("renderBackend") != "CPU"
-                or self._gpu_preview_confirmation_open or not gpu_preview_supported()):
+        action = self._backend_action
+        if self._gpu_preview_confirmation_open or not self._can_trigger_backend_action():
             return
         # 无蒙版、非模态确认期间避免重复点击打开多个确认框。
         self._gpu_preview_confirmation_open = True
         self._backend_label.setEnabled(False)
-        dialog = FluentMessageDialog("GPU 渲染", "是否尝试开启GPU渲染？", self)
+        if action == "skia":
+            dialog = FluentMessageDialog(
+                "Skia 后端渲染",
+                "是否切换到 Skia 后端渲染？\n将同时开启 GPU 预览与 GPU 导出。",
+                self,
+            )
+        else:
+            dialog = FluentMessageDialog("GPU 渲染", "是否尝试开启 GPU 渲染？", self)
         dialog.yesButton.setText("是")
         dialog.cancelButton.setText("否")
         try:
@@ -591,11 +661,12 @@ class PreviewPlayerWindow(QWidget):
         finally:
             dialog.deleteLater()
             self._gpu_preview_confirmation_open = False
-            self._backend_label.setEnabled(
-                self._backend_label.property("renderBackend") == "CPU" and gpu_preview_supported()
-            )
+            self._backend_label.setEnabled(self._can_trigger_backend_action())
         if confirmed:
-            self.gpuPreviewRequested.emit()
+            if action == "skia":
+                self.skiaBackendRequested.emit()
+            else:
+                self.gpuPreviewRequested.emit()
 
     def _update_quality_label_visibility(self) -> None:
         """窄窗口优先保留后端提示、质量选项和窗口按钮。"""

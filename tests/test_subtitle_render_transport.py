@@ -4522,7 +4522,7 @@ def test_preview_player_window_backend_indicator(qapp, monkeypatch, confirmed):
     )
     from krok_helper.subtitle_render.frontend.dialogs import fluent_dialogs as fd
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.preview.player_window.gpu_preview_supported",
+        "krok_helper.subtitle_render.frontend.preview.player_window.skia_sidecar_available",
         lambda: True,
     )
 
@@ -4549,26 +4549,54 @@ def test_preview_player_window_backend_indicator(qapp, monkeypatch, confirmed):
         quality_idx = layout.indexOf(window._transport_bar._preview_quality_label)
         assert title_idx < backend_idx < quality_idx
 
-        # offscreen 下画布是 Painter 异步渲染器 → 初始即 CPU。
-        assert window._backend_label.text() == "CPU渲染中\n建议开启 GPU 渲染"
-        assert "先关闭再开启" in window._backend_label.toolTip()
-        requests = []
-        window.gpuPreviewRequested.connect(lambda: requests.append(True))
+        # offscreen 下画布是 Painter 异步渲染器 → 初始即旧版 CPU，黄标提示切换 Skia。
+        assert window._backend_label.text() == "CPU渲染中\n建议切换 Skia"
+        assert window._backend_label.property("backendAlert") == "true"
+        assert "使用 Skia 后端" in window._backend_label.toolTip()
+        gpu_requests = []
+        skia_requests = []
+        window.gpuPreviewRequested.connect(lambda: gpu_requests.append(True))
+        window.skiaBackendRequested.connect(lambda: skia_requests.append(True))
         window._backend_label.click()
-        assert confirmations == ["是否尝试开启GPU渲染？"]
-        assert requests == ([True] if confirmed else [])
+        assert confirmations == ["是否切换到 Skia 后端渲染？\n将同时开启 GPU 预览与 GPU 导出。"]
+        assert skia_requests == ([True] if confirmed else [])
+        assert gpu_requests == []
         assert window._backend_label.isEnabled()
+
+        # 旧版 D2D GPU 同样黄标高亮，点击确认后切回 Skia 后端。
         window._set_render_backend_label("GPU")
-        assert window._backend_label.text() == "GPU渲染中"
+        assert window._backend_label.text() == "D2D渲染中\n建议切换 Skia"
+        assert window._backend_label.property("backendAlert") == "true"
+        assert window._backend_label.isEnabled()
         window._backend_label.click()
-        assert len(confirmations) == 1
+        assert len(confirmations) == 2
+        assert confirmations[-1] == "是否切换到 Skia 后端渲染？\n将同时开启 GPU 预览与 GPU 导出。"
+        assert skia_requests == ([True, True] if confirmed else [])
+        assert gpu_requests == []
+
+        # Skia Raster CPU 标黄提示开启 GPU，点击确认后触发 GPU 预览重试。
+        window._set_render_backend_label("Skia Raster CPU")
+        assert window._backend_label.text() == "Skia CPU渲染中\n建议开启 GPU"
+        assert window._backend_label.property("backendAlert") == "true"
+        assert window._backend_label.isEnabled()
+        window._backend_label.click()
+        assert len(confirmations) == 3
+        assert confirmations[-1] == "是否尝试开启 GPU 渲染？"
+        assert gpu_requests == ([True] if confirmed else [])
+
+        # Skia GPU / 直画正常状态：不标黄、不可点击，宽名按字体实测展开不被截断。
         long_widths = []
-        for long_label in ("Vulkan GPU", "Skia GPU 直画"):
+        for long_label in ("Skia Vulkan GPU", "Skia GPU 直画"):
             window._set_render_backend_label(long_label)
             badge = window._backend_label
+            assert badge.property("backendAlert") == "false"
+            assert not badge.isEnabled()
             assert badge.width() >= badge.fontMetrics().horizontalAdvance(badge.text()) + 8
             long_widths.append(badge.width())
-        window._set_render_backend_label("GPU")
+            badge.click()
+        assert len(confirmations) == 3
+        window._set_render_backend_label("Skia")
+        assert window._backend_label.property("backendAlert") == "false"
         assert 76 <= window._backend_label.width() < min(long_widths)
 
         window._collapse_window()

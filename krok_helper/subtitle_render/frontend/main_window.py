@@ -1774,6 +1774,9 @@ class SubtitleRenderWindow(QWidget):
         self._preview_window.gpuPreviewRequested.connect(
             self._preview_preference_controller.retry_gpu_enabled
         )
+        self._preview_window.skiaBackendRequested.connect(
+            self._request_skia_backend
+        )
         self._gpu_direct_check.toggled.connect(self._on_gpu_direct_present_changed)
         self._gpu_export_check.toggled.connect(self._on_gpu_export_changed)
         self._skia_backend_check.toggled.connect(self._on_skia_backend_changed)
@@ -4046,6 +4049,7 @@ class SubtitleRenderWindow(QWidget):
             self._transport_bar.note_preview_frame_painted
         )
         self._preview_panel.gpuFallback.connect(self._on_gpu_preview_fallback)
+        self._preview_panel.skiaFallback.connect(self._on_skia_preview_fallback)
 
         # Preserve the existing optional unified-player runtime ownership.
         self._playback: Optional[PlaybackController] = None
@@ -4199,6 +4203,7 @@ class SubtitleRenderWindow(QWidget):
     def _make_export_tab(self) -> QWidget:
         from krok_helper.subtitle_render.native.backend import skia_requested
         self._restore_skia_backend_choice()
+        self._persisted_skia_backend_preference = skia_requested()
         page = ExportWorkspaceView(
             fps_options=SCREEN_FPS_OPTIONS,
             render_worker_options=RENDER_WORKER_OPTIONS,
@@ -9733,6 +9738,32 @@ class SubtitleRenderWindow(QWidget):
             logging.getLogger(__name__).info("恢复用户偏好：关闭 Skia 字幕后端（use_skia_backend=False）")
             set_session_skia_backend(False)
 
+    def _request_skia_backend(self) -> None:
+        """从预览窗标题栏一键切换到 Skia 后端（同步启用 GPU 预览与 GPU 导出）。"""
+        if not self._skia_backend_check.isChecked():
+            self._skia_backend_check.setChecked(True)
+            return
+        self._on_skia_backend_changed(True)
+
+    def _on_skia_preview_fallback(self, _reason: str = "") -> None:
+        """Skia 预览运行时回退旧渲染器后同步取消勾选（不覆盖磁盘上的用户偏好）。"""
+        from krok_helper.subtitle_render.native.backend_selection import set_session_skia_backend
+
+        if hasattr(self, "_skia_backend_check") and self._skia_backend_check.isChecked():
+            previous = self._skia_backend_check.blockSignals(True)
+            try:
+                self._skia_backend_check.setChecked(False)
+            finally:
+                self._skia_backend_check.blockSignals(previous)
+        set_session_skia_backend(False)
+        if hasattr(self, "_property_panel"):
+            self._property_panel.set_skia_backend_enabled(False)
+        if hasattr(self, "_gpu_preview_check"):
+            gpu_controls_visible = sys.platform == "win32"
+            self._gpu_preview_check.setVisible(gpu_controls_visible)
+            self._gpu_export_check.setVisible(gpu_controls_visible)
+            self._gpu_direct_check.setVisible(gpu_controls_visible)
+
     def _on_skia_backend_changed(self, enabled: bool) -> None:
         from krok_helper.subtitle_render.native.backend_selection import set_session_skia_backend
 
@@ -9753,8 +9784,15 @@ class SubtitleRenderWindow(QWidget):
                     self._skia_backend_check.blockSignals(previous)
                 self._show_gpu_preview_fallback(str(error))
                 return
+            for checkbox in (self._gpu_preview_check, self._gpu_export_check):
+                previous = checkbox.blockSignals(True)
+                try:
+                    checkbox.setChecked(True)
+                finally:
+                    checkbox.blockSignals(previous)
         else:
             log.info("用户关闭 Skia 字幕后端，切回旧渲染器")
+        self._persisted_skia_backend_preference = bool(enabled)
         set_session_skia_backend(enabled)
         self._property_panel.set_skia_backend_enabled(enabled)
         gpu_controls_visible = sys.platform == "win32" or enabled
@@ -9858,7 +9896,8 @@ class SubtitleRenderWindow(QWidget):
 
     def _show_gpu_preview_fallback(self, message: str) -> None:
         # 回退原因常带 sidecar 错误细节（stderr 尾巴等），10s 比 6s 更容易读完。
-        title = "Skia 字幕渲染" if self._skia_backend_check.isChecked() else "GPU 预览已回退"
+        is_skia_message = self._skia_backend_check.isChecked() or "Skia" in str(message)
+        title = "Skia 字幕渲染" if is_skia_message else "GPU 预览已回退"
         logging.getLogger(__name__).warning("界面提示[%s]: %s", title, message)
         InfoBar.warning(
             title=title,
@@ -11770,7 +11809,11 @@ class SubtitleRenderWindow(QWidget):
                 gpu_export_enabled=self._gpu_export_check.isChecked(),
                 gpu_export_default_version=GPU_EXPORT_DEFAULT_VERSION,
                 gpu_direct_present=self._gpu_direct_check.isChecked(),
-                use_skia_backend=self._skia_backend_check.isChecked(),
+                use_skia_backend=getattr(
+                    self,
+                    "_persisted_skia_backend_preference",
+                    self._skia_backend_check.isChecked(),
+                ),
                 directory_mode=self._export_dir_mode,
                 custom_directory=self._export_custom_dir,
                 name_template=self._export_name_template,

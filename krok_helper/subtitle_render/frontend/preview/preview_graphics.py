@@ -310,6 +310,7 @@ class PreviewGraphicsView(QGraphicsView):
 
     framePainted = Signal()
     gpuFallback = Signal(str)
+    skiaFallback = Signal(str)
     renderBackendChanged = Signal(str)
     """实际渲染后端翻转或渲染器切换时 emit 用户可见标签（GPU / CPU）。"""
 
@@ -716,7 +717,8 @@ class PreviewGraphicsView(QGraphicsView):
             return
         self._note_frame_delivered()
         raw_reason = str(reason)
-        if self._use_skia_backend:
+        was_skia = bool(self._use_skia_backend)
+        if was_skia:
             # Skia 不支持当前工程（或 sidecar 故障）：预览自动改用旧渲染器，
             # Windows 保持 GPU（D2D），其他平台回到 CPU Painter。
             selection = getattr(self._async_renderer, "selection", None)
@@ -743,6 +745,10 @@ class PreviewGraphicsView(QGraphicsView):
         else:
             _log.warning("收到 Skia 预览错误通知（当前未启用 Skia）: reason=%s", raw_reason)
         self.renderBackendChanged.emit(self.render_backend_label())
+        if was_skia:
+            skia_fallback = getattr(self, "skiaFallback", None)
+            if skia_fallback is not None:
+                skia_fallback.emit(reason)
         self.gpuFallback.emit(reason)
 
     def _on_gpu_fallback(self, reason: str) -> None:
