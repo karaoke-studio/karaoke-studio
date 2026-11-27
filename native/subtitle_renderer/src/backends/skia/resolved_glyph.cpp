@@ -65,12 +65,21 @@ SkPath vectorGlyphPath(const VectorGlyph& glyph, double size) {
     bool open = false;
     for (const auto& command : glyph.commands) {
         const auto point = [&](std::size_t i) { return SkPoint::Make(command.values[i] * scale, command.values[i + 1] * scale); };
-        if (command.kind == 'M' && command.values.size() == 2) { builder.moveTo(point(0)); open = true; }
+        if (command.kind == 'M' && command.values.size() == 2) {
+            // Guides describe filled silhouettes. SVG import through QPainterPath
+            // loses Z markers, including in existing projects. Close each filled
+            // contour so outline expansion joins its ends instead of capping them.
+            // D2D's filled-ring outline expansion uses the same implicit closure.
+            if (open) builder.close();
+            builder.moveTo(point(0));
+            open = true;
+        }
         else if (command.kind == 'L' && command.values.size() == 2 && open) builder.lineTo(point(0));
         else if (command.kind == 'C' && command.values.size() == 6 && open) builder.cubicTo(point(0), point(2), point(4));
         else if (command.kind == 'Q' && command.values.size() == 4 && open) builder.quadTo(point(0), point(2));
         else if (command.kind == 'Z' && open) { builder.close(); open = false; }
     }
+    if (open) builder.close();
     SkPath path = builder.detach();
     if (!path.isFinite()) throw BackendError("Skia 导唱符轮廓包含非有限坐标");
     return path;

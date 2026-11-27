@@ -5036,6 +5036,14 @@ Windows 相关 **69 项通过**，含 **5 组真实 D2D GPU 对照**（关闭 WA
 下方罗马音的图片画笔接入两道描边和光晕。各层按走字前后阶段取样，缺图使用该层颜色，坏参数保留已配置的场景。IR 和 sidecar 协议同步升级到 3。Windows 两批专项分别通过 10、6 项，含实际 D2D GPU 对照。WSL 软件 Vulkan 的 X11、Wayland 各 11 项通过，两端原生 CTest 各 3 项通过。
 - 新增 `test_lower_shadow_inherits_the_unscaled_main_offset_like_actual_d2d_gpu`（同步/分开两组，改前均失败）。`test_subtitle_skia_lower_product.py` 与 `test_subtitle_skia_lower.py` 通过。
 
+### 14.427 P05 SVG 导唱符闭合处描边缺角（2026-11-27）
+
+- 用户提供的「吉他.svg」在 Skia GPU 和 Raster 中均可复现琴头缺角。SVG 导入经过 `QPainterPath` 后，闭合轮廓以回到起点的线段保存，没有 `Z`；Skia 描边把首尾当作开放路径端帽，缺少闭合处的圆角连接，并非浮点精度问题。
+- `vectorGlyphPath` 在新子路径开始前和整个路径结束时闭合填充轮廓，与 D2D 填充环扩边的隐式闭合语义一致。修复适用于已有工程中的轮廓命令，无需重新导入，不改变 IR 协议、生产默认或回退策略。sidecar 与 Quick 直画模块已重建。
+- 新增原样 SVG 夹具与 8 组回归，覆盖多子路径、直线/三次/二次曲线结尾、一重/二重描边、DPR 1/1.5；GPU 和 Raster 的隐式/显式闭合结果逐像素相同，D2D 对照轮廓满足 1px 预算。改前原样夹具失败，改后通过。
+- 用户后续确认：追加截图中的剩余缺口来自 D2D 后端。本次保留上述 Skia 闭合修复，不修改 D2D。
+- Windows 真实平台下 `test_subtitle_skia_vector_guides.py`、`test_subtitle_skia_primary_outline.py`、`test_subtitle_skia_secondary_outline.py` 共 **138 项通过**；`test_subtitle_render_guide_symbols.py` 在既有 offscreen 环境下 **133 项通过**。后者在真实 Windows 平台运行时有 12 项 Painter 位图动画尾部出现 1–2 个残留像素，不经过本次修改的 native 矢量路径。Quick 场景时钟及浮窗/离屏/导出管线对照 **2 项通过**，原生 CTest **3 项通过**。
+
 ## 15. 前期探针清理范围
 
 本次获用户明确授权清理的是本会话新增的 Skia 试验，不包括既有 D2D/native 探针、基准脚本、生产构建或 Sayatoo 安装。

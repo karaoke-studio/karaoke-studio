@@ -3,6 +3,7 @@ from dataclasses import replace
 import copy
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -113,6 +114,55 @@ def test_qt_free_guide_geometry_matches_the_gpu_contract():
     symbol = replace(SQUARE, path_commands=(('M', 0.004, -1.006),))
     glyph = table.payload[table.reference(symbol)]
     assert glyph['path_commands'][0] == ['M', 0.0, -1.01]
+
+
+@pytest.mark.parametrize('shape', ['guitar', 'open_contours'])
+@pytest.mark.parametrize('dpr', [1, 1.5])
+@pytest.mark.parametrize('layers', [1, 2])
+def test_filled_vector_guide_contours_have_closed_outline_joins(binary, project, shape, dpr, layers):
+    from krok_helper.subtitle_render.sources.guide_symbols import import_svg_guide_symbol
+    from test_subtitle_skia_outline_ruby import outlined, render_skia
+    from test_subtitle_skia_primary_outline import within_one_pixel
+
+    if shape == 'guitar':
+        # SVG import stores closeSubpath as a final line back to the start,
+        # without Z. Saved projects already contain this representation.
+        symbol = import_svg_guide_symbol(Path(__file__).parent / 'data' / 'guide_guitar.svg')
+        assert all(c[0] != 'Z' for c in symbol.path_commands)
+    else:
+        # Implicit fill closure also applies to noncoincident endpoints and
+        # to contours ending in cubic/quadratic curves, before M and at EOF.
+        symbol = replace(SQUARE, path_commands=(
+            ('M', 120, -800), ('L', 430, -500), ('L', 120, -200),
+            ('M', 550, -800), ('C', 900, -800, 900, -500, 550, -500),
+            ('M', 550, -400), ('Q', 950, -250, 550, -100)))
+    closed = []
+    for command in symbol.path_commands:
+        if command[0] == 'M' and closed:
+            closed.append(('Z',))
+        closed.append(command)
+    closed.append(('Z',))
+    track, style = guide_source(project, symbol=symbol)
+    track = replace(track, lines=[replace(track.lines[0], chars=track.lines[0].chars[:1], end_ms=2000)])
+    style = outlined(replace(style, font_size_px=150), layers)
+    explicit = replace(track, lines=[replace(track.lines[0], guide_symbol=replace(symbol, path_commands=tuple(closed)))])
+    times = (199, 200, 300)
+    implicit_frames = render_skia(binary, ir_for(binary, (track, style), dpr=dpr), times)
+    explicit_frames = render_skia(binary, ir_for(binary, (explicit, style), dpr=dpr), times)
+    for implicit, expected in zip(implicit_frames, explicit_frames, strict=True):
+        for a, b in zip(implicit, expected, strict=True):
+            assert np.array_equal(a, b), (shape, dpr, layers, 'missing contour join')
+    if sys.platform == 'win32':
+        from test_subtitle_render_gpu_backend import _render_g1_frames
+
+        with NativeRendererProcess() as process:
+            _, raw = _render_g1_frames(process, style, times, force_warp=False, track=track,
+                                      width=640, height=360, dpr=dpr, realization_enabled=False)
+        for frames in implicit_frames:
+            for time, reference, actual in zip(times, raw, frames, strict=True):
+                reference = np.frombuffer(reference, np.uint8).reshape(round(360*dpr), round(640*dpr), 4)
+                assert within_one_pixel(reference[..., 3] > 127, actual[..., 3] > 127), (
+                    shape, dpr, layers, time, int(reference[..., 3].sum()), int(actual[..., 3].sum()))
 
 
 @pytest.mark.parametrize('kind', ['prefix', 'anchored', 'replacement', 'inline'])
