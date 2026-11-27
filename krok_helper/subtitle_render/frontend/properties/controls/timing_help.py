@@ -154,6 +154,18 @@ TIMING_HELP_SPECS: dict[str, TimingHelpSpec] = {
         summary="压缩到保护底线仍冲突时：「吃掉走字」原地顶替；「抬升避让」上移整页。",
         cycle_ms=4600,
     ),
+    "force_top_bottom_n3": TimingHelpSpec(
+        key="force_top_bottom_n3",
+        title="强制顶底（N3）",
+        summary="单行底部页：开启后先把孤行压到最底行（T2），与上页同位行冲突时再上移一行；关闭则留在天然行位（T1）。",
+        cycle_ms=4400,
+    ),
+    "allow_biting": TimingHelpSpec(
+        key="allow_biting",
+        title="启用文字咬合",
+        summary="开启后允许斜体与部分标点使用负字形边距互相咬合，消除多余空隙，效果更接近 NicokaraMaker3。",
+        cycle_ms=4200,
+    ),
 }
 
 
@@ -337,11 +349,15 @@ class TimingHelpCanvas(QWidget):
             "auto_fill_section_time": self._paint_auto_fill,
             "allow_inter_page_line_overlap": self._paint_inter_page_overlap,
             "overlap_fallback_mode": self._paint_overlap_fallback,
+            "force_top_bottom_n3": self._paint_force_top_bottom_n3,
+            "allow_biting": self._paint_allow_biting,
         }
         # Custom-canvas scenes skip the standard single-lane background strip.
         custom_lane_keys = {
             "ruby_main_progress_mode",
             "overlap_fallback_mode",
+            "force_top_bottom_n3",
+            "allow_biting",
         }
         if self._key not in custom_lane_keys:
             self._paint_ruler(painter, plot_left, plot_right, ruler_bottom, p)
@@ -1498,6 +1514,294 @@ class TimingHelpCanvas(QWidget):
         )
         return ("抬升避让" if is_lift else "吃掉走字时长"), is_lift
 
+    def _paint_force_top_bottom_n3(
+        self,
+        painter: QPainter,
+        ctx: dict[str, Any],
+    ) -> tuple[str, bool]:
+        p = ctx["palette"]
+        dark = ctx["dark"]
+        accent = QColor(p.accent_primary)
+        amber = QColor("#D97706") if not dark else QColor("#FBBF24")
+        t = _ping_pong_with_holds(self._phase, hold_low=0.18, rise=0.28, hold_high=0.30)
+        is_on = t >= 0.5
+
+        gap = 12.0
+        scr_w = (ctx["width"] - gap) / 2.0
+        scr_y = 22.0
+        scr_h = 84.0
+        left_scr = QRectF(ctx["left"], scr_y, scr_w, scr_h)
+        right_scr = QRectF(ctx["left"] + scr_w + gap, scr_y, scr_w, scr_h)
+
+        # Titles above the two mini screens.
+        painter.setFont(_ui_font(7.1, bold=True))
+        painter.setPen(QColor(p.text_secondary))
+        painter.drawText(
+            QRectF(left_scr.left(), 6.0, scr_w, 15.0),
+            Qt.AlignmentFlag.AlignCenter,
+            "单行页（无冲突）",
+        )
+        painter.drawText(
+            QRectF(right_scr.left(), 6.0, scr_w, 15.0),
+            Qt.AlignmentFlag.AlignCenter,
+            "上页底行未退场（冲突）",
+        )
+
+        row1_y = scr_y + scr_h - 54.0
+        row2_y = scr_y + scr_h - 29.0
+        row_h = 17.0
+        bottom_margin_y = scr_y + scr_h - 7.0
+
+        def _draw_screen_frame(scr: QRectF) -> tuple[float, float]:
+            painter.setPen(QPen(QColor(p.card_border), 1.0))
+            painter.setBrush(QColor("#11141B"))
+            painter.drawRoundedRect(scr, 5.0, 5.0)
+
+            # Bottom anchor baseline.
+            painter.setPen(QPen(QColor(255, 255, 255, 36), 1.0, Qt.PenStyle.DotLine))
+            painter.drawLine(
+                QPointF(scr.left() + 6.0, bottom_margin_y),
+                QPointF(scr.right() - 6.0, bottom_margin_y),
+            )
+
+            slot_x = scr.left() + 26.0
+            slot_w = scr.width() - 40.0
+            painter.setFont(_ui_font(6.8, bold=True))
+            for label, ry in (("T1", row1_y), ("T2", row2_y)):
+                painter.setPen(QColor("#9CA3AF"))
+                painter.drawText(
+                    QRectF(scr.left() + 4.0, ry, 20.0, row_h),
+                    Qt.AlignmentFlag.AlignCenter,
+                    label,
+                )
+                painter.setPen(QPen(QColor(255, 255, 255, 34), 1.0, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF(slot_x, ry, slot_w, row_h), 3.0, 3.0)
+            return slot_x, slot_w
+
+        # Left screen: solo line glides down from T1 -> T2 when enabled.
+        l_slot_x, l_slot_w = _draw_screen_frame(left_scr)
+        solo_y = _lerp(row1_y, row2_y, t)
+        solo_col = QColor(
+            int(_lerp(96, accent.red(), t)),
+            int(_lerp(165, accent.green(), t)),
+            int(_lerp(250, accent.blue(), t)),
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(solo_col)
+        solo_rect = QRectF(l_slot_x + 4.0, solo_y + 1.0, l_slot_w - 8.0, row_h - 2.0)
+        painter.drawRoundedRect(solo_rect, 3.0, 3.0)
+        painter.setFont(_ui_font(7.0, bold=True))
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(solo_rect, Qt.AlignmentFlag.AlignCenter, "单行孤句")
+
+        if t > 0.12:
+            ax = left_scr.right() - 7.5
+            arrow_col = QColor(accent)
+            arrow_col.setAlpha(int(_lerp(0, 240, min(1.0, (t - 0.12) / 0.35))))
+            painter.setPen(QPen(arrow_col, 1.35))
+            painter.drawLine(QPointF(ax, row1_y + 5.0), QPointF(ax, row2_y + row_h - 6.0))
+            painter.setBrush(arrow_col)
+            painter.drawPolygon(
+                QPolygonF([
+                    QPointF(ax, row2_y + row_h - 3.0),
+                    QPointF(ax - 2.7, row2_y + row_h - 8.0),
+                    QPointF(ax + 2.7, row2_y + row_h - 8.0),
+                ])
+            )
+
+        # Right screen: T2 is occupied by previous page; enabling attempts T2 then lifts to T1.
+        r_slot_x, r_slot_w = _draw_screen_frame(right_scr)
+        prev_rect = QRectF(r_slot_x + 4.0, row2_y + 1.0, r_slot_w - 8.0, row_h - 2.0)
+        painter.setPen(QPen(QColor("#60A5FA"), 1.0))
+        painter.setBrush(QColor(59, 130, 246, 130))
+        painter.drawRoundedRect(prev_rect, 3.0, 3.0)
+        painter.setFont(_ui_font(6.8, bold=True))
+        painter.setPen(QColor("#DBEAFE"))
+        painter.drawText(prev_rect, Qt.AlignmentFlag.AlignCenter, "上页 T2 占底")
+
+        # Gentle downward probe and bounce back to T1 during transition.
+        probe_dip = 6.5 * (4.0 * t * (1.0 - t)) if 0.0 < t < 1.0 else 0.0
+        r_solo_y = row1_y + probe_dip
+        if t > 0.15:
+            # Highlight conflict border on occupied T2.
+            conflict_col = QColor(amber)
+            conflict_col.setAlpha(int(_lerp(0, 230, min(1.0, (t - 0.15) / 0.35))))
+            painter.setPen(QPen(conflict_col, 1.3, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(prev_rect.adjusted(-1.0, -1.0, 1.0, 1.0), 3.5, 3.5)
+
+            # Upward avoidance arrow from T2 -> T1.
+            ax = right_scr.right() - 7.5
+            painter.setPen(QPen(conflict_col, 1.35))
+            painter.drawLine(QPointF(ax, row2_y + row_h - 5.0), QPointF(ax, row1_y + 6.0))
+            painter.setBrush(conflict_col)
+            painter.drawPolygon(
+                QPolygonF([
+                    QPointF(ax, row1_y + 3.0),
+                    QPointF(ax - 2.7, row1_y + 8.0),
+                    QPointF(ax + 2.7, row1_y + 8.0),
+                ])
+            )
+
+        r_solo_col = QColor("#34D399" if is_on else "#60A5FA")
+        r_solo_rect = QRectF(r_slot_x + 4.0, r_solo_y + 1.0, r_slot_w - 8.0, row_h - 2.0)
+        painter.setPen(QPen(amber, 1.1) if is_on else Qt.PenStyle.NoPen)
+        painter.setBrush(r_solo_col)
+        painter.drawRoundedRect(r_solo_rect, 3.0, 3.0)
+        painter.setFont(_ui_font(7.0, bold=True))
+        painter.setPen(QColor("#0B1120" if is_on else "#FFFFFF"))
+        painter.drawText(
+            r_solo_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            "遇冲突上移 T1" if is_on else "单行孤句（T1）",
+        )
+
+        painter.setFont(_ui_font(7.2, bold=True))
+        painter.setPen(accent if is_on else QColor(p.text_secondary))
+        caption = (
+            "开启：先压到最底行（T2），与上页底行冲突再上移 T1"
+            if is_on
+            else "关闭：孤行直接显示在天然行位（T1），不强制压底"
+        )
+        painter.drawText(
+            QRectF(ctx["left"], 110.0, ctx["width"], 24.0),
+            Qt.AlignmentFlag.AlignCenter,
+            caption,
+        )
+        return ("强制顶底：开启" if is_on else "强制顶底：关闭"), is_on
+
+    def _paint_allow_biting(
+        self,
+        painter: QPainter,
+        ctx: dict[str, Any],
+    ) -> tuple[str, bool]:
+        p = ctx["palette"]
+        dark = ctx["dark"]
+        accent = QColor(p.accent_primary)
+        t = _ping_pong_with_holds(self._phase, hold_low=0.18, rise=0.28, hold_high=0.30)
+        is_on = t >= 0.5
+
+        gap = 12.0
+        stage_w = (ctx["width"] - gap) / 2.0
+        stage_y = 22.0
+        stage_h = 84.0
+        left_stage = QRectF(ctx["left"], stage_y, stage_w, stage_h)
+        right_stage = QRectF(ctx["left"] + stage_w + gap, stage_y, stage_w, stage_h)
+
+        painter.setFont(_ui_font(7.1, bold=True))
+        painter.setPen(QColor(p.text_secondary))
+        painter.drawText(
+            QRectF(left_stage.left(), 6.0, stage_w, 15.0),
+            Qt.AlignmentFlag.AlignCenter,
+            "斜体字形（负边距）",
+        )
+        painter.drawText(
+            QRectF(right_stage.left(), 6.0, stage_w, 15.0),
+            Qt.AlignmentFlag.AlignCenter,
+            "标点符号（负边距）",
+        )
+
+        outer_fill = QColor(59, 130, 246, 46)
+        outer_border = QColor("#60A5FA")
+        mid_fill = QColor(16, 185, 129, 46)
+        mid_border = QColor("#34D399")
+        bite_fill = QColor(accent.red(), accent.green(), accent.blue(), 110)
+
+        def _draw_biting_specimen(
+            stage: QRectF,
+            glyphs: tuple[str, str, str],
+            widths: tuple[float, float, float],
+            max_bite: float,
+            *,
+            italic: bool,
+            off_note: str,
+            on_note: str,
+        ) -> None:
+            painter.setPen(QPen(QColor(p.card_border), 1.0))
+            painter.setBrush(QColor("#11141B"))
+            painter.drawRoundedRect(stage, 5.0, 5.0)
+
+            box_h = 46.0
+            box_y = stage.top() + 12.0
+            bite = _lerp(0.0, max_bite, t)
+            w_l, w_m, w_r = widths
+            cx = stage.center().x()
+            mid_rect = QRectF(cx - w_m / 2.0, box_y, w_m, box_h)
+            left_rect = QRectF(mid_rect.left() - w_l + bite, box_y, w_l, box_h)
+            right_rect = QRectF(mid_rect.right() - bite, box_y, w_r, box_h)
+
+            # Glyph cell boxes.
+            for rect, fill, border in (
+                (left_rect, outer_fill, outer_border),
+                (right_rect, outer_fill, outer_border),
+                (mid_rect, mid_fill, mid_border),
+            ):
+                painter.setPen(QPen(border, 1.0, Qt.PenStyle.DashLine))
+                painter.setBrush(fill)
+                painter.drawRoundedRect(rect, 3.0, 3.0)
+
+            # Highlighted overlap ("bite") strips when negative bearing pulls boxes together.
+            if bite > 0.8:
+                for overlap in (
+                    QRectF(mid_rect.left(), box_y, bite, box_h),
+                    QRectF(mid_rect.right() - bite, box_y, bite, box_h),
+                ):
+                    painter.save()
+                    painter.setPen(QPen(accent, 1.15))
+                    painter.setBrush(bite_fill)
+                    painter.drawRect(overlap)
+                    painter.setBrush(QBrush(QColor(255, 255, 255, 95), Qt.BrushStyle.BDiagPattern))
+                    painter.drawRect(overlap)
+                    painter.restore()
+
+            # Draw crisp specimen characters centered in their cell boxes.
+            glyph_font = _ui_font(21.0 if italic else 19.0, bold=True)
+            glyph_font.setItalic(italic)
+            painter.setFont(glyph_font)
+            painter.setPen(QColor("#F8FAFC"))
+            for glyph, rect in zip(glyphs, (left_rect, mid_rect, right_rect)):
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, glyph)
+
+            # Mini indicator bar at bottom of specimen stage.
+            note_rect = QRectF(stage.left() + 6.0, stage.bottom() - 21.0, stage.width() - 12.0, 16.0)
+            painter.setFont(_ui_font(6.9, bold=True))
+            painter.setPen(accent if is_on else QColor("#9CA3AF"))
+            painter.drawText(note_rect, Qt.AlignmentFlag.AlignCenter, on_note if is_on else off_note)
+
+        _draw_biting_specimen(
+            left_stage,
+            ("V", "A", "V"),
+            (38.0, 38.0, 38.0),
+            max_bite=10.0,
+            italic=True,
+            off_note="外框相切 · 斜体空隙大",
+            on_note="→ 负边距互相咬合 ←",
+        )
+        _draw_biting_specimen(
+            right_stage,
+            ("「", "歌", "」"),
+            (36.0, 44.0, 36.0),
+            max_bite=8.0,
+            italic=False,
+            off_note="外框相切 · 标点留白宽",
+            on_note="→ 标点内收更紧凑 ←",
+        )
+
+        painter.setFont(_ui_font(7.2, bold=True))
+        painter.setPen(accent if is_on else QColor(p.text_secondary))
+        caption = (
+            "开启：允许负字形边距互相咬合，排版更紧凑贴近 N3"
+            if is_on
+            else "关闭：字形外框严格不重叠，斜体与标点两侧易留空隙"
+        )
+        painter.drawText(
+            QRectF(ctx["left"], 110.0, ctx["width"], 24.0),
+            Qt.AlignmentFlag.AlignCenter,
+            caption,
+        )
+        return ("文字咬合：开启" if is_on else "文字咬合：关闭"), is_on
+
 
 class TimingHelpPopover(QFrame):
     """Floating theme-aware card displaying the live animation and caption."""
@@ -1598,6 +1902,9 @@ class TimingHelpPopover(QFrame):
         if highlighted != self._status_highlighted:
             self._status_highlighted = highlighted
             self.setStyleSheet(self._build_qss())
+        self._status_label.adjustSize()
+        if self.layout() is not None:
+            self.layout().activate()
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802
         p = palette()

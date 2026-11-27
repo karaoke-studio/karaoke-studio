@@ -212,3 +212,56 @@ def test_layout_row_builder_routes_margin_and_biting_changes(qapp) -> None:
         {"line_y_margin_px": 36},
         {"allow_biting": True},
     ]
+
+
+def test_layout_force_top_bottom_and_biting_attach_hover_animations(qapp) -> None:
+    """布局页「强制顶底(N3)」与「启用文字咬合」悬停展示动画说明卡并拦截纯文本提示。"""
+    from PyQt6.QtCore import QEvent, QPoint
+    from PyQt6.QtGui import QHelpEvent
+
+    from krok_helper.subtitle_render.frontend.properties.controls.timing_help import (
+        TimingHelpHoverFilter,
+    )
+
+    host = _Host()
+    section = _row_builder(host).make_row_structure_section()
+    section.show()
+    qapp.processEvents()
+    try:
+        assert set(host._layout_help_hover_filters) == {
+            "force_top_bottom_n3",
+            "allow_biting",
+        }
+        for key, checkbox in (
+            ("force_top_bottom_n3", host._force_top_bottom_check),
+            ("allow_biting", host._allow_biting_check),
+        ):
+            flt = host._layout_help_hover_filters[key]
+            assert isinstance(flt, TimingHelpHoverFilter)
+            help_ev = QHelpEvent(QEvent.Type.ToolTip, QPoint(4, 4), QPoint(10, 10))
+            assert flt.eventFilter(checkbox, help_ev) is True
+            assert help_ev.isAccepted()
+
+            flt.show_popover()
+            qapp.processEvents()
+            pop = flt.popover()
+            assert pop is not None
+            assert pop.parent() is None
+            assert pop.isVisible()
+            assert pop.canvas.is_animating()
+
+            pop.canvas.set_phase(0.05)
+            img_off = pop.canvas.grab().toImage()
+            pop.canvas.set_phase(0.60)
+            img_on = pop.canvas.grab().toImage()
+            assert not img_off.isNull() and not img_on.isNull()
+            assert img_off != img_on
+
+            flt.hide_popover()
+            qapp.processEvents()
+            assert not pop.isVisible()
+            assert not pop.canvas.is_animating()
+    finally:
+        section.close()
+        section.deleteLater()
+        qapp.processEvents()

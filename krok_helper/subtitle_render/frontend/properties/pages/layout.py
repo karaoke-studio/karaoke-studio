@@ -23,6 +23,9 @@ from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     property_field,
     property_section,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.timing_help import (
+    install_timing_help_hover,
+)
 from krok_helper.subtitle_render.frontend.properties.pages.timing import timing_spin
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
 
@@ -343,6 +346,17 @@ class LayoutPropertyPageBuilder:
         host._allow_biting_check.toggled.connect(
             lambda checked: host._update_layout_field(allow_biting=checked)
         )
+
+        host._layout_help_hover_filters = {
+            "force_top_bottom_n3": install_timing_help_hover(
+                host._force_top_bottom_check,
+                "force_top_bottom_n3",
+            ),
+            "allow_biting": install_timing_help_hover(
+                host._allow_biting_check,
+                "allow_biting",
+            ),
+        }
 
         host._page_anchor_checks = QWidget(section)
         anchor_checks_layout = QHBoxLayout(host._page_anchor_checks)
