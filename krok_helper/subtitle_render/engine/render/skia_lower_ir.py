@@ -10,7 +10,7 @@ from .effects.fills import gradient_stops
 from .skia_ruby_paint_ir import ruby_decoration_kinds
 
 
-_GRADIENT_MODES = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+_GRADIENT_MODES = {'gradient_horizontal', 'gradient_vertical', 'gradient_radial', 'split_vertical'}
 
 
 def _shadow_offset(style, axis, sung):
@@ -38,8 +38,18 @@ def _split_stops(fill):
 
 def _gradient_payload(fill):
     stops = _split_stops(fill) if fill.mode == 'split_vertical' else gradient_stops(fill)
-    return {'mode': fill.mode, 'stops': [[position, color if linear_rgba(color) is not None else list(rgba(color))]
-                                        for position, color in stops]}
+    payload = {'mode': fill.mode, 'stops': [[position, color if linear_rgba(color) is not None else list(rgba(color))]
+                                            for position, color in stops]}
+    if fill.gradient_angle_deg is not None:
+        payload['gradient_angle_deg'] = round(float(fill.gradient_angle_deg) % 360.0, 3)
+    if fill.gradient_space != 'line':
+        payload['gradient_space'] = fill.gradient_space
+    if fill.mode == 'gradient_radial':
+        payload['radial_center_x_pct'] = float(fill.radial_center_x_pct)
+        payload['radial_center_y_pct'] = float(fill.radial_center_y_pct)
+        payload['radial_radius_x_pct'] = float(fill.radial_radius_x_pct)
+        payload['radial_radius_y_pct'] = float(fill.radial_radius_y_pct)
+    return payload
 
 
 def _image_payload(fill):
@@ -77,7 +87,8 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
         if fill.mode not in _GRADIENT_MODES:
             raise ValueError('Skia 下方注音文字画笔类型不支持')
         gradient = _gradient_payload(fill)
-        if legacy_vertical_gradient and fill.mode == 'gradient_vertical':
+        if (legacy_vertical_gradient and fill.mode == 'gradient_vertical'
+                and fill.gradient_angle_deg is None and fill.gradient_space == 'line'):
             gradients[phase] = gradient['stops']
         else:
             static_gradients[phase] = gradient

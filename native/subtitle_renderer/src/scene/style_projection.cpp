@@ -260,6 +260,7 @@ void applyResolvedStyle(
     target.rubyAlignment = source.rubyAlignment.toStdString();
     target.rubyMainProgressMode = source.rubyMainProgressMode.toStdString();
     target.rubyHorizontalGradientWithMain = source.rubyHorizontalGradientWithMain;
+    target.rubyColorsFollowMain = source.rubyColorsFollowMain;
     target.rubyBeforeFill = projectColor(source.rubyBaseFill.color, source.rubyBaseColor);
     target.rubyAfterFill = projectColor(source.rubyAfterFill.color, source.rubyFillColor);
     target.rubyBeforeStroke = projectColor(

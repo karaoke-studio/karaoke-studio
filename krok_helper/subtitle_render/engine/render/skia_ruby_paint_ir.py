@@ -10,7 +10,7 @@ def ruby_outlines(style):
     colors = effective_ruby_karaoke_colors(style)
     outlines = {}
     gradients = set()
-    modes = {'solid', 'gradient_horizontal', 'gradient_vertical', 'split_vertical', 'image'}
+    modes = {'solid', 'gradient_horizontal', 'gradient_vertical', 'gradient_radial', 'split_vertical', 'image'}
     for layer, width in (('stroke', ruby_stroke_width(style)), ('stroke2', ruby_stroke2_width(style))):
         if not width:
             continue

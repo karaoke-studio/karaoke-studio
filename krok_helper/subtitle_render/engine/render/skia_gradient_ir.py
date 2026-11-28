@@ -11,7 +11,7 @@ from .skia_ruby_paint_ir import ruby_decoration_kinds
 from .skia_scanline_ir import fixed_faded_utopia_band
 
 
-_GRADIENTS = {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+_GRADIENTS = {'gradient_horizontal', 'gradient_vertical', 'gradient_radial', 'split_vertical'}
 _TEXTURED = _GRADIENTS | {'image'}
 
 

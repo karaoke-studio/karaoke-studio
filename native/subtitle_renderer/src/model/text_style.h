@@ -108,6 +108,7 @@ struct TextStyle {
     std::string rubyAlignment = "auto";
     std::string rubyMainProgressMode = "checkpoint_segments";
     bool rubyHorizontalGradientWithMain = true;
+    bool rubyColorsFollowMain = true;
     RgbaColor rubyBeforeFill;
     RgbaColor rubyAfterFill{255, 90, 111, 255};
     RgbaColor rubyBeforeStroke{34, 34, 34, 255};

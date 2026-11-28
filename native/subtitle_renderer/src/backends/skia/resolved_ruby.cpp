@@ -56,31 +56,55 @@ bool matchesOutline(const OutlinePaint& outline, const PaintStyle& before, const
     // GPU then paints the paint's own colour (createPaintBrush).
     const auto supported = [allowGradient, allowHorizontal, allowSplit](const PaintStyle& paint) {
         return paint.mode == "solid" || paint.mode == "image" || (allowGradient
-            && (paint.mode == "gradient_vertical" || (allowHorizontal && paint.mode == "gradient_horizontal")
+            && (paint.mode == "gradient_vertical" || paint.mode == "gradient_radial"
+                || (allowHorizontal && paint.mode == "gradient_horizontal")
                 || (allowSplit && paint.mode == "split_vertical")));
     };
     return !outline.width || (supported(before) && supported(after)
         && outline.before == argb(before.color) && outline.after == argb(after.color));
 }
 bool rubyFillGradientMode(const PaintStyle& fill) {
-    return fill.mode == "gradient_horizontal" || fill.mode == "gradient_vertical" || fill.mode == "split_vertical";
+    return isGradientMode(fill.mode);
 }
 
 std::array<sk_sp<SkShader>, 2> rubyGradients(const std::array<const PaintStyle*, 2>& paints,
     bool shareHorizontal, const QJsonObject& line,
     const SkRect& ink, float outlinePad, double dpr,
-    const SkRect* roleBounds) {
+    const SkRect* roleMainBounds, const SkRect* roleRubyBounds, const SkRect* roleCombinedBounds,
+    bool rubyFollowsMain, float sharedOutlinePad, const SkRect& canvasBounds) {
     std::array<sk_sp<SkShader>, 2> result;
     if (ink.isEmpty()) return result;
     for (int phase = 0; phase < 2; ++phase) {
         if (!paints[phase]) continue;
         const auto& fill = *paints[phase];
         if (!rubyFillGradientMode(fill)) continue;
+        if (fill.gradientSpace == "glyph") continue;
         auto bounds = ink;
-        if (fill.mode == "gradient_horizontal" && shareHorizontal) {
-            if (roleBounds) {
-                bounds.fLeft = roleBounds->left();
-                bounds.fRight = roleBounds->right();
+        float pad = outlinePad;
+        if (rubyFollowsMain && roleCombinedBounds && !roleCombinedBounds->isEmpty()) {
+            bounds = *roleCombinedBounds;
+            pad = sharedOutlinePad;
+        } else if (roleRubyBounds && !roleRubyBounds->isEmpty()) {
+            bounds = *roleRubyBounds;
+            if (fill.mode == "gradient_horizontal" && !fill.gradientAngleDeg.has_value()
+                && fill.gradientSpace == "line" && shareHorizontal) {
+                if (roleMainBounds && !roleMainBounds->isEmpty()) {
+                    bounds.fLeft = roleMainBounds->left();
+                    bounds.fRight = roleMainBounds->right();
+                } else {
+                    const auto domain = line.value("body_gradient_bounds").toArray();
+                    if (domain.size() == 4) {
+                        bounds.fLeft = float(pivotCoordinate(domain[0]) * dpr);
+                        bounds.fRight = float(pivotCoordinate(domain[2]) * dpr);
+                    }
+                }
+                if (bounds.fRight <= bounds.fLeft) throw BackendError("Skia 上注音共享横向渐变范围无效");
+            }
+        } else if (fill.mode == "gradient_horizontal" && !fill.gradientAngleDeg.has_value()
+            && fill.gradientSpace == "line" && shareHorizontal) {
+            if (roleMainBounds && !roleMainBounds->isEmpty()) {
+                bounds.fLeft = roleMainBounds->left();
+                bounds.fRight = roleMainBounds->right();
             } else {
                 // Without a body gradient domain the reading spans its own ink.
                 const auto domain = line.value("body_gradient_bounds").toArray();
@@ -91,7 +115,7 @@ std::array<sk_sp<SkShader>, 2> rubyGradients(const std::array<const PaintStyle*,
             }
             if (bounds.fRight <= bounds.fLeft) throw BackendError("Skia 上注音共享横向渐变范围无效");
         }
-        result[phase] = ::subtitle::skia::lineGradient(fill, bounds, outlinePad);
+        result[phase] = ::subtitle::skia::lineGradient(fill, bounds, pad, canvasBounds);
     }
     return result;
 }
@@ -104,8 +128,38 @@ PaintStyle lowerGradient(const QJsonObject& authored, const char* phase, const Q
     if (authored.contains(phase)) {
         const auto paint = authored.value(phase).toObject();
         fill.mode = paint.value("mode").toString().toStdString();
-        if (paint.size() != 2 || !rubyFillGradientMode(fill) || legacy.contains(phase))
+        if (!paint.contains("mode") || !paint.contains("stops") || !rubyFillGradientMode(fill) || legacy.contains(phase))
             throw BackendError("Skia 下方注音渐变画笔无效");
+        for (auto it = paint.begin(); it != paint.end(); ++it) {
+            const auto key = it.key();
+            if (key != "mode" && key != "stops" && key != "gradient_angle_deg" && key != "gradient_space"
+                && key != "radial_center_x_pct" && key != "radial_center_y_pct"
+                && key != "radial_radius_x_pct" && key != "radial_radius_y_pct")
+                throw BackendError("Skia 下方注音渐变画笔参数无效");
+        }
+        if (paint.contains("gradient_angle_deg")) {
+            const double angle = paint.value("gradient_angle_deg").toDouble(std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(angle)) throw BackendError("Skia 下方注音渐变角度无效");
+            double deg = std::fmod(angle, 360.0);
+            if (deg < 0.0) deg += 360.0;
+            fill.gradientAngleDeg = float(deg);
+        }
+        if (paint.contains("gradient_space")) {
+            const auto space = paint.value("gradient_space").toString();
+            if (space != "line" && space != "canvas" && space != "glyph")
+                throw BackendError("Skia 下方注音渐变范围无效");
+            fill.gradientSpace = space.toStdString();
+        }
+        const auto radialPct = [&](const char* key, float fallback, double lo, double hi) {
+            if (!paint.contains(key)) return fallback;
+            const double v = paint.value(key).toDouble(std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(v)) throw BackendError("Skia 下方注音径向渐变参数无效");
+            return float(std::clamp(v, lo, hi) / 100.0);
+        };
+        fill.radialCenterX = radialPct("radial_center_x_pct", 0.5f, -50.0, 150.0);
+        fill.radialCenterY = radialPct("radial_center_y_pct", 0.5f, -50.0, 150.0);
+        fill.radialRadiusX = radialPct("radial_radius_x_pct", 0.5f, 1.0, 200.0);
+        fill.radialRadiusY = radialPct("radial_radius_y_pct", 0.5f, 1.0, 200.0);
         stops = paint.value("stops").toArray();
     } else if (legacy.contains(phase)) {
         fill.mode = "gradient_vertical";
@@ -633,47 +687,59 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
             outlineInk.fTop = float(top * glyphs.dpr);
             outlineInk.fBottom = float(bottom * glyphs.dpr);
         }
+        const SkRect canvasBounds = SkRect::MakeWH(float(scene.width), float(scene.height));
+        const bool followsMain = !lower && paint.rubyColorsFollowMain;
+        const SkRect* roleMain = roleBounds ? (lower ? &roleBounds->line : &roleBounds->forRole(role)) : nullptr;
+        const SkRect* roleRuby = (!lower && roleBounds) ? &roleBounds->forRoleRuby(role) : nullptr;
+        const SkRect* roleCombined = (!lower && roleBounds) ? &roleBounds->forRoleCombined(role) : nullptr;
+        const float sharedPad = roleBounds ? roleBounds->outlinePad : outlinePad;
         if (beforeShadowGradient || afterShadowGradient) {
             auto shaders = rubyGradients({beforeShadowGradient ? beforeShadowPaint : nullptr,
                                           afterShadowGradient ? afterShadowPaint : nullptr},
                 lower ? shadowWithMain.toBool() : paint.rubyHorizontalGradientWithMain, source, ink, outlinePad,
-                glyphs.dpr, lower ? &roleBounds->line : &roleBounds->forRole(role));
+                glyphs.dpr, roleMain, roleRuby, roleCombined, followsMain, sharedPad, canvasBounds);
             shadow.before.shader = std::move(shaders[0]);
             shadow.after.shader = std::move(shaders[1]);
         }
         const bool shareHorizontalFill = lower ? shareLowerGradient.toBool() : paint.rubyHorizontalGradientWithMain;
         const auto* sharedFillBounds = lower ? (roleBounds ? &roleBounds->line : nullptr)
-            : (allowRoleFill || independentFill) ? &roleBounds->forRole(role) : nullptr;
+            : (allowRoleFill || independentFill || roleBounds) ? roleMain : nullptr;
         auto gradients = gradientFill ? rubyGradients({&beforeFill, &afterFill},
-            shareHorizontalFill, source, ink, outlinePad, glyphs.dpr, sharedFillBounds)
+            shareHorizontalFill, source, ink, outlinePad, glyphs.dpr, sharedFillBounds,
+            roleRuby, roleCombined, followsMain, sharedPad, canvasBounds)
             : std::array<sk_sp<SkShader>, 2>{};
         std::array<sk_sp<SkShader>, 2> outlineGradients, outerOutlineGradients;
         // Lower outlines span the main line like the lower fill.
         const auto* outlineBounds = lower ? (roleBounds ? &roleBounds->line : nullptr)
-            : allowHorizontalOutline && roleBounds ? &roleBounds->forRole(role) : nullptr;
+            : (allowHorizontalOutline || roleBounds) ? roleMain : nullptr;
         const bool sharedHorizontalOutline = lower ? lowerOutlineWithMain.toBool()
             : outlineBounds && paint.rubyHorizontalGradientWithMain;
+        const std::array<const PaintStyle*, 2> strokePaints = lower
+            ? std::array<const PaintStyle*, 2>{&lowerStroke[0], &lowerStroke[1]}
+            : std::array<const PaintStyle*, 2>{&paint.rubyBeforeStrokePaint, &paint.rubyAfterStrokePaint};
+        const std::array<const PaintStyle*, 2> stroke2Paints = lower
+            ? std::array<const PaintStyle*, 2>{&lowerStroke2[0], &lowerStroke2[1]}
+            : std::array<const PaintStyle*, 2>{&paint.rubyBeforeStroke2Paint, &paint.rubyAfterStroke2Paint};
         if (gradientOutlines && primary.width)
-            outlineGradients = rubyGradients(lower ? std::array<const PaintStyle*, 2>{&lowerStroke[0], &lowerStroke[1]}
-                                                   : std::array<const PaintStyle*, 2>{&paint.rubyBeforeStrokePaint,
-                                                                                      &paint.rubyAfterStrokePaint},
-                                           sharedHorizontalOutline, source, outlineInk, outlinePad, glyphs.dpr, outlineBounds);
+            outlineGradients = rubyGradients(strokePaints,
+                                           sharedHorizontalOutline, source, outlineInk, outlinePad, glyphs.dpr, outlineBounds,
+                                           roleRuby, roleCombined, followsMain, sharedPad, canvasBounds);
         if (gradientOutlines && secondary.width)
-            outerOutlineGradients = rubyGradients(lower ? std::array<const PaintStyle*, 2>{&lowerStroke2[0], &lowerStroke2[1]}
-                                                        : std::array<const PaintStyle*, 2>{&paint.rubyBeforeStroke2Paint,
-                                                                                           &paint.rubyAfterStroke2Paint},
-                                                sharedHorizontalOutline, source, outlineInk, outlinePad, glyphs.dpr, outlineBounds);
+            outerOutlineGradients = rubyGradients(stroke2Paints,
+                                                sharedHorizontalOutline, source, outlineInk, outlinePad, glyphs.dpr, outlineBounds,
+                                                roleRuby, roleCombined, followsMain, sharedPad, canvasBounds);
         ::subtitle::skia::GlowGradients glowGradients;
         if (lowerGlowGradient) {
             glowGradients = rubyGradients({glow.before.radius > 0 ? &lowerGlowBefore : nullptr,
                                            glow.after.radius > 0 ? &lowerGlowAfter : nullptr},
                                           lowerGlowWithMain.toBool(), source, ink, outlinePad, glyphs.dpr,
-                                          roleBounds ? &roleBounds->line : nullptr);
+                                          roleBounds ? &roleBounds->line : nullptr, nullptr, nullptr, false, outlinePad,
+                                          canvasBounds);
         } else if (hasGlow && glowPaints != GlowPaintSupport::Solid && !lower) {
             glowGradients = rubyGradients({glow.before.radius > 0 ? &paint.rubyBeforeGlowPaint : nullptr,
                                            glow.after.radius > 0 ? &paint.rubyAfterGlowPaint : nullptr},
                                           paint.rubyHorizontalGradientWithMain, source, ink, outlinePad, glyphs.dpr,
-                                          roleBounds ? &roleBounds->forRole(role) : nullptr);
+                                          roleMain, roleRuby, roleCombined, followsMain, sharedPad, canvasBounds);
         }
         std::array<::subtitle::skia::ImageFill, 2> images;
         if (imageFill) {
@@ -700,6 +766,43 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                           roleGlow && !lower ? role : -1, std::move(glowGradients), rtl, utopiaExitOwner,
                           std::move(outlineGradients), std::move(outerOutlineGradients), std::move(scanlineGradients),
                           dripComposition});
+        const auto isGlyphGrad = [](const PaintStyle& p) {
+            return isGradientMode(p.mode) && p.gradientSpace == "glyph";
+        };
+        const bool anyGlyphRuby = (gradientFill && (isGlyphGrad(beforeFill) || isGlyphGrad(afterFill)))
+            || (gradientOutlines && primary.width && (isGlyphGrad(*strokePaints[0]) || isGlyphGrad(*strokePaints[1])))
+            || (gradientOutlines && secondary.width && (isGlyphGrad(*stroke2Paints[0]) || isGlyphGrad(*stroke2Paints[1])));
+        if (anyGlyphRuby) {
+            auto& grp = groups.back();
+            grp.cellPaints.reserve(grp.cells.size());
+            for (const auto& cell : grp.cells) {
+                ::subtitle::skia::BodyPaint cellPaint;
+                if (!cell.path.isEmpty()) {
+                    const SkRect cellInk = cell.path.computeTightBounds();
+                    if (!cellInk.isEmpty()) {
+                        if (gradientFill) {
+                            if (isGlyphGrad(beforeFill))
+                                cellPaint.gradients[0] = ::subtitle::skia::lineGradient(beforeFill, cellInk, outlinePad, canvasBounds);
+                            if (isGlyphGrad(afterFill))
+                                cellPaint.gradients[1] = ::subtitle::skia::lineGradient(afterFill, cellInk, outlinePad, canvasBounds);
+                        }
+                        if (gradientOutlines && primary.width) {
+                            if (isGlyphGrad(*strokePaints[0]))
+                                cellPaint.outlineGradients[0] = ::subtitle::skia::lineGradient(*strokePaints[0], cellInk, outlinePad, canvasBounds);
+                            if (isGlyphGrad(*strokePaints[1]))
+                                cellPaint.outlineGradients[1] = ::subtitle::skia::lineGradient(*strokePaints[1], cellInk, outlinePad, canvasBounds);
+                        }
+                        if (gradientOutlines && secondary.width) {
+                            if (isGlyphGrad(*stroke2Paints[0]))
+                                cellPaint.outerGradients[0] = ::subtitle::skia::lineGradient(*stroke2Paints[0], cellInk, outlinePad, canvasBounds);
+                            if (isGlyphGrad(*stroke2Paints[1]))
+                                cellPaint.outerGradients[1] = ::subtitle::skia::lineGradient(*stroke2Paints[1], cellInk, outlinePad, canvasBounds);
+                        }
+                    }
+                }
+                grp.cellPaints.push_back(std::move(cellPaint));
+            }
+        }
         groups.back().utopiaExitSpan = utopiaExitSpan;
         const auto loadLowerImages = [&](const QJsonObject& phases, const auto& active, auto& images) {
             if (!lower || !validPhases(phases))

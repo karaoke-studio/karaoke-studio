@@ -5860,8 +5860,8 @@ def test_property_panel_fill_modes_use_compact_svg_icon_buttons(qapp):
     panel = PropertyPanel()
     expected_labels = {
         "solid": "全色",
-        "gradient_horizontal": "横渐变",
-        "gradient_vertical": "纵渐变",
+        "gradient_linear": "渐变",
+        "gradient_radial": "径向",
         "split_vertical": "拼色",
         "image": "图像",
     }
@@ -5876,9 +5876,12 @@ def test_property_panel_fill_modes_use_compact_svg_icon_buttons(qapp):
         assert button.width() == button.height()
         assert button.iconSize().width() < button.width()
 
-    panel._fill_mode_pill._buttons["gradient_vertical"].click()
+    panel._fill_mode_pill._buttons["gradient_linear"].click()
     assert panel._fill_mode_combo.currentData() == "gradient_vertical"
-    assert panel._fill_mode_pill.current() == "gradient_vertical"
+    assert panel._fill_mode_pill.current() == "gradient_linear"
+    panel._fill_mode_pill._buttons["gradient_radial"].click()
+    assert panel._fill_mode_combo.currentData() == "gradient_radial"
+    assert panel._fill_mode_pill.current() == "gradient_radial"
 
 
 def test_color_fill_modes_keep_a_stable_preferred_width(qapp):

@@ -10,9 +10,15 @@ ColorFillMode = Literal[
     "solid",
     "gradient_horizontal",
     "gradient_vertical",
+    "gradient_radial",
     "split_vertical",
     "image",
 ]
+GradientSpace = Literal["line", "canvas", "glyph"]
+GRADIENT_SPACES: tuple[GradientSpace, ...] = ("line", "canvas", "glyph")
+GRADIENT_FILL_MODES: frozenset[str] = frozenset(
+    {"gradient_horizontal", "gradient_vertical", "gradient_radial", "split_vertical"}
+)
 ColorStateKey = Literal["before", "after"]
 ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow", "glow"]
 
@@ -48,7 +54,20 @@ class PaintFill:
     split_stops: list[tuple[float, str]] = field(default_factory=list)
     image_path: str = ""
     image_scale_pct: int = 100
+    gradient_angle_deg: Optional[float] = None
+    gradient_space: GradientSpace = "line"
+    radial_center_x_pct: float = 50.0
+    radial_center_y_pct: float = 50.0
+    radial_radius_x_pct: float = 50.0
+    radial_radius_y_pct: float = 50.0
     gradient_path: Optional[GradientPath] = field(default=None, metadata={"render": False})
+
+
+def effective_gradient_angle_deg(fill: PaintFill) -> float:
+    """Return the effective linear/split angle in [0, 360), preserving legacy defaults."""
+    if fill.gradient_angle_deg is not None:
+        return float(fill.gradient_angle_deg) % 360.0
+    return 0.0 if fill.mode == "gradient_horizontal" else 90.0
 
 
 def _paint_fill(

@@ -107,6 +107,7 @@ bool supportedFillMode(const QString &mode) {
     return mode == QStringLiteral("solid")
         || mode == QStringLiteral("gradient_horizontal")
         || mode == QStringLiteral("gradient_vertical")
+        || mode == QStringLiteral("gradient_radial")
         || mode == QStringLiteral("split_vertical")
         || mode == QStringLiteral("image");
 }
@@ -202,6 +203,35 @@ PaintFillSpec paintFillSpec(const QJsonObject &object, const QString &fallback) 
         1,
         intValue(object, QStringLiteral("image_scale_pct"), fill.imageScalePct)
     );
+    const QJsonValue angleValue = object.value(QStringLiteral("gradient_angle_deg"));
+    if (angleValue.isDouble()) {
+        const double parsed = angleValue.toDouble();
+        if (std::isfinite(parsed)) {
+            double deg = std::fmod(parsed, 360.0);
+            if (deg < 0.0) {
+                deg += 360.0;
+            }
+            fill.gradientAngleDeg = deg;
+        }
+    }
+    const QString space = stringValue(object, QStringLiteral("gradient_space"), QStringLiteral("line"));
+    if (space == QStringLiteral("canvas") || space == QStringLiteral("glyph")) {
+        fill.gradientSpace = space;
+    } else {
+        fill.gradientSpace = QStringLiteral("line");
+    }
+    const auto radialNumber = [&](const QString &key, double fallback, double lo, double hi) {
+        const QJsonValue v = object.value(key);
+        if (!v.isDouble()) {
+            return fallback;
+        }
+        const double parsed = v.toDouble();
+        return std::isfinite(parsed) ? std::clamp(parsed, lo, hi) : fallback;
+    };
+    fill.radialCenterXPct = radialNumber(QStringLiteral("radial_center_x_pct"), 50.0, -50.0, 150.0);
+    fill.radialCenterYPct = radialNumber(QStringLiteral("radial_center_y_pct"), 50.0, -50.0, 150.0);
+    fill.radialRadiusXPct = radialNumber(QStringLiteral("radial_radius_x_pct"), 50.0, 1.0, 200.0);
+    fill.radialRadiusYPct = radialNumber(QStringLiteral("radial_radius_y_pct"), 50.0, 1.0, 200.0);
     return fill;
 }
 
@@ -1032,6 +1062,7 @@ ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &s
         scheme.value(QStringLiteral("ruby_colors_follow_main")).isBool()
         && scheme.value(QStringLiteral("ruby_colors_follow_main")).toBool();
     if (rubyColorsFollowMain) {
+        cfg.rubyColorsFollowMain = true;
         cfg.rubyDecorationKind.clear();
         cfg.rubyDecorationKindBefore.clear();
         cfg.rubyGlowBeforeRadiusPx.reset();
@@ -1052,9 +1083,11 @@ ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &s
             refreshLegacyRubyFills(cfg);
         }
     } else if (hasObject(scheme, QStringLiteral("ruby_karaoke_colors"))) {
+        cfg.rubyColorsFollowMain = false;
         cfg.hasRubyKaraokeColors = true;
         applyRubyKaraokeColors(cfg, scheme.value(QStringLiteral("ruby_karaoke_colors")).toObject());
     } else if (hasObject(scheme, QStringLiteral("karaoke_colors")) || hasLegacyColorChanges) {
+        cfg.rubyColorsFollowMain = true;
         // Painter treats a role's main colors as that role's implicit ruby
         // colors. A global explicit ruby palette must not leak into it.
         if (cfg.hasMainKaraokeColors) {
@@ -1065,6 +1098,7 @@ ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &s
             refreshLegacyRubyFills(cfg);
         }
     } else if (!cfg.hasRubyKaraokeColors) {
+        cfg.rubyColorsFollowMain = true;
         if (cfg.hasMainKaraokeColors) {
             copyMainColorsToRuby(cfg);
         } else {
@@ -1938,6 +1972,11 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     const bool hasRubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).isObject();
     base.hasMainKaraokeColors = hasMainKaraokeColors;
     base.hasRubyKaraokeColors = hasRubyKaraokeColors;
+    if (style.value(QStringLiteral("ruby_colors_follow_main")).isBool()) {
+        base.rubyColorsFollowMain = style.value(QStringLiteral("ruby_colors_follow_main")).toBool();
+    } else {
+        base.rubyColorsFollowMain = !hasRubyKaraokeColors;
+    }
     cfg.singerStyleOverrides = style.value(QStringLiteral("singer_style_overrides")).toObject();
     cfg.customStyleSchemes = style.value(QStringLiteral("custom_style_schemes")).toObject();
     const QJsonObject mainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).toObject();

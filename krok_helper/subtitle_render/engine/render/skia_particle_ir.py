@@ -49,7 +49,7 @@ _PARTICLES = ({'twinkle', 'twinkle_classic', 'scanline', 'fireball', 'flash', 's
 _PAINTED_SPRITES = ({'twinkle', 'twinkle_classic', 'scanline', 'note', 'heart', 'sparkle', 'assemble', 'dissolve',
                      'fireball', 'flash', 'ash'} | FALLING_PARTICLES)
 _SPRITE_PAINT_MODES = {'solid', 'gradient_vertical'}
-_LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'split_vertical', 'image'}
+_LOCAL_SPRITE_PAINT_MODES = _SPRITE_PAINT_MODES | {'gradient_horizontal', 'gradient_radial', 'split_vertical', 'image'}
 _RIPPLE_PAINT_MODES = _LOCAL_SPRITE_PAINT_MODES
 
 

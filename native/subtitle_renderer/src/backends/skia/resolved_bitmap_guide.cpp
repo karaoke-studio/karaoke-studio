@@ -25,8 +25,8 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
                                                      bool allowGradientGlow) {
     // Like the GPU, an image-painted guide glow tints with the paint's main colour.
     const auto supportsGlowPaint = [](const PaintStyle& paint) {
-        return paint.mode == "solid" || paint.mode == "image" || (!paint.stops.empty()
-            && (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical"));
+        return paint.mode == "solid" || paint.mode == "image"
+            || (!paint.stops.empty() && isGradientMode(paint.mode));
     };
     const auto hasGlow = [](const std::string& kind) { return kind == "glow" || kind == "both"; };
     if (!guide.noDecor && ((hasGlow(style.decorationKindForState(false)) && !supportsGlowPaint(style.beforeGlowPaint))

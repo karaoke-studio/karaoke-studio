@@ -332,46 +332,17 @@ class _FontSampleCanvas(QWidget):
     def _brush(cls, fill, rect: QRectF) -> QBrush:
         mode = getattr(fill, "mode", "solid")
         fallback = getattr(fill, "color", "#FFFFFF")
-        if mode in {"gradient_horizontal", "gradient_vertical"}:
-            horizontal = mode == "gradient_horizontal"
-            gradient = QLinearGradient(
-                rect.left() if horizontal else rect.center().x(),
-                rect.center().y() if horizontal else rect.top(),
-                rect.right() if horizontal else rect.center().x(),
-                rect.center().y() if horizontal else rect.bottom(),
+        if mode in {
+            "gradient_horizontal",
+            "gradient_vertical",
+            "gradient_radial",
+            "split_vertical",
+        }:
+            from krok_helper.subtitle_render.engine.render.effects.fills import (
+                brush_for_fill,
             )
-            stops = list(getattr(fill, "gradient_stops", ())) or [
-                (0, getattr(fill, "start_color", fallback)),
-                (100, getattr(fill, "end_color", fallback)),
-            ]
-            for position, color in sorted(stops, key=lambda item: float(item[0])):
-                gradient.setColorAt(
-                    max(0.0, min(float(position) / 100.0, 1.0)),
-                    cls._color(color, fallback),
-                )
-            return QBrush(gradient)
-        if mode == "split_vertical":
-            gradient = QLinearGradient(
-                rect.center().x(), rect.top(), rect.center().x(), rect.bottom()
-            )
-            stops = list(getattr(fill, "split_stops", ()))
-            if len(stops) < 2:
-                split = float(getattr(fill, "split_position_pct", 50))
-                stops = [
-                    (0, getattr(fill, "split_top_color", fallback)),
-                    (split, getattr(fill, "split_bottom_color", fallback)),
-                    (100, getattr(fill, "split_bottom_color", fallback)),
-                ]
-            ordered = sorted(stops, key=lambda item: float(item[0]))
-            for index, (position, color) in enumerate(ordered):
-                ratio = max(0.0, min(float(position) / 100.0, 1.0))
-                if index and ordered[index - 1][1] != color:
-                    gradient.setColorAt(
-                        max(0.0, ratio - 0.0001),
-                        cls._color(ordered[index - 1][1], fallback),
-                    )
-                gradient.setColorAt(ratio, cls._color(color, fallback))
-            return QBrush(gradient)
+
+            return brush_for_fill(fill, rect)
         if mode == "image" and getattr(fill, "image_path", ""):
             image = QImage(str(fill.image_path))
             if not image.isNull():
@@ -580,6 +551,21 @@ class _FontSampleCanvas(QWidget):
                 ruby_rect,
                 math.ceil((ruby_stroke + ruby_stroke2) / 2),
             )
+            if bool(getattr(style, "ruby_colors_follow_main", True)) and any(
+                getattr(getattr(state, layer, None), "mode", "solid")
+                in {
+                    "gradient_horizontal",
+                    "gradient_vertical",
+                    "gradient_radial",
+                    "split_vertical",
+                }
+                and getattr(getattr(state, layer, None), "gradient_space", "line") == "line"
+                for state in (colors.before, colors.after)
+                for layer in ("text", "stroke", "stroke2")
+            ):
+                combined_fill_rect = main_fill_rect.united(ruby_fill_rect)
+                main_fill_rect = combined_fill_rect
+                ruby_fill_rect = combined_fill_rect
             ruby_colors = effective_ruby_karaoke_colors(ruby_style)
             custom_main = (
                 main_before_kind == "both"

@@ -127,7 +127,7 @@ def test_gradient_fill_page_preserves_editor_and_control_contracts(qapp) -> None
     assert host.requests[-1] == "gradient_path"
     assert host.arrangements[0][1] == {
         "vertical": False,
-        "footer": host._ruby_horizontal_gradient_with_main_check,
+        "footer": host._gradient_footer,
         "actions": host._gradient_actions_row,
     }
 
@@ -154,6 +154,7 @@ def test_split_fill_page_preserves_hard_stop_and_vertical_contracts(qapp) -> Non
     assert host._split_stop_delete_btn.toolTip() == "删除分段点"
     assert host.arrangements[0][1] == {
         "vertical": True,
+        "footer": host._split_options_row,
         "actions": host._split_actions_row,
     }
     assert page.layout() is host.arrangements[0][0][0]

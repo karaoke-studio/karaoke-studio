@@ -336,7 +336,7 @@ def test_lower_controls_and_independent_editor_keep_upper_intact(qapp, monkeypat
         assert panel.subtitle_style.lower_ruby_style["ruby_latin_font_size_px"] == 56
         assert updates[-1] == panel.subtitle_style
         editor._color_tab_panel._buttons[("left", "before")].click()
-        editor._fill_mode_pill._buttons["gradient_vertical"].click()
+        editor._fill_mode_pill._buttons["gradient_linear"].click()
         assert editor.subtitle_style.ruby_karaoke_colors.before.text.mode == "gradient_vertical"
         assert panel.subtitle_style.lower_ruby_style["ruby_karaoke_colors"]["before"]["text"]["mode"] == "gradient_vertical"
         editor._set_ruby_color_controls_visible(True)

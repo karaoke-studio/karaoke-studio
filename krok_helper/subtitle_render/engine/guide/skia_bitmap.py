@@ -119,7 +119,7 @@ def _has_bitmap_gradient_glow(item):
         before = style.decoration_kind_before or before
     phases = ((before, colors.before), (style.decoration_kind, colors.after))
     return (any(kind in {'glow', 'both'}
-                and (phase.glow or phase.shadow).mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+                and (phase.glow or phase.shadow).mode in {'gradient_horizontal', 'gradient_vertical', 'gradient_radial', 'split_vertical'}
                 for kind, phase in phases)
             and has_bitmap_guides((item.render_line,)))
 

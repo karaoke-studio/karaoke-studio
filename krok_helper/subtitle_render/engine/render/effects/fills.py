@@ -7,9 +7,14 @@ from collections import OrderedDict
 from threading import Lock
 
 from PyQt6.QtCore import QPointF, QRectF
-from PyQt6.QtGui import QColor, QBrush, QImage, QLinearGradient, QTransform
+from PyQt6.QtGui import QColor, QBrush, QImage, QLinearGradient, QRadialGradient, QTransform
 
-from krok_helper.subtitle_render.domain.paint import KaraokeColorState, PaintFill
+from krok_helper.subtitle_render.domain.paint import (
+    GRADIENT_FILL_MODES,
+    KaraokeColorState,
+    PaintFill,
+    effective_gradient_angle_deg,
+)
 from krok_helper.subtitle_render.domain.color import display_hex, linear_rgba
 from krok_helper.subtitle_render.engine.render.image_resource import (
     image_file_signature,
@@ -38,7 +43,11 @@ def fill_brush_rect(
     horizontal_rect: QRectF | None,
 ) -> QRectF:
     """Use the shared ruby/main box only for horizontal gradients."""
-    if fill.mode == "gradient_horizontal" and horizontal_rect is not None:
+    if (
+        fill.mode == "gradient_horizontal"
+        and fill.gradient_angle_deg is None
+        and horizontal_rect is not None
+    ):
         return horizontal_rect
     return rect
 
@@ -49,12 +58,15 @@ def brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
         if brush is not None:
             return brush
 
-    if fill.mode == "gradient_horizontal":
-        return linear_gradient_brush(fill, rect, 0)
-    if fill.mode == "gradient_vertical":
-        return linear_gradient_brush(fill, rect, 90)
+    if fill.mode in {"gradient_horizontal", "gradient_vertical"}:
+        return linear_gradient_brush(fill, rect, effective_gradient_angle_deg(fill))
+    if fill.mode == "gradient_radial":
+        return radial_gradient_brush(fill, rect)
     if fill.mode == "split_vertical":
-        return split_vertical_brush(fill, rect)
+        angle = effective_gradient_angle_deg(fill)
+        if abs((angle % 360.0) - 90.0) < 1e-6 and fill.gradient_angle_deg is None:
+            return split_vertical_brush(fill, rect)
+        return split_angled_brush(fill, rect, angle)
     return QBrush(valid_color(fill.color, "#FFFFFF"))
 
 
@@ -62,7 +74,7 @@ def fill_is_alpha(fill: PaintFill) -> bool:
     """Return whether N3 protects the glyph body from its primary edge."""
     if fill.mode == "image":
         return True
-    if fill.mode in {"gradient_horizontal", "gradient_vertical"}:
+    if fill.mode in {"gradient_horizontal", "gradient_vertical", "gradient_radial"}:
         colors = [color for _position, color in gradient_stops(fill)]
     elif fill.mode == "split_vertical":
         colors = [color for _position, color in split_gradient_stops(fill)]
@@ -125,8 +137,8 @@ def cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
     return image
 
 
-def linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBrush:
-    angle = math.radians(angle_deg % 360)
+def linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: float) -> QBrush:
+    angle = math.radians(float(angle_deg) % 360.0)
     dx = math.cos(angle)
     dy = math.sin(angle)
     projection = abs(rect.width() * dx) + abs(rect.height() * dy)
@@ -140,6 +152,58 @@ def linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBru
     gradient = QLinearGradient(start, end)
     for position, color in gradient_stops(fill):
         gradient.setColorAt(position / 100.0, valid_color(color, fill.color))
+    return QBrush(gradient)
+
+
+def radial_gradient_brush(fill: PaintFill, rect: QRectF) -> QBrush:
+    cx = rect.left() + rect.width() * (float(fill.radial_center_x_pct) / 100.0)
+    cy = rect.top() + rect.height() * (float(fill.radial_center_y_pct) / 100.0)
+    rx = max(rect.width() * (float(fill.radial_radius_x_pct) / 100.0), 1e-4)
+    ry = max(rect.height() * (float(fill.radial_radius_y_pct) / 100.0), 1e-4)
+    gradient = QRadialGradient(QPointF(0.0, 0.0), 1.0)
+    for position, color in gradient_stops(fill):
+        gradient.setColorAt(position / 100.0, valid_color(color, fill.color))
+    brush = QBrush(gradient)
+    transform = QTransform()
+    transform.translate(cx, cy)
+    transform.scale(rx, ry)
+    brush.setTransform(transform)
+    return brush
+
+
+def split_angled_brush(fill: PaintFill, rect: QRectF, angle_deg: float) -> QBrush:
+    """Hard-band linear gradient at an arbitrary angle with ~1px diagonal AA."""
+    angle = math.radians(float(angle_deg) % 360.0)
+    dx = math.cos(angle)
+    dy = math.sin(angle)
+    projection = abs(rect.width() * dx) + abs(rect.height() * dy)
+    if projection <= 0:
+        projection = max(rect.width(), rect.height(), 1.0)
+    half = projection / 2.0
+    center = rect.center()
+    start = QPointF(center.x() - dx * half, center.y() - dy * half)
+    end = QPointF(center.x() + dx * half, center.y() + dy * half)
+
+    stops = split_gradient_stops(fill)
+    axis_aligned = abs((float(angle_deg) % 90.0)) < 1e-4 or abs((float(angle_deg) % 90.0) - 90.0) < 1e-4
+    softness = 0.0001 if axis_aligned else min(0.015, 0.5 / max(projection, 1.0))
+
+    gradient = QLinearGradient(start, end)
+    prev_pos = 0.0
+    for idx, (position, color) in enumerate(stops):
+        ratio = max(0.0, min(float(position) / 100.0, 1.0))
+        qcolor = valid_color(color, fill.color)
+        if idx > 0 and stops[idx - 1][1] != color:
+            prev_color = valid_color(stops[idx - 1][1], fill.color)
+            lo = max(prev_pos, ratio - softness)
+            hi = min(1.0, max(lo, ratio + (0.0 if axis_aligned else softness)))
+            gradient.setColorAt(lo, prev_color)
+            gradient.setColorAt(hi, qcolor)
+            prev_pos = hi
+        else:
+            pos = max(prev_pos, ratio)
+            gradient.setColorAt(pos, qcolor)
+            prev_pos = pos
     return QBrush(gradient)
 
 
@@ -224,6 +288,12 @@ def fill_signature(fill: PaintFill) -> tuple:
         tuple(fill.split_stops),
         fill.image_path,
         fill.image_scale_pct,
+        fill.gradient_angle_deg,
+        fill.gradient_space,
+        fill.radial_center_x_pct,
+        fill.radial_center_y_pct,
+        fill.radial_radius_x_pct,
+        fill.radial_radius_y_pct,
     )
 
 

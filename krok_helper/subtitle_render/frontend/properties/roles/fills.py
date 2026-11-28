@@ -8,12 +8,15 @@ from typing import Any, Callable, Optional
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import (
+    QBrush,
     QColor,
     QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
     QPolygonF,
+    QRadialGradient,
+    QTransform,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -21,6 +24,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -46,6 +50,9 @@ from krok_helper.subtitle_render.frontend.properties.color_controls import (
     _normalize_hex,
     _parse_hex_color,
     display_color,
+)
+from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
+    WheelFocusedComboBox,
 )
 from krok_helper.subtitle_render.frontend.properties.controls.layout import (
     compact_property_control,
@@ -760,8 +767,361 @@ def _split_stops(fill: PaintFill) -> list[tuple[float, str]]:
 
 
 
+class RadialGradientPad(QWidget):
+    """Interactive WYSIWYG pad for dragging radial gradient center and ellipse radii.
+
+    The inner dashed rectangle represents the target text box (0%..100%).
+    During a drag the coordinate frame stays frozen for 1:1 jitter-free tracking
+    (even if the pointer leaves the widget); on release the viewport auto-fits
+    so the text box, full ellipse, and all handles remain visible and grabbable.
+    """
+
+    geometryChanged = Signal(float, float, float, float)
+
+    _PAD_MARGIN_X = 12.0
+    _PAD_MARGIN_Y = 12.0
+    _CENTER_RADIUS = 6.0
+    _HANDLE_RADIUS = 5.0
+    _CENTER_MIN = -50.0
+    _CENTER_MAX = 150.0
+    _RADIUS_MIN = 1.0
+    _RADIUS_MAX = 200.0
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._stops: list[tuple[float, str]] = [(0.0, "#FFFFFF"), (100.0, "#FF5A6F")]
+        self._cx = 50.0
+        self._cy = 50.0
+        self._rx = 50.0
+        self._ry = 50.0
+        self._lock_aspect = True
+        self._drag_handle: Optional[str] = None
+        self._drag_box: Optional[QRectF] = None
+        self._hover_handle: Optional[str] = None
+        self._hovered = False
+        self.setFixedHeight(104)
+        self.setMinimumWidth(140)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMouseTracking(True)
+        self.setToolTip(
+            "拖动蓝色中心点调整位置（可移出文字框外），拖动边缘手柄调整横/纵半径；松开自动适配视野，双击恢复居中"
+        )
+
+    @property
+    def lock_aspect(self) -> bool:
+        return self._lock_aspect
+
+    def set_lock_aspect(self, locked: bool) -> None:
+        self._lock_aspect = bool(locked)
+
+    def set_stops(self, stops: list[tuple[float, str]]) -> None:
+        normalized = _normalize_gradient_stops(stops)
+        if normalized != self._stops:
+            self._stops = normalized
+            self.update()
+
+    def set_geometry_values(
+        self, cx: float, cy: float, rx: float, ry: float
+    ) -> None:
+        cx = max(self._CENTER_MIN, min(self._CENTER_MAX, float(cx)))
+        cy = max(self._CENTER_MIN, min(self._CENTER_MAX, float(cy)))
+        rx = max(self._RADIUS_MIN, min(self._RADIUS_MAX, float(rx)))
+        ry = max(self._RADIUS_MIN, min(self._RADIUS_MAX, float(ry)))
+        if (
+            abs(cx - self._cx) < 1e-4
+            and abs(cy - self._cy) < 1e-4
+            and abs(rx - self._rx) < 1e-4
+            and abs(ry - self._ry) < 1e-4
+        ):
+            return
+        self._cx, self._cy, self._rx, self._ry = cx, cy, rx, ry
+        self.update()
+
+    def reset_geometry(self) -> None:
+        self._drag_handle = None
+        self._drag_box = None
+        self._cx, self._cy, self._rx, self._ry = 50.0, 50.0, 50.0, 50.0
+        self.update()
+        self.geometryChanged.emit(self._cx, self._cy, self._rx, self._ry)
+
+    def _pad_rect(self) -> QRectF:
+        return QRectF(1.0, 1.0, max(self.width() - 2.0, 1.0), max(self.height() - 2.0, 1.0))
+
+    def _box_rect(self) -> QRectF:
+        if self._drag_box is not None:
+            return self._drag_box
+        pad = self._pad_rect()
+        inner = pad.adjusted(
+            self._PAD_MARGIN_X,
+            self._PAD_MARGIN_Y,
+            -self._PAD_MARGIN_X,
+            -self._PAD_MARGIN_Y,
+        )
+        if inner.width() <= 1.0 or inner.height() <= 1.0:
+            return inner
+        cx = self._cx / 100.0
+        cy = self._cy / 100.0
+        rx = self._rx / 100.0
+        ry = self._ry / 100.0
+        # Fit both the [0, 1] text box and the full ellipse + handles inside inner.
+        min_x = min(0.0, cx - rx)
+        max_x = max(1.0, cx + rx)
+        min_y = min(0.0, cy - ry)
+        max_y = max(1.0, cy + ry)
+        span_x = max(max_x - min_x, 1.0)
+        span_y = max(max_y - min_y, 1.0)
+        box_w = inner.width() / span_x
+        box_h = inner.height() / span_y
+        box_left = inner.left() + (0.0 - min_x) * box_w
+        box_top = inner.top() + (0.0 - min_y) * box_h
+        return QRectF(box_left, box_top, box_w, box_h)
+
+    def _center_point(self) -> QPointF:
+        box = self._box_rect()
+        return QPointF(
+            box.left() + box.width() * (self._cx / 100.0),
+            box.top() + box.height() * (self._cy / 100.0),
+        )
+
+    def _rx_handle_point(self) -> QPointF:
+        box = self._box_rect()
+        center = self._center_point()
+        return QPointF(center.x() + box.width() * (self._rx / 100.0), center.y())
+
+    def _ry_handle_point(self) -> QPointF:
+        box = self._box_rect()
+        center = self._center_point()
+        return QPointF(center.x(), center.y() + box.height() * (self._ry / 100.0))
+
+    def _hit_test(self, pos: QPointF) -> Optional[str]:
+        def dist(a: QPointF, b: QPointF) -> float:
+            return math.hypot(a.x() - b.x(), a.y() - b.y())
+
+        if dist(pos, self._center_point()) <= 11.0:
+            return "center"
+        if dist(pos, self._rx_handle_point()) <= 10.0:
+            return "rx"
+        if dist(pos, self._ry_handle_point()) <= 10.0:
+            return "ry"
+        return None
+
+    def _update_cursor(self, handle: Optional[str]) -> None:
+        if self._drag_handle == "center":
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif handle == "rx" or self._drag_handle == "rx":
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        elif handle == "ry" or self._drag_handle == "ry":
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        elif handle == "center":
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pad = self._pad_rect()
+            box = self._box_rect()
+            center = self._center_point()
+            rx_px = max(box.width() * (self._rx / 100.0), 1.0)
+            ry_px = max(box.height() * (self._ry / 100.0), 1.0)
+
+            clip = QPainterPath()
+            clip.addRoundedRect(pad, 6.0, 6.0)
+            painter.save()
+            painter.setClipPath(clip)
+
+            # Subtle checkerboard underneath translucent gradients.
+            if any(display_color(c).alpha() < 255 for _p, c in self._stops):
+                cell = 8
+                c1, c2 = QColor("#E5E7EB"), QColor("#FFFFFF")
+                cols = int(math.ceil(pad.width() / cell))
+                rows = int(math.ceil(pad.height() / cell))
+                for r in range(rows):
+                    for col in range(cols):
+                        painter.fillRect(
+                            QRectF(pad.left() + col * cell, pad.top() + r * cell, cell, cell),
+                            c1 if (r + col) % 2 == 0 else c2,
+                        )
+
+            gradient = QRadialGradient(QPointF(0.0, 0.0), 1.0)
+            for position, color in self._stops:
+                gradient.setColorAt(position / 100.0, display_color(color))
+            brush = QBrush(gradient)
+            transform = QTransform()
+            transform.translate(center.x(), center.y())
+            transform.scale(rx_px, ry_px)
+            brush.setTransform(transform)
+            painter.fillRect(pad, brush)
+
+            # Dim area outside the 0%..100% text box lightly so the text region stays unmistakable.
+            outside = QPainterPath()
+            outside.addRect(pad)
+            inner_text = QPainterPath()
+            inner_text.addRect(box)
+            painter.fillPath(outside.subtracted(inner_text), QColor(17, 24, 39, 34))
+
+            # Inner text-box reference frame (0%..100%).
+            frame_pen = QPen(QColor(0, 0, 0, 95), 1.0, Qt.PenStyle.DotLine)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(frame_pen)
+            painter.drawRect(box)
+            painter.setPen(QPen(QColor(255, 255, 255, 165), 1.0, Qt.PenStyle.DotLine))
+            painter.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5))
+
+            # Dashed ellipse for 100% stop boundary.
+            ellipse_rect = QRectF(
+                center.x() - rx_px, center.y() - ry_px, rx_px * 2.0, ry_px * 2.0
+            )
+            painter.setPen(QPen(QColor(0, 0, 0, 120), 2.2, Qt.PenStyle.DashLine))
+            painter.drawEllipse(ellipse_rect)
+            painter.setPen(QPen(QColor(255, 255, 255, 230), 1.2, Qt.PenStyle.DashLine))
+            painter.drawEllipse(ellipse_rect)
+
+            rx_pt = self._rx_handle_point()
+            ry_pt = self._ry_handle_point()
+            guide_pen = QPen(QColor(255, 255, 255, 175), 1.0)
+            painter.setPen(guide_pen)
+            painter.drawLine(center, rx_pt)
+            painter.drawLine(center, ry_pt)
+
+            for name, pt in (("rx", rx_pt), ("ry", ry_pt)):
+                active = self._drag_handle == name or self._hover_handle == name
+                r = self._HANDLE_RADIUS + (1.0 if active else 0.0)
+                painter.setBrush(QColor("#FFFFFF"))
+                painter.setPen(
+                    QPen(QColor("#0B84FF" if active else "#1F2937"), 1.8)
+                )
+                painter.drawEllipse(pt, r, r)
+
+            center_active = self._drag_handle == "center" or self._hover_handle == "center"
+            cr = self._CENTER_RADIUS + (1.0 if center_active else 0.0)
+            painter.setBrush(QColor("#0B84FF"))
+            painter.setPen(QPen(QColor("#FFFFFF"), 2.0))
+            painter.drawEllipse(center, cr, cr)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(0, 0, 0, 110), 0.9))
+            painter.drawEllipse(center, cr + 1.0, cr + 1.0)
+
+            if self._hovered or self._drag_handle is not None:
+                badge = f"{self._cx:.0f}%, {self._cy:.0f}% · {self._rx:.0f}%×{self._ry:.0f}%"
+                font = painter.font()
+                font.setPixelSize(10)
+                painter.setFont(font)
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(badge) + 10
+                th = fm.height() + 4
+                pill = QRectF(pad.left() + 5.0, pad.top() + 5.0, tw, th)
+                painter.setBrush(QColor(17, 24, 39, 170))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(pill, 4.0, 4.0)
+                painter.setPen(QColor("#FFFFFF"))
+                painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, badge)
+
+            painter.restore()
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QColor(palette().card_border))
+            painter.drawRoundedRect(pad, 6.0, 6.0)
+        finally:
+            painter.end()
+
+    def _apply_drag(self, pos: QPointF, modifiers: Qt.KeyboardModifier) -> None:
+        box = self._box_rect()
+        if box.width() <= 0.0 or box.height() <= 0.0:
+            return
+        uniform = self._lock_aspect or bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        if self._drag_handle == "center":
+            self._cx = round(
+                max(
+                    self._CENTER_MIN,
+                    min(self._CENTER_MAX, (pos.x() - box.left()) / box.width() * 100.0),
+                ),
+                1,
+            )
+            self._cy = round(
+                max(
+                    self._CENTER_MIN,
+                    min(self._CENTER_MAX, (pos.y() - box.top()) / box.height() * 100.0),
+                ),
+                1,
+            )
+        elif self._drag_handle == "rx":
+            center = self._center_point()
+            rx = round(
+                max(
+                    self._RADIUS_MIN,
+                    min(self._RADIUS_MAX, abs(pos.x() - center.x()) / box.width() * 100.0),
+                ),
+                1,
+            )
+            self._rx = rx
+            if uniform:
+                self._ry = rx
+        elif self._drag_handle == "ry":
+            center = self._center_point()
+            ry = round(
+                max(
+                    self._RADIUS_MIN,
+                    min(self._RADIUS_MAX, abs(pos.y() - center.y()) / box.height() * 100.0),
+                ),
+                1,
+            )
+            self._ry = ry
+            if uniform:
+                self._rx = ry
+        self.update()
+        self.geometryChanged.emit(self._cx, self._cy, self._rx, self._ry)
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self._hover_handle = None
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = event.position()
+        hit = self._hit_test(pos)
+        self._drag_box = self._box_rect()
+        self._drag_handle = hit or "center"
+        self._update_cursor(self._drag_handle)
+        self._apply_drag(pos, event.modifiers())
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        pos = event.position()
+        if self._drag_handle is not None:
+            self._apply_drag(pos, event.modifiers())
+            return
+        hit = self._hit_test(pos)
+        if hit != self._hover_handle:
+            self._hover_handle = hit
+            self.update()
+        self._update_cursor(hit)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._drag_handle is not None:
+            self._drag_handle = None
+            self._drag_box = None
+            self._hover_handle = self._hit_test(event.position())
+            self._update_cursor(self._hover_handle)
+            self.update()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.reset_geometry()
+
+
 class RoleFillPagesBuilder:
     """Build fill editors while color mutations remain on the panel host."""
+
+    _SPACE_ITEMS = (("整行", "line"), ("单字", "glyph"))
 
     def __init__(
         self,
@@ -771,12 +1131,46 @@ class RoleFillPagesBuilder:
         color_button_factory: Callable[..., Any] | None = None,
         double_spin_factory: Callable[..., Any] | None = None,
         spin_factory: Callable[..., Any] | None = None,
+        combo_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._host = host
         self._gradient_editor_factory = gradient_editor_factory
         self._color_button_factory = color_button_factory
         self._double_spin_factory = double_spin_factory
         self._spin_factory = spin_factory
+        self._combo_factory = combo_factory or WheelFocusedComboBox
+
+    def _make_space_combo(self, parent: QWidget) -> Any:
+        combo = self._combo_factory(parent)
+        compact_property_control(combo)
+        for label, value in self._SPACE_ITEMS:
+            combo.addItem(label, value)
+        combo.setToolTip("整行：按同角色整行（含注音）包围盒映射；单字：每个字与每个注音独立映射")
+        return combo
+
+    @staticmethod
+    def _make_quick_angle_button(label: str, tooltip: str, parent: QWidget) -> QToolButton:
+        btn = QToolButton(parent)
+        btn.setText(label)
+        btn.setToolTip(tooltip)
+        btn.setFixedSize(32, 30)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        themed(
+            btn,
+            lambda: (
+                "QToolButton {"
+                f" background: {palette().input_bg};"
+                f" color: {palette().text_primary};"
+                f" border: 1px solid {palette().input_border};"
+                " border-radius: 6px; padding: 0px; font-size: 12px; }"
+                "QToolButton:hover {"
+                f" background: {palette().secondary_button_hover_bg}; }}"
+                "QToolButton:pressed {"
+                f" background: {palette().secondary_button_pressed_bg}; }}"
+            ),
+        )
+        return btn
 
     def make_solid_page(self) -> QWidget:
         host = self._host
@@ -892,9 +1286,123 @@ class RoleFillPagesBuilder:
             Qt.AlignmentFlag.AlignBottom,
         )
         host._gradient_position_field = property_field("关键点位置", position_row)
+
+        # 极简渐变参数区：线性模式仅 1 行（角度 + 范围），径向模式仅 2 行（中心/半径 + 范围）
+        host._gradient_footer = QWidget(page)
+        footer_layout = QVBoxLayout(host._gradient_footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(6)
+
+        host._gradient_linear_options_row = QWidget(host._gradient_footer)
+        linear_opts_layout = QHBoxLayout(host._gradient_linear_options_row)
+        linear_opts_layout.setContentsMargins(0, 0, 0, 0)
+        linear_opts_layout.setSpacing(8)
+        host._gradient_angle_spin = self._double_spin_factory(
+            0, 360, decimals=0, suffix="°"
+        )
+        host._gradient_angle_spin.setWrapping(True)
+        host._gradient_angle_spin.setSingleStep(5.0)
+        host._gradient_angle_spin.setMinimumWidth(96)
+        host._gradient_angle_spin.valueChanged.connect(
+            lambda value: (
+                host._set_gradient_angle(value)
+                if hasattr(host, "_set_gradient_angle")
+                else host._update_current_fill(gradient_angle_deg=float(value))
+            )
+        )
+        host._gradient_angle_h_btn = self._make_quick_angle_button(
+            "横", "横向渐变 (0°)", host._gradient_linear_options_row
+        )
+        host._gradient_angle_h_btn.clicked.connect(
+            lambda: host._update_current_fill(
+                mode="gradient_horizontal", gradient_angle_deg=None
+            )
+        )
+        host._gradient_angle_v_btn = self._make_quick_angle_button(
+            "纵", "纵向渐变 (90°)", host._gradient_linear_options_row
+        )
+        host._gradient_angle_v_btn.clicked.connect(
+            lambda: host._update_current_fill(
+                mode="gradient_vertical", gradient_angle_deg=None
+            )
+        )
+        angle_row = QWidget(host._gradient_linear_options_row)
+        angle_row_layout = QHBoxLayout(angle_row)
+        angle_row_layout.setContentsMargins(0, 0, 0, 0)
+        angle_row_layout.setSpacing(4)
+        angle_row_layout.addWidget(host._gradient_angle_spin, 1)
+        angle_row_layout.addWidget(host._gradient_angle_h_btn, 0)
+        angle_row_layout.addWidget(host._gradient_angle_v_btn, 0)
+        host._gradient_angle_field = property_field("角度", angle_row)
+        host._gradient_space_combo = self._make_space_combo(
+            host._gradient_linear_options_row
+        )
+        host._gradient_space_combo.setFixedWidth(96)
+        host._gradient_space_combo.currentIndexChanged.connect(
+            lambda _index: host._update_current_fill(
+                gradient_space=str(host._gradient_space_combo.currentData() or "line")
+            )
+        )
+        host._gradient_space_field = property_field(
+            "范围", host._gradient_space_combo
+        )
+        linear_opts_layout.addWidget(host._gradient_angle_field, 1)
+        linear_opts_layout.addWidget(host._gradient_space_field, 0)
+        footer_layout.addWidget(host._gradient_linear_options_row)
+
+        host._gradient_radial_options_grid = QWidget(host._gradient_footer)
+        radial_layout = QVBoxLayout(host._gradient_radial_options_grid)
+        radial_layout.setContentsMargins(0, 0, 0, 0)
+        radial_layout.setSpacing(6)
+        host._radial_pad = RadialGradientPad(host._gradient_radial_options_grid)
+        host._radial_pad.geometryChanged.connect(
+            lambda cx, cy, rx, ry: host._update_current_fill(
+                radial_center_x_pct=cx,
+                radial_center_y_pct=cy,
+                radial_radius_x_pct=rx,
+                radial_radius_y_pct=ry,
+            )
+        )
+        radial_layout.addWidget(host._radial_pad)
+
+        radial_bottom_row = QWidget(host._gradient_radial_options_grid)
+        radial_bottom_layout = QHBoxLayout(radial_bottom_row)
+        radial_bottom_layout.setContentsMargins(0, 0, 0, 0)
+        radial_bottom_layout.setSpacing(8)
+        host._radial_space_combo = self._make_space_combo(radial_bottom_row)
+        host._radial_space_combo.currentIndexChanged.connect(
+            lambda _index: host._update_current_fill(
+                gradient_space=str(host._radial_space_combo.currentData() or "line")
+            )
+        )
+        host._radial_space_field = property_field("范围", host._radial_space_combo)
+        host._radial_lock_aspect_check = CheckBox("等比", radial_bottom_row)
+        host._radial_lock_aspect_check.setChecked(True)
+        host._radial_lock_aspect_check.setToolTip(
+            "勾选时拖动手柄保持横纵半径比例一致；取消可自由拉伸椭圆"
+        )
+        host._radial_lock_aspect_check.toggled.connect(
+            host._radial_pad.set_lock_aspect
+        )
+        host._radial_reset_btn = self._make_quick_angle_button(
+            "重置", "恢复中心居中 (50%, 50%) 与默认半径", radial_bottom_row
+        )
+        host._radial_reset_btn.setFixedWidth(44)
+        host._radial_reset_btn.clicked.connect(host._radial_pad.reset_geometry)
+        radial_bottom_layout.addWidget(host._radial_space_field, 1)
+        radial_bottom_layout.addWidget(
+            host._radial_lock_aspect_check, 0, Qt.AlignmentFlag.AlignBottom
+        )
+        radial_bottom_layout.addWidget(
+            host._radial_reset_btn, 0, Qt.AlignmentFlag.AlignBottom
+        )
+        radial_layout.addWidget(radial_bottom_row)
+        host._gradient_radial_options_grid.hide()
+        footer_layout.addWidget(host._gradient_radial_options_grid)
+
         host._ruby_horizontal_gradient_with_main_check = CheckBox(
             "注音与主文字共享横向渐变",
-            page,
+            host._gradient_footer,
         )
         host._ruby_horizontal_gradient_with_main_check.setChecked(True)
         host._ruby_horizontal_gradient_with_main_check.setToolTip(
@@ -905,6 +1413,7 @@ class RoleFillPagesBuilder:
                 ruby_horizontal_gradient_with_main=checked
             )
         )
+        footer_layout.addWidget(host._ruby_horizontal_gradient_with_main_check)
         host._gradient_editor_layout = layout
         host._arrange_stop_editor(
             layout,
@@ -912,7 +1421,7 @@ class RoleFillPagesBuilder:
             host._gradient_color_field,
             host._gradient_position_field,
             vertical=False,
-            footer=host._ruby_horizontal_gradient_with_main_check,
+            footer=host._gradient_footer,
             actions=host._gradient_actions_row,
         )
         return page
@@ -1008,6 +1517,56 @@ class RoleFillPagesBuilder:
             Qt.AlignmentFlag.AlignBottom,
         )
         host._split_position_field = property_field("分段位置", position_row)
+
+        host._split_options_row = QWidget(page)
+        split_opts_layout = QHBoxLayout(host._split_options_row)
+        split_opts_layout.setContentsMargins(0, 0, 0, 0)
+        split_opts_layout.setSpacing(8)
+        host._split_angle_spin = self._double_spin_factory(
+            0, 360, decimals=0, suffix="°"
+        )
+        host._split_angle_spin.setWrapping(True)
+        host._split_angle_spin.setSingleStep(5.0)
+        host._split_angle_spin.setMinimumWidth(96)
+        host._split_angle_spin.setValue(90.0)
+        host._split_angle_spin.valueChanged.connect(
+            lambda value: (
+                host._set_split_angle(value)
+                if hasattr(host, "_set_split_angle")
+                else host._update_current_fill(gradient_angle_deg=float(value))
+            )
+        )
+        host._split_angle_h_btn = self._make_quick_angle_button(
+            "横", "横向拼色 (0°)", host._split_options_row
+        )
+        host._split_angle_h_btn.clicked.connect(
+            lambda: host._update_current_fill(gradient_angle_deg=0.0)
+        )
+        host._split_angle_v_btn = self._make_quick_angle_button(
+            "纵", "纵向拼色 (90°)", host._split_options_row
+        )
+        host._split_angle_v_btn.clicked.connect(
+            lambda: host._update_current_fill(gradient_angle_deg=None)
+        )
+        split_angle_row = QWidget(host._split_options_row)
+        split_angle_layout = QHBoxLayout(split_angle_row)
+        split_angle_layout.setContentsMargins(0, 0, 0, 0)
+        split_angle_layout.setSpacing(4)
+        split_angle_layout.addWidget(host._split_angle_spin, 1)
+        split_angle_layout.addWidget(host._split_angle_h_btn, 0)
+        split_angle_layout.addWidget(host._split_angle_v_btn, 0)
+        host._split_angle_field = property_field("角度", split_angle_row)
+        host._split_space_combo = self._make_space_combo(host._split_options_row)
+        host._split_space_combo.setFixedWidth(96)
+        host._split_space_combo.currentIndexChanged.connect(
+            lambda _index: host._update_current_fill(
+                gradient_space=str(host._split_space_combo.currentData() or "line")
+            )
+        )
+        host._split_space_field = property_field("范围", host._split_space_combo)
+        split_opts_layout.addWidget(host._split_angle_field, 1)
+        split_opts_layout.addWidget(host._split_space_field, 0)
+
         host._split_editor_layout = layout
         host._arrange_stop_editor(
             layout,
@@ -1015,6 +1574,7 @@ class RoleFillPagesBuilder:
             host._split_color_field,
             host._split_position_field,
             vertical=True,
+            footer=host._split_options_row,
             actions=host._split_actions_row,
         )
         return page

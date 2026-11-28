@@ -29,8 +29,7 @@ std::uint32_t argb(const RgbaColor& c) {
 void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilities& caps) {
     const int outlineLayers = caps.outlineLayers;
     const auto gradient = [](const PaintStyle& paint) {
-        return !paint.stops.empty()
-            && (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical");
+        return !paint.stops.empty() && isGradientMode(paint.mode);
     };
     const auto supportedBodyFill = [&](const PaintStyle& paint) {
         return paint.mode == "solid" || (caps.bodyGradients && gradient(paint)) || (caps.imageFills && paint.mode == "image");
@@ -104,8 +103,8 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
 bool supportsSkiaGlowPaint(const PaintStyle& paint, GlowPaintSupport support) {
     if (paint.mode == "solid") return true;
     if (paint.stops.empty() || support == GlowPaintSupport::Solid) return false;
-    return paint.mode == "gradient_vertical" || (support == GlowPaintSupport::LineGradients
-        && (paint.mode == "gradient_horizontal" || paint.mode == "split_vertical"));
+    return paint.mode == "gradient_vertical"
+        || (support == GlowPaintSupport::LineGradients && isGradientMode(paint.mode));
 }
 
 bool supportsSkiaShadowPaint(const PaintStyle& paint, bool gradients) {

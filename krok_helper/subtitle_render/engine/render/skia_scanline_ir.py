@@ -190,7 +190,7 @@ def scanline_features(track, style, lines, particle_band_tracks, vertical_singin
         shadow_band |= static_shadow_band
         static_cell_scanline |= static_cells
         role_gradient |= (role_fill is not None
-                          and role_fill.mode in {'gradient_horizontal', 'gradient_vertical', 'split_vertical'}
+                          and role_fill.mode in {'gradient_horizontal', 'gradient_vertical', 'gradient_radial', 'split_vertical'}
                           and ordinary and not (has_readings or bursts or with_zoom_or_flash or utopia or inline_roles))
         composed = composed or with_zoom_or_flash
         role_layers = role_layers or role_composition

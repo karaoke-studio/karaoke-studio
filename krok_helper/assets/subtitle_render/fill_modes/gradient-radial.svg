@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img">
+  <title>径向渐变</title>
+  <defs>
+    <radialGradient id="radialFill" cx="50%" cy="50%" r="55%">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#6B7280"/>
+      <stop offset="1" stop-color="#111827"/>
+    </radialGradient>
+  </defs>
+  <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="url(#radialFill)" stroke="#111827"/>
+</svg>

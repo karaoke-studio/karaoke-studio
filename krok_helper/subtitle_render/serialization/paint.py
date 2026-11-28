@@ -70,6 +70,18 @@ def paint_fill_to_dict(fill: PaintFill) -> dict:
         "image_path": fill.image_path,
         "image_scale_pct": fill.image_scale_pct,
     }
+    if fill.gradient_angle_deg is not None:
+        result["gradient_angle_deg"] = round(float(fill.gradient_angle_deg) % 360.0, 3)
+    if fill.gradient_space != "line":
+        result["gradient_space"] = fill.gradient_space
+    if fill.radial_center_x_pct != 50.0:
+        result["radial_center_x_pct"] = round(float(fill.radial_center_x_pct), 3)
+    if fill.radial_center_y_pct != 50.0:
+        result["radial_center_y_pct"] = round(float(fill.radial_center_y_pct), 3)
+    if fill.radial_radius_x_pct != 50.0:
+        result["radial_radius_x_pct"] = round(float(fill.radial_radius_x_pct), 3)
+    if fill.radial_radius_y_pct != 50.0:
+        result["radial_radius_y_pct"] = round(float(fill.radial_radius_y_pct), 3)
     if fill.gradient_path is not None:
         route = fill.gradient_path
         result["gradient_path"] = {
@@ -147,6 +159,7 @@ def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> Paint
         "solid",
         "gradient_horizontal",
         "gradient_vertical",
+        "gradient_radial",
         "split_vertical",
         "image",
     }:
@@ -167,6 +180,30 @@ def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> Paint
             (split_position_pct, split_bottom_color),
             (100, split_bottom_color),
         ]
+    raw_angle = payload.get("gradient_angle_deg")
+    gradient_angle_deg: Optional[float] = None
+    if raw_angle is not None:
+        try:
+            parsed_angle = float(raw_angle)
+            if math.isfinite(parsed_angle):
+                gradient_angle_deg = round(parsed_angle % 360.0, 3)
+        except (TypeError, ValueError):
+            gradient_angle_deg = None
+    raw_space = str(payload.get("gradient_space", "line"))
+    gradient_space = raw_space if raw_space in {"line", "canvas", "glyph"} else "line"
+
+    def _clamped_pct(key: str, default_value: float, low: float, high: float) -> float:
+        raw = payload.get(key)
+        if raw is None:
+            return default_value
+        try:
+            parsed = float(raw)
+        except (TypeError, ValueError):
+            return default_value
+        if not math.isfinite(parsed):
+            return default_value
+        return max(low, min(high, parsed))
+
     return PaintFill(
         mode=mode,  # type: ignore[arg-type]
         color=color,
@@ -184,6 +221,12 @@ def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> Paint
         image_scale_pct=max(
             1, min(_int_value(payload.get("image_scale_pct"), 100), 1000)
         ),
+        gradient_angle_deg=gradient_angle_deg,
+        gradient_space=gradient_space,  # type: ignore[arg-type]
+        radial_center_x_pct=_clamped_pct("radial_center_x_pct", 50.0, -50.0, 150.0),
+        radial_center_y_pct=_clamped_pct("radial_center_y_pct", 50.0, -50.0, 150.0),
+        radial_radius_x_pct=_clamped_pct("radial_radius_x_pct", 50.0, 1.0, 200.0),
+        radial_radius_y_pct=_clamped_pct("radial_radius_y_pct", 50.0, 1.0, 200.0),
     )
 
 

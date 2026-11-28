@@ -71,6 +71,12 @@ struct PaintFillSpec {
     std::vector<std::pair<double, QString>> splitStops;
     QString imagePath;
     int imageScalePct = 100;
+    std::optional<double> gradientAngleDeg;
+    QString gradientSpace = QStringLiteral("line");
+    double radialCenterXPct = 50.0;
+    double radialCenterYPct = 50.0;
+    double radialRadiusXPct = 50.0;
+    double radialRadiusYPct = 50.0;
 };
 
 struct TimingLine {
@@ -339,6 +345,7 @@ struct ResolvedStyle {
     QString rubyAlignment = QStringLiteral("auto");
     QString rubyMainProgressMode = QStringLiteral("checkpoint_segments");
     bool rubyHorizontalGradientWithMain = true;
+    bool rubyColorsFollowMain = true;
     // These ruby fallbacks are "unset" until a scheme sets them explicitly.
     // Empty/nullopt means "follow the effective (role) main text", resolved in
     // applyGpuResolvedStyle against the role-resolved style — mirroring the CPU

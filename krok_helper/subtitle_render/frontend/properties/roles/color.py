@@ -160,6 +160,7 @@ class RoleColorPropertyPageBuilder:
             ("全色", "solid"),
             ("横向渐变", "gradient_horizontal"),
             ("纵向渐变", "gradient_vertical"),
+            ("径向渐变", "gradient_radial"),
             ("纵向拼色", "split_vertical"),
             ("图像", "image"),
         ]:
@@ -170,13 +171,14 @@ class RoleColorPropertyPageBuilder:
                 mode=str(host._fill_mode_combo.currentData())
             )
         )
-        # 填充方式改竖排按钮列，与隐藏 combo 双向同步：按钮 → combo 触发
-        # _update_current_fill；_sync_color_fill_controls 设 combo → 按钮跟随
+        # 填充方式改竖排按钮列，与隐藏 combo 双向同步：
+        # 横/纵渐变合入「渐变」按钮并新增「径向」，保持 5 个对称按钮；
+        # 按钮 → combo 触发 _update_current_fill，_sync_color_fill_controls 设 combo → 按钮跟随。
         host._fill_mode_pill = PillSelector(
             (
                 ("solid", "全色"),
-                ("gradient_horizontal", "横渐变"),
-                ("gradient_vertical", "纵渐变"),
+                ("gradient_linear", "渐变"),
+                ("gradient_radial", "径向"),
                 ("split_vertical", "拼色"),
                 ("image", "图像"),
             ),
@@ -184,16 +186,32 @@ class RoleColorPropertyPageBuilder:
             vertical=True,
             icons=self._fill_mode_icons_provider(),
         )
-        host._fill_mode_pill.changed.connect(
-            lambda mode: host._fill_mode_combo.setCurrentIndex(
-                max(0, host._fill_mode_combo.findData(mode))
+
+        def on_fill_mode_pill_changed(mode: str) -> None:
+            if mode == "gradient_linear":
+                current = str(host._fill_mode_combo.currentData() or "")
+                target = (
+                    current
+                    if current in {"gradient_horizontal", "gradient_vertical"}
+                    else "gradient_vertical"
+                )
+            else:
+                target = mode
+            host._fill_mode_combo.setCurrentIndex(
+                max(0, host._fill_mode_combo.findData(target))
             )
-        )
-        host._fill_mode_combo.currentIndexChanged.connect(
-            lambda _index: host._fill_mode_pill.set_current(
-                str(host._fill_mode_combo.currentData())
+
+        def on_fill_mode_combo_sync(_index: int) -> None:
+            current = str(host._fill_mode_combo.currentData() or "solid")
+            pill_key = (
+                "gradient_linear"
+                if current in {"gradient_horizontal", "gradient_vertical"}
+                else current
             )
-        )
+            host._fill_mode_pill.set_current(pill_key)
+
+        host._fill_mode_pill.changed.connect(on_fill_mode_pill_changed)
+        host._fill_mode_combo.currentIndexChanged.connect(on_fill_mode_combo_sync)
 
         # Keep the old combo as a programmatic compatibility adapter for existing
         # callers; the user-facing controls are independent switches.

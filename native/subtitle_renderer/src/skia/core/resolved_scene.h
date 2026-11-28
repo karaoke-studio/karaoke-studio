@@ -66,6 +66,7 @@ struct ResolvedRubyGroup {
     std::optional<std::pair<std::size_t, std::size_t>> utopiaExitSpan;
     GlowImages glowImages{};
     std::array<ImageFill, 2> outlineImages{}, outerOutlineImages{};
+    std::vector<BodyPaint> cellPaints;
 };
 enum class ParticleEntryGlow { None, Standard, SampledSymbols };
 

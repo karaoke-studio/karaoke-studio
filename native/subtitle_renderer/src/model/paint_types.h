@@ -46,7 +46,18 @@ struct PaintStyle {
     float imageScale = 1.0f;
     std::uint64_t imageModifiedMs = 0;
     std::uint64_t imageSize = 0;
+    std::optional<float> gradientAngleDeg;
+    std::string gradientSpace = "line";
+    float radialCenterX = 0.5f;
+    float radialCenterY = 0.5f;
+    float radialRadiusX = 0.5f;
+    float radialRadiusY = 0.5f;
     bool operator==(const PaintStyle &) const = default;
 };
+
+inline bool isGradientMode(const std::string& mode) {
+    return mode == "gradient_horizontal" || mode == "gradient_vertical"
+        || mode == "gradient_radial" || mode == "split_vertical";
+}
 
 }  // namespace krok::subtitle::native

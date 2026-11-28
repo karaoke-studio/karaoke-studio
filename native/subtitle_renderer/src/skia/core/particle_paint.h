@@ -43,7 +43,8 @@ class ParticlePaint {
         Layer(const krok::subtitle::native::PaintStyle& source, sk_sp<SkShader> image, bool sampleRadius = false,
               bool lineSampled = true)
             : tint(color(source.color)), shader(std::move(image)) {
-            const bool radial = sampleRadius && (source.mode == "gradient_vertical" || source.mode == "split_vertical");
+            const bool radial = sampleRadius && (source.mode == "gradient_vertical"
+                || source.mode == "gradient_radial" || source.mode == "split_vertical");
             if ((lineSampled && source.mode == "gradient_horizontal") || radial) {
                 samples.reserve(lineSteps + 1);
                 for (int i = 0; i <= lineSteps; ++i)

@@ -97,7 +97,16 @@ def fill_description(fill: PaintFill) -> str:
     if fill.mode == "solid":
         return fill.color.upper()
     stops = split_gradient_stops(fill) if fill.mode == "split_vertical" else gradient_stops(fill)
-    label = {"gradient_horizontal": "横向渐变", "gradient_vertical": "纵向渐变", "split_vertical": "拼色"}[fill.mode]
+    label = {
+        "gradient_horizontal": "横向渐变",
+        "gradient_vertical": "纵向渐变",
+        "gradient_radial": "径向渐变",
+        "split_vertical": "拼色",
+    }.get(fill.mode, "渐变")
+    if fill.mode in {"gradient_horizontal", "gradient_vertical"} and fill.gradient_angle_deg is not None:
+        label = f"线性渐变 {fill.gradient_angle_deg:g}°"
+    elif fill.mode == "split_vertical" and fill.gradient_angle_deg is not None:
+        label = f"拼色 {fill.gradient_angle_deg:g}°"
     return label + " · " + " / ".join(f"{position:g}% {color.upper()}" for position, color in stops)
 
 

@@ -538,3 +538,186 @@ def test_outline_gradient_with_roles_preserves_scene_if_capability_is_missing(bi
     np.testing.assert_array_equal(frames[0], replay[1])
     np.testing.assert_array_equal(frames[1], replay[0])
 
+
+def _render_skia_pair(binary, ir, times=(750,)):
+    results = {}
+    for target in ('gpu', 'raster'):
+        with SkiaRendererProcess(binary, selection=selection(target)) as process:
+            configure(process, ir)
+            frames, _ = collect(process, list(times))
+        results[target] = frames
+    return results['gpu'], results['raster']
+
+
+def _assert_gpu_raster_close(gpu_frames, raster_frames, label):
+    budget = COMPARISON_BUDGETS['image_categories']['text']
+    for idx, (g, r) in enumerate(zip(gpu_frames, raster_frames, strict=True)):
+        mg, mr = g[..., 3] > 16, r[..., 3] > 16
+        union = mg | mr
+        assert union.any(), (label, idx)
+        assert (mg & mr).sum() / union.sum() >= budget['min_alpha_iou'], (label, idx)
+        diff = np.abs(premultiplied(g)[union] - premultiplied(r)[union])
+        assert diff.mean() <= budget['max_union_channel_mae'], (label, idx, float(diff.mean()))
+
+
+def _style_with_text_fill(project, before_fill: PaintFill, after_fill: PaintFill | None = None, *, stroke_width_px: int = 0):
+    track, style = clock_source(project, 'plain')
+    track = replace(track, lines=[replace(track.lines[0], wipe_reverse=False)])
+    after = after_fill or before_fill
+    colors = replace(
+        style.karaoke_colors,
+        before=replace(style.karaoke_colors.before, text=before_fill, stroke=before_fill),
+        after=replace(style.karaoke_colors.after, text=after, stroke=after),
+    )
+    return track, replace(style, karaoke_colors=colors, right_to_left=False, stroke_width_px=stroke_width_px)
+
+
+def test_skia_angled_linear_and_split_gradients_gpu_raster_parity(binary, project):
+    fill_0 = PaintFill(mode='gradient_horizontal', start_color='#FF0000', end_color='#0000FF')
+    fill_45 = PaintFill(mode='gradient_horizontal', start_color='#FF0000', end_color='#0000FF', gradient_angle_deg=45.0)
+    fill_90 = PaintFill(mode='gradient_vertical', start_color='#FF0000', end_color='#0000FF')
+    split_90 = PaintFill(mode='split_vertical', split_stops=[(0, '#FF0000'), (50, '#0000FF')])
+    split_45 = PaintFill(mode='split_vertical', split_stops=[(0, '#FF0000'), (50, '#0000FF')], gradient_angle_deg=45.0)
+
+    rendered = {}
+    for name, fill in (
+        ('lin0', fill_0),
+        ('lin45', fill_45),
+        ('lin90', fill_90),
+        ('split90', split_90),
+        ('split45', split_45),
+    ):
+        ir = ir_for(binary, _style_with_text_fill(project, fill))
+        gpu, raster = _render_skia_pair(binary, ir, times=(750,))
+        _assert_gpu_raster_close(gpu, raster, name)
+        rendered[name] = gpu[0]
+
+    assert not np.array_equal(rendered['lin0'], rendered['lin45'])
+    assert not np.array_equal(rendered['lin90'], rendered['lin45'])
+    assert not np.array_equal(rendered['split90'], rendered['split45'])
+
+    # Diagonal split should emit anti-aliased transition pixels (neither pure red nor pure blue)
+    # on opaque interior text pixels.
+    frame = rendered['split45']
+    opaque = frame[..., 3] > 240
+    assert opaque.any()
+    r = frame[opaque, 2].astype(np.int16)
+    b = frame[opaque, 0].astype(np.int16)
+    blended = (r > 20) & (r < 235) & (b > 20) & (b < 235)
+    assert blended.any(), 'Expected anti-aliased pixels along 45-degree diagonal split edge'
+
+
+def test_skia_radial_gradient_and_ellipse_gpu_raster_parity(binary, project):
+    centered = PaintFill(
+        mode='gradient_radial',
+        start_color='#FFFFFF',
+        end_color='#0022FF',
+        radial_center_x_pct=50.0,
+        radial_center_y_pct=50.0,
+        radial_radius_x_pct=50.0,
+        radial_radius_y_pct=50.0,
+    )
+    shifted_ellipse = PaintFill(
+        mode='gradient_radial',
+        start_color='#FFFFFF',
+        end_color='#0022FF',
+        radial_center_x_pct=15.0,
+        radial_center_y_pct=20.0,
+        radial_radius_x_pct=120.0,
+        radial_radius_y_pct=30.0,
+    )
+    gpu_c, raster_c = _render_skia_pair(binary, ir_for(binary, _style_with_text_fill(project, centered)))
+    gpu_e, raster_e = _render_skia_pair(binary, ir_for(binary, _style_with_text_fill(project, shifted_ellipse)))
+    _assert_gpu_raster_close(gpu_c, raster_c, 'radial_centered')
+    _assert_gpu_raster_close(gpu_e, raster_e, 'radial_shifted_ellipse')
+    assert not np.array_equal(gpu_c[0], gpu_e[0])
+
+
+def test_skia_gradient_spaces_line_canvas_glyph_distinct_and_parity(binary, project):
+    frames_by_space = {}
+    for space in ('line', 'canvas', 'glyph'):
+        fill = PaintFill(
+            mode='gradient_horizontal',
+            start_color='#FF0000',
+            end_color='#00FF00',
+            gradient_space=space,
+        )
+        ir = ir_for(binary, _style_with_text_fill(project, fill, stroke_width_px=4))
+        gpu, raster = _render_skia_pair(binary, ir, times=(750,))
+        _assert_gpu_raster_close(gpu, raster, f'space_{space}')
+        frames_by_space[space] = gpu[0]
+
+    assert not np.array_equal(frames_by_space['line'], frames_by_space['canvas'])
+    assert not np.array_equal(frames_by_space['line'], frames_by_space['glyph'])
+    assert not np.array_equal(frames_by_space['canvas'], frames_by_space['glyph'])
+
+
+def test_skia_ruby_whole_line_vs_glyph_and_multi_role_isolation(binary, reading):
+    from krok_helper.subtitle_render.domain.models import SubtitleStyleScheme
+
+    track, style = reading
+    style = replace(style, karaoke_anim='none', ruby_colors_follow_main=True)
+    frames = {}
+    for space in ('line', 'glyph'):
+        fill = PaintFill(
+            mode='gradient_vertical',
+            start_color='#FF0000',
+            end_color='#0000FF',
+            gradient_space=space,
+        )
+        colors = replace(
+            style.karaoke_colors,
+            before=replace(style.karaoke_colors.before, text=fill),
+            after=replace(style.karaoke_colors.after, text=fill),
+        )
+        ir = upper_ir(binary, (track, replace(style, karaoke_colors=colors)), 1)
+        gpu, raster = _render_skia_pair(binary, ir, times=(150,))
+        _assert_gpu_raster_close(gpu, raster, f'ruby_space_{space}')
+        frames[space] = gpu[0]
+
+    # In 'line' mode ruby+main share one unified box; in 'glyph' mode each
+    # main and ruby glyph uses its own tight box (ruby gets full red->blue).
+    assert not np.array_equal(frames['line'], frames['glyph'])
+
+    # Multi-role line: role A and role B each use their own role box, not the
+    # whole line across other roles.
+    radial = PaintFill(mode='gradient_radial', start_color='#FFFFFF', end_color='#0000FF', gradient_space='line')
+    role_colors = replace(
+        style.karaoke_colors,
+        before=replace(style.karaoke_colors.before, text=radial),
+        after=replace(style.karaoke_colors.after, text=radial),
+    )
+    role_style = replace(
+        style,
+        karaoke_colors=role_colors,
+        custom_style_schemes={
+            'role_b': SubtitleStyleScheme(
+                karaoke_colors=replace(
+                    style.karaoke_colors,
+                    before=replace(style.karaoke_colors.before, text=PaintFill(color='#00FF00')),
+                    after=replace(style.karaoke_colors.after, text=PaintFill(color='#00FF00')),
+                ),
+            ),
+        },
+    )
+    line = track.lines[0]
+    split_idx = max(1, len(line.chars) // 2)
+    multi_chars = [
+        ch if i < split_idx else replace(ch, role_label='role_b')
+        for i, ch in enumerate(line.chars)
+    ]
+    multi_track = replace(track, lines=[replace(line, chars=multi_chars)])
+    multi_ir = upper_ir(binary, (multi_track, role_style), 1)
+    gpu_m, raster_m = _render_skia_pair(binary, multi_ir, times=(150,))
+    _assert_gpu_raster_close(gpu_m, raster_m, 'multi_role_radial')
+
+    # Single-role version with identical radial gradient on the whole line must
+    # differ on the left half because role A's box excludes role B's span.
+    single_ir = upper_ir(binary, (track, replace(style, karaoke_colors=role_colors)), 1)
+    gpu_s, _ = _render_skia_pair(binary, single_ir, times=(150,))
+    left_half_mask = (gpu_m[0][:, :320, 3] > 200) & (gpu_s[0][:, :320, 3] > 200)
+    assert left_half_mask.any()
+    assert not np.array_equal(gpu_m[0][:, :320][left_half_mask], gpu_s[0][:, :320][left_half_mask])
+
+
+

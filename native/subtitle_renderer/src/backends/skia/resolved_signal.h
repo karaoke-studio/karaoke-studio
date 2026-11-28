@@ -12,6 +12,7 @@ struct SignalPaintContext {
     SkiaImageFillCache& images;
     double dpr;
     float layoutScale;
+    SkRect canvasBounds = SkRect::MakeEmpty();
 };
 
 std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(

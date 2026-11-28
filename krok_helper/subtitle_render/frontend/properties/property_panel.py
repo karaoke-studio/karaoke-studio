@@ -101,6 +101,7 @@ from krok_helper.subtitle_render.domain.paint import (
     ColorStateKey,
     KaraokeColors,
     PaintFill,
+    effective_gradient_angle_deg,
 )
 from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
     dont_ask_active,
@@ -692,13 +693,13 @@ from krok_helper.subtitle_render.frontend.properties.preset_manager import (
     _scheme_icon,
 )
 def _fill_mode_icons() -> dict[str, QIcon]:
-    """Load packaged SVG icons for the five PaintFill modes."""
+    """Load packaged SVG icons for the five PaintFill buttons."""
     return {
         key: QIcon(str(_FILL_MODE_ICON_DIR / filename))
         for key, filename in (
             ("solid", "solid.svg"),
-            ("gradient_horizontal", "gradient-horizontal.svg"),
-            ("gradient_vertical", "gradient-vertical.svg"),
+            ("gradient_linear", "gradient-linear.svg"),
+            ("gradient_radial", "gradient-radial.svg"),
             ("split_vertical", "split-vertical.svg"),
             ("image", "image.svg"),
         )
@@ -1098,6 +1099,7 @@ class PropertyPanel(QWidget):
             color_button_factory=ColorButton,
             double_spin_factory=_double_spin,
             spin_factory=_spin,
+            combo_factory=_WheelFocusedComboBox,
         )
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
@@ -5433,6 +5435,8 @@ class PropertyPanel(QWidget):
         was_syncing = self._syncing
         self._syncing = True
         try:
+            is_radial = fill.mode == "gradient_radial"
+            is_linear = fill.mode in {"gradient_horizontal", "gradient_vertical"}
             if mode_changed:
                 mode_index = max(0, self._fill_mode_combo.findData(fill.mode))
                 self._fill_mode_combo.setCurrentIndex(mode_index)
@@ -5445,18 +5449,53 @@ class PropertyPanel(QWidget):
                     self._gradient_color_field,
                     self._gradient_position_field,
                     vertical=fill.mode == "gradient_vertical",
-                    footer=self._ruby_horizontal_gradient_with_main_check,
+                    footer=self._gradient_footer,
                     actions=self._gradient_actions_row,
                 )
-                self._ruby_horizontal_gradient_with_main_check.setVisible(
-                    fill.mode == "gradient_horizontal"
-                )
+                self._gradient_linear_options_row.setVisible(is_linear)
+                self._gradient_radial_options_grid.setVisible(is_radial)
+            self._ruby_horizontal_gradient_with_main_check.setVisible(
+                fill.mode == "gradient_horizontal"
+                and fill.gradient_angle_deg is None
+                and fill.gradient_space == "line"
+            )
             self._paint_solid_btn.set_color(fill.color)
             self._paint_gradient_start_btn.set_color(fill.start_color)
             self._paint_gradient_end_btn.set_color(fill.end_color)
             self._ruby_horizontal_gradient_with_main_check.setChecked(
                 bool(self._scheme_value("ruby_horizontal_gradient_with_main"))
             )
+            if is_linear:
+                angle_val = effective_gradient_angle_deg(fill)
+                if abs(self._gradient_angle_spin.value() - angle_val) > 1e-4:
+                    self._gradient_angle_spin.setValue(angle_val)
+                space_idx = max(0, self._gradient_space_combo.findData(fill.gradient_space))
+                if self._gradient_space_combo.currentIndex() != space_idx:
+                    self._gradient_space_combo.setCurrentIndex(space_idx)
+            elif is_radial:
+                self._radial_pad.set_stops(gradient_stops)
+                self._radial_pad.set_geometry_values(
+                    fill.radial_center_x_pct,
+                    fill.radial_center_y_pct,
+                    fill.radial_radius_x_pct,
+                    fill.radial_radius_y_pct,
+                )
+                if mode_changed:
+                    uniform = (
+                        abs(fill.radial_radius_x_pct - fill.radial_radius_y_pct) < 0.5
+                    )
+                    self._radial_lock_aspect_check.setChecked(uniform)
+                    self._radial_pad.set_lock_aspect(uniform)
+                space_idx = max(0, self._radial_space_combo.findData(fill.gradient_space))
+                if self._radial_space_combo.currentIndex() != space_idx:
+                    self._radial_space_combo.setCurrentIndex(space_idx)
+            elif fill.mode == "split_vertical":
+                split_angle = effective_gradient_angle_deg(fill)
+                if abs(self._split_angle_spin.value() - split_angle) > 1e-4:
+                    self._split_angle_spin.setValue(split_angle)
+                space_idx = max(0, self._split_space_combo.findData(fill.gradient_space))
+                if self._split_space_combo.currentIndex() != space_idx:
+                    self._split_space_combo.setCurrentIndex(space_idx)
             if mode_changed or previous is None or _gradient_stops(previous) != gradient_stops:
                 self._gradient_editor.set_stops(gradient_stops)
                 self._sync_gradient_stop_controls()
@@ -5635,7 +5674,7 @@ class PropertyPanel(QWidget):
         fill = _replace_fill(getattr(state, layer_key) or state.shadow, **changes)
         if (
             str(changes.get("mode") or "")
-            in {"gradient_horizontal", "gradient_vertical"}
+            in {"gradient_horizontal", "gradient_vertical", "gradient_radial"}
             and str(fill.start_color) == str(fill.end_color) == str(fill.color)
         ):
             # 从「塌缩的单色」（渐变关闭时 legacy 投影把起止折成同色）切入
@@ -5701,12 +5740,33 @@ class PropertyPanel(QWidget):
             end_color=normalized[-1][1],
         )
 
+    def _set_gradient_angle(self, value: float) -> None:
+        if self._syncing:
+            return
+        deg = float(value) % 360.0
+        fill = self._current_paint_fill()
+        if fill.mode == "gradient_horizontal" and abs(deg) < 1e-4:
+            self._update_current_fill(gradient_angle_deg=None)
+        elif fill.mode == "gradient_vertical" and abs(deg - 90.0) < 1e-4:
+            self._update_current_fill(gradient_angle_deg=None)
+        else:
+            self._update_current_fill(gradient_angle_deg=round(deg, 3))
+
+    def _set_split_angle(self, value: float) -> None:
+        if self._syncing:
+            return
+        deg = float(value) % 360.0
+        if abs(deg - 90.0) < 1e-4:
+            self._update_current_fill(gradient_angle_deg=None)
+        else:
+            self._update_current_fill(gradient_angle_deg=round(deg, 3))
+
     def _edit_gradient_path(self) -> None:
         from krok_helper.qfluent_compat import show_modeless_dialog
         from krok_helper.subtitle_render.frontend.properties.gradient_path_dialog import GradientPathDialog
 
         fill = deepcopy(self._current_paint_fill())
-        if fill.mode not in {"gradient_horizontal", "gradient_vertical"}:
+        if fill.mode not in {"gradient_horizontal", "gradient_vertical", "gradient_radial"}:
             return
         def target():
             return (self._current_scheme_key(), self._current_color_subject_key(),
@@ -7355,7 +7415,7 @@ def _scaled_panel_signed_px(value: int, scale: float) -> int:
 
 
 def _fill_stack_index(mode: str) -> int:
-    if mode in {"gradient_horizontal", "gradient_vertical"}:
+    if mode in {"gradient_horizontal", "gradient_vertical", "gradient_radial"}:
         return 1
     if mode == "split_vertical":
         return 2

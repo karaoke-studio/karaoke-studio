@@ -51,6 +51,22 @@ krok::subtitle::native::PaintStyle projectPaint(
     paint.imageScale = static_cast<float>(
         std::clamp(source.imageScalePct, 1, 1000) / 100.0
     );
+    if (source.gradientAngleDeg && std::isfinite(*source.gradientAngleDeg)) {
+        double deg = std::fmod(*source.gradientAngleDeg, 360.0);
+        if (deg < 0.0) {
+            deg += 360.0;
+        }
+        paint.gradientAngleDeg = static_cast<float>(deg);
+    }
+    if (source.gradientSpace == QStringLiteral("canvas") || source.gradientSpace == QStringLiteral("glyph")) {
+        paint.gradientSpace = source.gradientSpace.toStdString();
+    } else {
+        paint.gradientSpace = "line";
+    }
+    paint.radialCenterX = static_cast<float>(std::clamp(source.radialCenterXPct, -50.0, 150.0) / 100.0);
+    paint.radialCenterY = static_cast<float>(std::clamp(source.radialCenterYPct, -50.0, 150.0) / 100.0);
+    paint.radialRadiusX = static_cast<float>(std::clamp(source.radialRadiusXPct, 1.0, 200.0) / 100.0);
+    paint.radialRadiusY = static_cast<float>(std::clamp(source.radialRadiusYPct, 1.0, 200.0) / 100.0);
     if (!source.imagePath.isEmpty()) {
         const QFileInfo info(source.imagePath);
         if (info.exists() && info.isFile()) {

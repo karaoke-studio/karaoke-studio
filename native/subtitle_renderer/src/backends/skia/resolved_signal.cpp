@@ -146,8 +146,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
     StaticGlow glow;
     if (signal.decorated) {
         const auto supportedBrush = [](const PaintStyle& paint) {
-            return paint.mode == "solid" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical"
-                || paint.mode == "gradient_horizontal" || paint.mode == "image";
+            return paint.mode == "solid" || isGradientMode(paint.mode) || paint.mode == "image";
         };
         const float ratio = palette.fontSize > 0 ? geometry.size / palette.fontSize : 1.f;
         const float maximum = std::floor(geometry.columnWidth * .5f);
@@ -209,7 +208,8 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
         }
         const auto prepareBrush = [&](const PaintStyle& paint, sk_sp<SkShader>& gradient, ImageFill& image) {
             if (paint.mode == "image") image = context.images.fill(paint, context.layoutScale);
-            else gradient = lineGradient(paint, paint.mode == "gradient_horizontal" ? horizontalBounds : bounds, 0);
+            else gradient = lineGradient(paint, paint.mode == "gradient_horizontal" ? horizontalBounds : bounds, 0,
+                                         context.canvasBounds);
         };
         GlowGradients glowGradients;
         for (const bool after : {false, true}) {

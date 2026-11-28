@@ -146,7 +146,7 @@ void projectSkiaParticles(const protocol::RenderConfig& cfg, const protocol::Tim
     // Particle paints attach to each burst whatever the line does, as in Direct2D.
     const bool paintedSprites = features.contains("p07_singing_sprite_paints");
     const auto spritePaint = [](const auto& paint) {
-        return paint.mode == "solid" || paint.mode == "gradient_vertical";
+        return paint.mode == "solid" || paint.mode == "gradient_vertical" || paint.mode == "gradient_radial";
     };
     const bool lineGradients = features.contains("p07_singing_sprite_line_gradients");
     const bool imagePaints = features.contains("p07_singing_sprite_images");

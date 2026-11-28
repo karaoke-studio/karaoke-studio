@@ -563,7 +563,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             ? &*projected.litDecorStyle : firstVisiblePaint;
         const auto* volumePaint = style.volumeAppearanceMode == "role" && projected.volumeDecorStyle
             ? &*projected.volumeDecorStyle : firstVisiblePaint;
-        const SignalPaintContext signalPaintContext{imageCache, glyphs.dpr, projected.layoutReferenceScale};
+        const SkRect canvasBounds = SkRect::MakeWH(float(projected.width), float(projected.height));
+        const SignalPaintContext signalPaintContext{imageCache, glyphs.dpr, projected.layoutReferenceScale, canvasBounds};
         prepared.shapeSignal = resolveShapeSignal(source, line, style, signalPaintContext, lampPaint);
         SkRect volumeTextInk = SkRect::MakeEmpty();
         std::optional<int> leftmostVolumeRole;
@@ -601,13 +602,18 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         std::optional<RolePaintBounds> rolePaintBounds;
         const bool gradientScanlineRole = line.scanlineEnabled && style.scanlineMode == "role"
             && style.scanlineRolePaint.mode != "solid" && features.contains("p07_scanline_role_gradient");
+        const bool hasRubyGroups = !source.value("ruby_groups").toArray().isEmpty();
         if (roleBodyPaints || roleShadowPaints || gradientGlowWithoutTexturedRoles || gradientScanlineRole || bodyShadowGradients
+            || hasRubyGroups
             || features.contains("p06_ruby_horizontal_outline") || features.contains("p06_lower_ruby_static_gradient")
             || features.contains("p06_lower_ruby_outline_gradient") || features.contains("p06_lower_ruby_glow_gradient")
             || features.contains("p06_independent_ruby_fill") || features.contains("p06_lower_ruby_shadow_gradient")
-            || features.contains("p06_ruby_gradient_shadow"))
+            || features.contains("p06_ruby_gradient_shadow")) {
             rolePaintBounds = collectRolePaintBounds(prepared, line, style, projected.charStyles,
                                                      projected.layoutReferenceScale, staticTitle && roleBodyPaints);
+            if (hasRubyGroups)
+                joinRubyPaintBounds(*rolePaintBounds, source, line, glyphs.dpr);
+        }
         if (rolePaintBounds && volumeBandLeft) {
             if (auto first = rolePaintBounds->roles.find(*leftmostVolumeRole); first != rolePaintBounds->roles.end())
                 first->second.ink.fLeft = std::min(first->second.ink.left(), *volumeBandLeft);
@@ -615,14 +621,16 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         if (gradientScanlineRole && !rolePaintBounds->line.isEmpty()) {
             const auto& ink = style.scanlineRolePaint.mode == "gradient_horizontal"
                 ? rolePaintBounds->forRole(-1) : rolePaintBounds->line;
-            auto gradient = ::subtitle::skia::lineGradient(style.scanlineRolePaint, ink, rolePaintBounds->outlinePad);
+            auto gradient = ::subtitle::skia::lineGradient(style.scanlineRolePaint, ink, rolePaintBounds->outlinePad,
+                                                           canvasBounds);
             for (auto& layers : prepared.scanline.gradients) layers = {gradient, gradient};
         }
         if (roleBodyPaints) {
             if (source.contains("body_gradient_bounds"))
                 throw BackendError("Skia 角色画笔不能携带整行画笔范围");
             resolveRoleBodyPaints(prepared, line, style, projected.charStyles, *rolePaintBounds, imageCache,
-                                  projected.layoutReferenceScale, roleOutlineGradients, roleOutlinePaints);
+                                  projected.layoutReferenceScale, roleOutlineGradients, roleOutlinePaints,
+                                  canvasBounds);
         }
         prepared.rubyGroups = resolvedSkiaRubyGroups(source, ir, glyphs, projected, index, timingOffset,
             rubyTransition, imageCache, glowPaints, rolePaintBounds ? &*rolePaintBounds : nullptr,
@@ -670,7 +678,7 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
                         }
                 }
                 if (ink.isEmpty()) return;
-                state.shader = ::subtitle::skia::lineGradient(paint, ink, rolePaintBounds->outlinePad);
+                state.shader = ::subtitle::skia::lineGradient(paint, ink, rolePaintBounds->outlinePad, canvasBounds);
             }
             if (hasBitmapGuide)
                 for (auto& cell : prepared.cells)
@@ -714,7 +722,7 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             && (hasInlineRoles || roleFadedScanline))) {
             resolveRoleGlows(prepared, line, style, projected.charStyles,
                              gradientGlow && rolePaintBounds ? &*rolePaintBounds : nullptr, bitmapGradientGlow,
-                             imageCache, projected.layoutReferenceScale);
+                             imageCache, projected.layoutReferenceScale, canvasBounds);
             prepared.glow = {};
         }
         const bool hasGlow = prepared.glow.before.radius || prepared.glow.after.radius;
@@ -724,7 +732,33 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         if ((roleGuideShadow && hasInlineRoles) || inlineShadow)
             resolveRoleShadows(prepared, line, projected.charStyles,
                                roleShadowPaints && inlineShadow ? &*rolePaintBounds : nullptr,
-                               imageCache, projected.layoutReferenceScale);
+                               imageCache, projected.layoutReferenceScale, canvasBounds);
+        if (prepared.cellShadows.empty() && prepared.shadow.visible() && rolePaintBounds) {
+            const bool glyphBeforeShadow = prepared.shadow.before.enabled
+                && isGradientMode(style.beforeDecorPaint.mode) && style.beforeDecorPaint.gradientSpace == "glyph"
+                && hasVisibleGradientStops(style.beforeDecorPaint);
+            const bool glyphAfterShadow = prepared.shadow.after.enabled
+                && isGradientMode(style.afterDecorPaint.mode) && style.afterDecorPaint.gradientSpace == "glyph"
+                && hasVisibleGradientStops(style.afterDecorPaint);
+            if (glyphBeforeShadow || glyphAfterShadow) {
+                prepared.cellShadows.reserve(prepared.cells.size());
+                for (const auto& cell : prepared.cells) {
+                    auto cellShadow = prepared.shadow;
+                    if (!cell.path.isEmpty()) {
+                        const SkRect cellInk = cell.path.computeTightBounds();
+                        if (!cellInk.isEmpty()) {
+                            if (glyphBeforeShadow)
+                                cellShadow.before.shader = ::subtitle::skia::lineGradient(
+                                    style.beforeDecorPaint, cellInk, rolePaintBounds->outlinePad, canvasBounds);
+                            if (glyphAfterShadow)
+                                cellShadow.after.shader = ::subtitle::skia::lineGradient(
+                                    style.afterDecorPaint, cellInk, rolePaintBounds->outlinePad, canvasBounds);
+                        }
+                    }
+                    prepared.cellShadows.push_back(std::move(cellShadow));
+                }
+            }
+        }
         const bool hasShadow = prepared.shadow.before.enabled || prepared.shadow.after.enabled || !prepared.cellShadows.empty();
         const bool hasDecoration = hasGlow || hasShadow;
         // The band repaints the glyph stack above its existing static glow.
@@ -762,11 +796,16 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
                 // Every layer shares the line's visual pad at the layout reference scale.
                 const float pad = verticalPaints ? 0.f : ::subtitle::skia::outlineVisualPad(
                     style.strokeWidth, style.stroke2Width, projected.layoutReferenceScale);
+                if (style.rubyColorsFollowMain && rolePaintBounds && !rolePaintBounds->allRuby.isEmpty()) {
+                    ink.join(rolePaintBounds->allRuby);
+                }
                 auto horizontalInk = ink;
                 if (volumeBandLeft) horizontalInk.fLeft = std::min(ink.left(), *volumeBandLeft);
                 const auto gradientFor = [&](const PaintStyle& paint) {
                     return ::subtitle::skia::lineGradient(paint,
-                        paint.mode == "gradient_horizontal" ? horizontalInk : ink, pad);
+                        (paint.mode == "gradient_horizontal" && !paint.gradientAngleDeg.has_value())
+                            ? horizontalInk : ink,
+                        pad, canvasBounds);
                 };
                 prepared.beforeGradient = gradientFor(style.beforeFillPaint);
                 prepared.afterGradient = gradientFor(style.afterFillPaint);
@@ -777,6 +816,41 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
                 if (secondaryOutline) {
                     prepared.beforeOuterGradient = gradientFor(style.beforeStroke2Paint);
                     prepared.afterOuterGradient = gradientFor(style.afterStroke2Paint);
+                }
+                const auto isGlyphGradient = [](const PaintStyle& p) {
+                    return isGradientMode(p.mode) && p.gradientSpace == "glyph";
+                };
+                if (anyLayer(isGlyphGradient)) {
+                    for (auto& cell : prepared.cells) {
+                        if (cell.path.isEmpty()) continue;
+                        const SkRect cellInk = cell.path.computeTightBounds();
+                        if (cellInk.isEmpty()) continue;
+                        ::subtitle::skia::BodyPaint cellPaint;
+                        cellPaint.images = prepared.images;
+                        const auto cellShader = [&](const PaintStyle& p, const sk_sp<SkShader>& fallback) {
+                            return isGlyphGradient(p)
+                                ? ::subtitle::skia::lineGradient(p, cellInk, pad, canvasBounds)
+                                : fallback;
+                        };
+                        cellPaint.gradients = {
+                            cellShader(style.beforeFillPaint, prepared.beforeGradient),
+                            cellShader(style.afterFillPaint, prepared.afterGradient),
+                        };
+                        if (primaryOutline) {
+                            cellPaint.outlineGradients = {
+                                cellShader(style.beforeStrokePaint, prepared.beforeOutlineGradient),
+                                cellShader(style.afterStrokePaint, prepared.afterOutlineGradient),
+                            };
+                        }
+                        if (secondaryOutline) {
+                            cellPaint.outerGradients = {
+                                cellShader(style.beforeStroke2Paint, prepared.beforeOuterGradient),
+                                cellShader(style.afterStroke2Paint, prepared.afterOuterGradient),
+                            };
+                        }
+                        cell.bodyPaintIndex = int(prepared.roleBodyPaints.size());
+                        prepared.roleBodyPaints.push_back(std::move(cellPaint));
+                    }
                 }
                 if (brightenedScanlineGradient)
                     for (int i = 0; i < 6; ++i)

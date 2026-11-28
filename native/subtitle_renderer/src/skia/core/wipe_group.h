@@ -64,7 +64,9 @@ private:
     std::array<sk_sp<SkShader>, 2> outlineGradients_, outerOutlineGradients_;
     ScanlineGradients scanlineGradients_;
     std::array<ImageFill, 2> outlineImages_, outerOutlineImages_;
+    std::vector<BodyPaint> cellPaints_;
     // Outer outline, primary outline and fill shaders of one phase.
     std::array<sk_sp<SkShader>, 3> layerShaders(const SkCanvas&, bool after) const;
+    std::array<sk_sp<SkShader>, 3> cellShaders(const SkCanvas&, std::size_t index, bool after) const;
 };
 }

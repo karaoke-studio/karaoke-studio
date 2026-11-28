@@ -344,7 +344,7 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         applyResolvedStyle(style, resolved, cfg.dpr);
         if (source.scanlineEnabled && style.scanlineMode == "role" && style.scanlineRolePaint.mode != "solid") {
             const auto& paint = style.scanlineRolePaint.mode;
-            const bool gradient = paint == "gradient_horizontal" || paint == "gradient_vertical" || paint == "split_vertical";
+            const bool gradient = isGradientMode(paint);
         }
         style.rightToLeft = cfg.rightToLeft;
         style.vertical = cfg.vertical;
