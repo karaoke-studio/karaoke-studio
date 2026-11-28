@@ -104,12 +104,9 @@ class RoleFontSettingsPageBuilder:
                 )
             )
             weight_combo.currentIndexChanged.connect(
-                lambda _index: host._update_style(
-                    latin_font_weight=(
-                        None
-                        if int(weight_combo.currentData()) == 0
-                        else int(weight_combo.currentData())
-                    )
+                lambda _index: host._on_font_weight_changed(
+                    "latin_font_weight",
+                    int(weight_combo.currentData()),
                 )
             )
         elif (subject, script) == ("ruby", "japanese"):
@@ -122,12 +119,10 @@ class RoleFontSettingsPageBuilder:
                 )
             )
             weight_combo.currentIndexChanged.connect(
-                lambda _index: host._update_ruby_font_override(
-                    ruby_font_weight=(
-                        None
-                        if int(weight_combo.currentData()) == 0
-                        else int(weight_combo.currentData())
-                    )
+                lambda _index: host._on_font_weight_changed(
+                    "ruby_font_weight",
+                    int(weight_combo.currentData()),
+                    is_ruby=True,
                 )
             )
         else:
@@ -140,12 +135,10 @@ class RoleFontSettingsPageBuilder:
                 )
             )
             weight_combo.currentIndexChanged.connect(
-                lambda _index: host._update_ruby_font_override(
-                    ruby_latin_font_weight=(
-                        None
-                        if int(weight_combo.currentData()) == 0
-                        else int(weight_combo.currentData())
-                    )
+                lambda _index: host._on_font_weight_changed(
+                    "ruby_latin_font_weight",
+                    int(weight_combo.currentData()),
+                    is_ruby=True,
                 )
             )
 
@@ -184,7 +177,7 @@ class RoleFontSettingsPageBuilder:
         stroke2_width_spin = self._spin_factory(0, 120, suffix=" px")
         stroke_width_spin.valueChanged.connect(
             lambda value, field=stroke_width_field, inherit=inherits_script:
-            host._update_style(**{field: None if inherit and value == 0 else value})
+            host._on_font_stroke_width_changed(field, value, inherit_zero=inherit)
         )
         if inherits_stroke2:
             stroke2_enabled_check.stateChanged.connect(
@@ -198,7 +191,7 @@ class RoleFontSettingsPageBuilder:
             )
         stroke2_width_spin.valueChanged.connect(
             lambda value, field=stroke2_width_field, inherit=inherits_script:
-            host._update_style(**{field: None if inherit and value == 0 else value})
+            host._on_font_stroke_width_changed(field, value, inherit_zero=inherit)
         )
         host._font_stroke_controls[(subject, script)] = (
             stroke_width_spin,

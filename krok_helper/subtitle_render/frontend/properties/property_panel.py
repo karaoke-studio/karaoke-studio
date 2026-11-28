@@ -1923,25 +1923,61 @@ class PropertyPanel(QWidget):
             value: Optional[bool] = None
         else:
             value = check_state == Qt.CheckState.Checked
-        self._update_style(**{field_name: value})
+        changes: dict[str, object] = {field_name: value}
+        if value is None:
+            changes.update(self._scheme_local_inheritance_changes(field_name))
+        self._update_style(**changes)
 
-    def _scheme_local_inheritance_changes(self, follow_field: str) -> dict[str, object]:
+    def _on_font_weight_changed(
+        self, field_name: str, weight: int, *, is_ruby: bool = False
+    ) -> None:
+        if self._syncing:
+            return
+        value: Optional[int] = None if weight == 0 else int(weight)
+        changes: dict[str, object] = {field_name: value}
+        if value is None:
+            changes.update(self._scheme_local_inheritance_changes(field_name))
+        if is_ruby:
+            self._update_ruby_font_override(**changes)
+        else:
+            self._update_style(**changes)
+
+    def _on_font_stroke_width_changed(
+        self, field_name: str, value: int, *, inherit_zero: bool = False
+    ) -> None:
+        if self._syncing:
+            return
+        resolved: Optional[int] = None if inherit_zero and value == 0 else int(value)
+        changes: dict[str, object] = {field_name: resolved}
+        if resolved is None:
+            changes.update(self._scheme_local_inheritance_changes(field_name))
+        self._update_style(**changes)
+
+    def _scheme_local_inheritance_changes(self, *follow_fields: str) -> dict[str, object]:
         """让角色方案里的空槽在**方案内**解析，而不是回头去继承全局。
 
         角色方案的 ``None`` 默认是"这一槽没设定，用全局的"，只有
-        ``n3_font_inheritance`` 打开后才变成"在本方案里往上找"。用户勾
-        「字号跟随主文字日文」要的正是后者：全局要是写死过英数字号，不打开
-        这个标志的话，勾了也还是按全局那个数渲染。
+        ``n3_font_inheritance`` 打开后才变成"在本方案里往上找"。用户把角色
+        的注音或英数槽设为「跟随主文字」时要的正是后者：全局要是写死过对应
+        槽位（例如出厂全局自带 ``ruby_stroke2_enabled=True``，或用户给全局
+        设过独立注音字体），不打开这个标志的话，设成跟随也还是按全局渲染。
 
-        标志是整套子槽共用的，直接打开会连带把其他还空着的槽（英数字体、注音
-        描边…）一起改成方案内解析，外观会跟着跳。所以打开之前先把那些槽当前
-        **实际生效**的值固化进方案，只让用户刚勾的这一项空着。
+        标志是整套子槽共用的，直接打开会连带把其他还空着的槽一起改成方案内
+        解析，外观会跟着跳。所以打开之前先把那些槽当前**实际生效**的值固化进
+        方案，只让本次设为跟随的槽位空着。
         """
-        if self._current_custom_scheme_name() is None:
+        role_name = self._current_custom_scheme_name()
+        if role_name is None:
             return {}  # 全局默认自己的 None 本来就是「跟随」，不需要标志
+        scheme = self._style.custom_style_schemes.get(role_name)
+        if scheme is not None and scheme.n3_font_inheritance:
+            return {}
+        target_fields = set(follow_fields) & set(N3_FONT_INHERITANCE_FIELDS)
+        if not target_fields:
+            return {}
         changes: dict[str, object] = {"n3_font_inheritance": True}
         for name in N3_FONT_INHERITANCE_FIELDS:
-            if name == follow_field or self._scheme_own_value(name) is not None:
+            if name in target_fields or self._scheme_own_value(name) is not None:
                 continue
             changes[name] = self._scheme_value(name)
         return changes
@@ -2014,7 +2050,10 @@ class PropertyPanel(QWidget):
         inherited = check_state == Qt.CheckState.PartiallyChecked
         checked = check_state == Qt.CheckState.Checked
         width_spin.setEnabled(inherited or checked)
-        self._update_style(**{field_name: None if inherited else checked})
+        changes: dict[str, object] = {field_name: None if inherited else checked}
+        if inherited:
+            changes.update(self._scheme_local_inheritance_changes(field_name))
+        self._update_style(**changes)
 
     def _on_section_edge_toggled(self, checked: bool) -> None:
         # 先落样式再同步：同步读的是 self._style 的新值（set_style 回显期间
@@ -2621,6 +2660,15 @@ class PropertyPanel(QWidget):
                 changes[field_name] = value
         if slot[0] == "ruby":
             changes["ruby_font_follow_main"] = False
+        follow_fields = [
+            name for name, val in changes.items()
+            if val is None and name in N3_FONT_INHERITANCE_FIELDS
+        ]
+        if follow_fields:
+            changes = {
+                **self._scheme_local_inheritance_changes(*follow_fields),
+                **changes,
+            }
         self._update_style(**changes)
 
     def _make_character_layout_group(self, parent: QWidget) -> QWidget:
@@ -5234,7 +5282,9 @@ class PropertyPanel(QWidget):
         return self._current_karaoke_colors()
 
     def _effective_ruby_matrix(self) -> KaraokeColors:
-        """注音当前实际渲染的配色矩阵：独立矩阵优先，否则读主文字矩阵。"""
+        """注音当前实际渲染的配色矩阵：跟随时读主文字矩阵，否则独立矩阵优先。"""
+        if bool(self._scheme_value("ruby_colors_follow_main")):
+            return self._current_karaoke_colors()
         value = self._scheme_value("ruby_karaoke_colors")
         if isinstance(value, KaraokeColors):
             return deepcopy(value)
@@ -7340,6 +7390,14 @@ def _auto_role_scheme(base: SubtitleStyleScheme, index: int) -> SubtitleStyleSch
     color = _AUTO_ROLE_COLORS[index % len(_AUTO_ROLE_COLORS)]
     colors = deepcopy(base.karaoke_colors) if base.karaoke_colors is not None else KaraokeColors()
     colors = _apply_legacy_color_to_matrix(colors, "fill_color", color) or colors
+    ruby_updates: dict[str, object] = {}
+    if base.ruby_colors_follow_main is not False:
+        # 跟随模式下新建角色不能残留基底的 ruby_karaoke_colors / 装饰覆盖，
+        # 否则新角色的注音会停留在基底（全局默认）的配色上。
+        ruby_updates["ruby_color"] = color
+        ruby_updates["ruby_karaoke_colors"] = None
+        for field_name in RUBY_DECORATION_OVERRIDE_FIELDS:
+            ruby_updates[field_name] = None
     return replace(
         deepcopy(base),
         fill_color=color,
@@ -7347,6 +7405,7 @@ def _auto_role_scheme(base: SubtitleStyleScheme, index: int) -> SubtitleStyleSch
         fill_gradient_start_color=color,
         fill_gradient_end_color=color,
         karaoke_colors=colors,
+        **ruby_updates,
     )
 
 

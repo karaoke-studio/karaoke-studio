@@ -806,3 +806,136 @@ def test_role_geometry_matches_d2d_gpu(binary,roles,semantics):
         y,x=np.where(p[...,3]>127)
         return np.array([x.min(),y.min(),x.max(),y.max()])
     assert np.max(np.abs(bounds(expected)-bounds(frames[0])))<=1
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_role_ruby_follow_main_ignores_stale_ruby_colors_and_global_overrides(binary, roles, target):
+    """Role ruby with ruby_colors_follow_main=True follows its own main colors and decoration,
+    not stale ruby_karaoke_colors (e.g. N3/cloned global colors) or global independent ruby overrides."""
+    track, style = roles
+    global_main = colors('#1133CC', '#1188FF')
+    global_ruby = colors('#AA00AA', '#FF00FF')
+    role_main = colors('#22CC33', '#FFCC00')
+    lead = replace(
+        style.custom_style_schemes['lead'],
+        karaoke_colors=role_main,
+        ruby_colors_follow_main=True,
+        ruby_karaoke_colors=global_main,  # stale global main colors (like N3/clone)
+        decoration_kind='none',
+        decoration_kind_before='none',
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        n3_font_inheritance=True,
+        ruby_stroke_width_px=None,
+        ruby_stroke2_enabled=None,
+        ruby_stroke2_width_px=None,
+    )
+    rubies = [
+        RubyAnnotation(
+            kanji=track.lines[0].chars[1].text,
+            reading='字',
+            pos_start_ms=track.lines[0].chars[1].start_ms,
+            pos_end_ms=track.lines[0].chars[2].start_ms,
+            target_line_index=0,
+            target_char_start=1,
+            target_char_end=2,
+        )
+    ]
+    annotated = replace(track, rubies=rubies)
+    configured_style = replace(
+        style,
+        karaoke_colors=global_main,
+        ruby_colors_follow_main=False,
+        ruby_karaoke_colors=global_ruby,
+        ruby_decoration_kind='shadow',
+        ruby_shadow_offset_x=8,
+        ruby_shadow_offset_y=8,
+        ruby_stroke_width_px=10,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=3,
+        custom_style_schemes={**style.custom_style_schemes, 'lead': lead},
+    )
+    ir = ir_for(binary, (annotated, configured_style))
+    group = ir['skia_layout']['lines'][0]['ruby_groups'][0]
+    assert 'outlines' not in group  # n3_font_inheritance clears global ruby stroke/stroke2
+    unit = group['units'][0]
+    ink = unit['metrics']['ink']
+    x = int(unit['origin_x'] + (ink[0] + ink[2]) / 2)
+    y = int(unit['baseline_y'] + (ink[1] + ink[3]) / 2)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        process.configure(annotated, configured_style, width=640, height=360, fps=60)
+        frames, _ = collect(process, [100, 1900])
+    # Ruby must be painted with role_main (#22CC33 before / #FFCC00 after), never global_main or global_ruby.
+    for frame, expected_hex in ((frames[0], '#22CC33'), (frames[1], '#FFCC00')):
+        patch = frame[max(y - 8, 0):y + 9, max(x - 8, 0):x + 9]
+        expected = np.array(QColor(expected_hex).getRgb())
+        opaque = patch[patch[..., 3] > 200]
+        assert len(opaque) > 0
+        min_dist = np.min(np.max(np.abs(opaque.astype(int) - expected), axis=-1))
+        assert min_dist <= 3, (expected_hex, opaque[:5], expected)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Direct2D GPU verification')
+def test_d2d_role_ruby_follow_main_uses_role_main_not_global(roles):
+    """Direct2D GPU sidecar also honors ruby_colors_follow_main and n3_font_inheritance on roles."""
+    from test_subtitle_render_gpu_backend import _render_g1_frames
+    track, style = roles
+    global_main = colors('#1133CC', '#1188FF')
+    global_ruby = colors('#AA00AA', '#FF00FF')
+    role_main = colors('#22CC33', '#FFCC00')
+    lead = replace(
+        style.custom_style_schemes['lead'],
+        karaoke_colors=role_main,
+        ruby_colors_follow_main=True,
+        ruby_karaoke_colors=global_main,
+        decoration_kind='none',
+        decoration_kind_before='none',
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        n3_font_inheritance=True,
+        ruby_stroke_width_px=None,
+        ruby_stroke2_enabled=None,
+        ruby_stroke2_width_px=None,
+    )
+    rubies = [
+        RubyAnnotation(
+            kanji=track.lines[0].chars[1].text,
+            reading='字',
+            pos_start_ms=track.lines[0].chars[1].start_ms,
+            pos_end_ms=track.lines[0].chars[2].start_ms,
+            target_line_index=0,
+            target_char_start=1,
+            target_char_end=2,
+        )
+    ]
+    annotated = replace(track, rubies=rubies)
+    configured_style = replace(
+        style,
+        karaoke_colors=global_main,
+        ruby_colors_follow_main=False,
+        ruby_karaoke_colors=global_ruby,
+        ruby_decoration_kind='shadow',
+        ruby_shadow_offset_x=8,
+        ruby_shadow_offset_y=8,
+        ruby_stroke_width_px=10,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=3,
+        custom_style_schemes={**style.custom_style_schemes, 'lead': lead},
+    )
+    with NativeRendererProcess() as d2d:
+        _, raw = _render_g1_frames(d2d, configured_style, (1900,), force_warp=True, track=annotated)
+    frame = np.frombuffer(raw[0], np.uint8).reshape(360, 640, 4)
+    # Ruby sits in the upper part of the line; check that role_main after color (#FFCC00 -> BGR/RGB)
+    # appears in the ruby band above the main glyphs, and global_ruby (#FF00FF) does NOT.
+    # Raw D2D buffer from _render_g1_frames is RGBA.
+    opaque_y, opaque_x = np.where(frame[..., 3] > 200)
+    assert len(opaque_y) > 0
+    ruby_band = frame[opaque_y.min():opaque_y.min() + 30, :]
+    ruby_pixels = ruby_band[ruby_band[..., 3] > 200]
+    assert len(ruby_pixels) > 0
+    expected_role = np.array([0xFF, 0xCC, 0x00, 0xFF])
+    forbidden_global = np.array([0xFF, 0x00, 0xFF, 0xFF])
+    forbidden_global_main = np.array([0x11, 0x88, 0xFF, 0xFF])
+    assert np.min(np.max(np.abs(ruby_pixels.astype(int) - expected_role), axis=-1)) <= 4
+    assert np.min(np.max(np.abs(ruby_pixels.astype(int) - forbidden_global), axis=-1)) > 40
+    assert np.min(np.max(np.abs(ruby_pixels.astype(int) - forbidden_global_main), axis=-1)) > 40

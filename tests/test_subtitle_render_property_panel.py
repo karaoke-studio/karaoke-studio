@@ -8438,6 +8438,140 @@ def test_ruby_color_follow_state_is_saved_per_role_scheme(qapp):
     assert restored.custom_style_schemes["主唱"].ruby_colors_follow_main is True
 
 
+def test_new_role_from_n3_global_does_not_leak_global_ruby_colors(qapp):
+    """从带有 ruby_colors_follow_main=True + ruby_karaoke_colors 的全局创建角色时，
+    新角色的注音不得残留全局默认的主文字颜色。"""
+    global_colors = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#112233")),
+        after=KaraokeColorState(text=PaintFill(color="#445566")),
+    )
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            karaoke_colors=global_colors,
+            ruby_colors_follow_main=True,
+            ruby_karaoke_colors=deepcopy(global_colors),
+        )
+    )
+    panel.set_roles(["角色A"])
+    scheme = panel.subtitle_style.custom_style_schemes["角色A"]
+    assert scheme.ruby_colors_follow_main is True
+    assert scheme.ruby_karaoke_colors is None
+    assert scheme.karaoke_colors is not None
+    assert scheme.karaoke_colors.after.text.color != "#445566"
+
+
+def test_role_follow_main_controller_hides_global_ruby_decoration_and_stale_matrix(qapp):
+    """角色开启 ruby_colors_follow_main=True 时，controller.value 与 snapshot 不得泄漏全局注音装饰，
+    changes_from_scheme 应用到全局时同步清空旧注音覆盖。"""
+    controller = PropertyStyleController()
+    global_colors = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#111111")),
+        after=KaraokeColorState(text=PaintFill(color="#222222")),
+    )
+    role_colors = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#AA0000")),
+        after=KaraokeColorState(text=PaintFill(color="#00AA00")),
+    )
+    style = Style(
+        karaoke_colors=global_colors,
+        ruby_colors_follow_main=False,
+        ruby_karaoke_colors=global_colors,
+        ruby_decoration_kind="shadow",
+        ruby_shadow_offset_x=9,
+        custom_style_schemes={
+            "A": SubtitleStyleScheme(
+                karaoke_colors=role_colors,
+                ruby_colors_follow_main=True,
+                ruby_karaoke_colors=global_colors,
+            )
+        },
+    )
+    assert controller.value(style, "A", "ruby_karaoke_colors") is None
+    assert controller.value(style, "A", "ruby_decoration_kind") is None
+    assert controller.value(style, "A", "ruby_shadow_offset_x") is None
+    snap = controller.snapshot(style, "A")
+    assert snap.ruby_colors_follow_main is True
+    assert snap.ruby_karaoke_colors is None
+    assert snap.ruby_decoration_kind is None
+    assert snap.ruby_shadow_offset_x is None
+
+    changes = controller.changes_from_scheme(snap)
+    assert changes["ruby_colors_follow_main"] is True
+    assert changes["ruby_karaoke_colors"] is None
+    assert changes["ruby_decoration_kind"] is None
+    assert changes["ruby_shadow_offset_x"] is None
+
+    panel = PropertyPanel()
+    panel.set_style(style)
+    panel.set_roles(["A"])
+    panel.set_current_scheme_key("custom:A")
+    assert panel._effective_ruby_matrix().after.text.color == "#00AA00"
+
+
+def test_role_ruby_font_controls_inherit_role_main_not_global(qapp):
+    """角色在字体页把注音斜体、描边2、字体或字重切回「跟随主文字」时，
+    自动启用方案内继承，不会被全局的独立注音设置覆盖。"""
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            font_family="Arial",
+            font_weight=400,
+            italic=False,
+            stroke2_enabled=True,
+            ruby_font_family="Times New Roman",
+            ruby_font_weight=700,
+            ruby_italic=True,
+            ruby_stroke2_enabled=True,
+            custom_style_schemes={
+                "A": SubtitleStyleScheme(
+                    font_family="Microsoft YaHei",
+                    font_weight=600,
+                    italic=False,
+                    stroke2_enabled=False,
+                    ruby_font_family="Times New Roman",
+                    ruby_font_weight=700,
+                    ruby_italic=True,
+                    ruby_stroke2_enabled=True,
+                )
+            },
+        )
+    )
+    panel.set_roles(["A"])
+    panel.set_current_scheme_key("custom:A")
+
+    # 注音描边 2 点成半选（跟随本角色主文字 stroke2_enabled=False）
+    panel._ruby_stroke2_enabled_check.setCheckState(Qt.CheckState.PartiallyChecked)
+    scheme = panel.subtitle_style.custom_style_schemes["A"]
+    assert scheme.n3_font_inheritance is True
+    assert scheme.ruby_stroke2_enabled is None
+    merged = style_for_role(panel.subtitle_style, "A")
+    assert merged.ruby_stroke2_enabled is None
+    assert merged.stroke2_enabled is False
+
+    # 注音斜体点成半选（跟随本角色主文字 italic=False）
+    panel._font_italic_checks[("ruby", "japanese")].setCheckState(
+        Qt.CheckState.PartiallyChecked
+    )
+    scheme = panel.subtitle_style.custom_style_schemes["A"]
+    assert scheme.ruby_italic is None
+    assert style_for_role(panel.subtitle_style, "A").ruby_italic is None
+
+    # 注音字重切到 0（跟随本角色主文字 font_weight=600）
+    zero_idx = panel._ruby_font_weight_combo.findData(0)
+    assert zero_idx >= 0
+    panel._ruby_font_weight_combo.setCurrentIndex(zero_idx)
+    scheme = panel.subtitle_style.custom_style_schemes["A"]
+    assert scheme.ruby_font_weight is None
+    assert style_for_role(panel.subtitle_style, "A").ruby_font_weight is None
+
+    # 注音字体切到「跟随主文字（0）」
+    panel._ruby_font_combo.setCurrentIndex(0)
+    scheme = panel.subtitle_style.custom_style_schemes["A"]
+    assert scheme.ruby_font_family is None
+    assert style_for_role(panel.subtitle_style, "A").ruby_font_family is None
+
+
 def test_property_panel_ruby_font_tab_controls_emit_ruby_strokes(qapp):
     panel = PropertyPanel()
     panel.set_style(

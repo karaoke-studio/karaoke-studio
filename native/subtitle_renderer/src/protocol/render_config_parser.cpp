@@ -569,6 +569,31 @@ std::optional<krok::subtitle::native::BitmapGuide> parseBitmapGuide(
 
 void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     applySignalStyleOverrides(cfg, style);
+    // N3 / 方案内字体继承：该方案里未设定的子字体槽必须在本方案内跟随主文字，
+    // 不能沿用全局默认（例如出厂全局自带 ruby_stroke_width_px=10 / stroke2=true）。
+    // 与 Python ``style_for_role`` 的 ``N3_FONT_INHERITANCE_FIELDS`` 保持逐项同构。
+    if (style.value(QStringLiteral("n3_font_inheritance")).toBool(false)) {
+        cfg.fontFamilyLatin.clear();
+        cfg.latinFontSizePx.reset();
+        cfg.latinFontWeight.reset();
+        cfg.latinItalic.reset();
+        cfg.latinStrokeWidthPx.reset();
+        cfg.latinStroke2Enabled.reset();
+        cfg.latinStroke2WidthPx.reset();
+        cfg.rubyFontFamily.clear();
+        cfg.rubyFontWeight.reset();
+        cfg.rubyItalic.reset();
+        cfg.rubyStrokeWidthPx.reset();
+        cfg.rubyStroke2Enabled.reset();
+        cfg.rubyStroke2WidthPx.reset();
+        cfg.rubyFontFamilyLatin.clear();
+        cfg.rubyLatinFontSizePx.reset();
+        cfg.rubyLatinFontWeight.reset();
+        cfg.rubyLatinItalic.reset();
+        cfg.rubyLatinStrokeWidthPx.reset();
+        cfg.rubyLatinStroke2Enabled.reset();
+        cfg.rubyLatinStroke2WidthPx.reset();
+    }
     if (hasNonNull(style, QStringLiteral("font_family"))) {
         cfg.fontFamily = stringValue(style, QStringLiteral("font_family"), cfg.fontFamily);
     }
@@ -954,21 +979,63 @@ ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &s
     ResolvedStyle cfg = base;
     applyScalarStyleOverrides(cfg, scheme);
 
+    const bool hasLegacyColorChanges =
+        hasNonNull(scheme, QStringLiteral("base_color"))
+        || hasNonNull(scheme, QStringLiteral("fill_color"))
+        || scheme.value(QStringLiteral("fill_gradient_enabled")).isBool()
+        || hasNonNull(scheme, QStringLiteral("fill_gradient_start_color"))
+        || hasNonNull(scheme, QStringLiteral("fill_gradient_end_color"))
+        || hasNonNull(scheme, QStringLiteral("fill_gradient_angle_deg"))
+        || hasNonNull(scheme, QStringLiteral("stroke_color"))
+        || hasNonNull(scheme, QStringLiteral("shadow_color"));
+
     if (hasObject(scheme, QStringLiteral("karaoke_colors"))) {
         cfg.hasMainKaraokeColors = true;
         applyMainKaraokeColors(cfg, scheme.value(QStringLiteral("karaoke_colors")).toObject());
+    } else if (hasLegacyColorChanges) {
+        cfg.hasMainKaraokeColors = false;
+        refreshLegacyMainFills(cfg);
     } else if (!cfg.hasMainKaraokeColors) {
         refreshLegacyMainFills(cfg);
     }
 
-    if (hasObject(scheme, QStringLiteral("ruby_karaoke_colors"))) {
+    // 方案显式「注音默认跟随主文字」时，注音整套配色与装饰全部同步本方案主文字：
+    // 清空从全局继承来的注音装饰覆盖，并忽略全局或残留的 ruby_karaoke_colors，
+    // 与 Python ``style_for_role`` 保持一致。
+    const bool rubyColorsFollowMain =
+        scheme.value(QStringLiteral("ruby_colors_follow_main")).isBool()
+        && scheme.value(QStringLiteral("ruby_colors_follow_main")).toBool();
+    if (rubyColorsFollowMain) {
+        cfg.rubyDecorationKind.clear();
+        cfg.rubyDecorationKindBefore.clear();
+        cfg.rubyGlowBeforeRadiusPx.reset();
+        cfg.rubyGlowAfterRadiusPx.reset();
+        cfg.rubyGlowConcentrationLevel.reset();
+        cfg.rubyGlowBeforeConcentrationLevel.reset();
+        cfg.rubyShadowOffsetX.reset();
+        cfg.rubyShadowOffsetY.reset();
+        cfg.rubyShadowBeforeOffsetX.reset();
+        cfg.rubyShadowBeforeOffsetY.reset();
+        if (cfg.hasMainKaraokeColors) {
+            cfg.hasRubyKaraokeColors = true;
+            copyMainColorsToRuby(cfg);
+        } else {
+            cfg.hasRubyKaraokeColors = false;
+            refreshLegacyRubyFills(cfg);
+        }
+    } else if (hasObject(scheme, QStringLiteral("ruby_karaoke_colors"))) {
         cfg.hasRubyKaraokeColors = true;
         applyRubyKaraokeColors(cfg, scheme.value(QStringLiteral("ruby_karaoke_colors")).toObject());
-    } else if (hasObject(scheme, QStringLiteral("karaoke_colors"))) {
+    } else if (hasObject(scheme, QStringLiteral("karaoke_colors")) || hasLegacyColorChanges) {
         // Painter treats a role's main colors as that role's implicit ruby
         // colors. A global explicit ruby palette must not leak into it.
-        cfg.hasRubyKaraokeColors = true;
-        copyMainColorsToRuby(cfg);
+        if (cfg.hasMainKaraokeColors) {
+            cfg.hasRubyKaraokeColors = true;
+            copyMainColorsToRuby(cfg);
+        } else {
+            cfg.hasRubyKaraokeColors = false;
+            refreshLegacyRubyFills(cfg);
+        }
     } else if (!cfg.hasRubyKaraokeColors) {
         if (cfg.hasMainKaraokeColors) {
             copyMainColorsToRuby(cfg);

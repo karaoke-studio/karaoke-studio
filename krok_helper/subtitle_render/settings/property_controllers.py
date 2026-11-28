@@ -17,6 +17,7 @@ from krok_helper.subtitle_render.domain.models import (
     LineYPosition,
     LyricsLayout,
     N3_FONT_INHERITANCE_FIELDS,
+    RUBY_DECORATION_OVERRIDE_FIELDS,
     Style,
     StylePreset,
     SubtitleStyleScheme,
@@ -180,6 +181,15 @@ class PropertyStyleController:
                 and scheme_has_legacy_color_values(scheme)
             ):
                 return None
+            if (
+                scheme is not None
+                and scheme.ruby_colors_follow_main is True
+                and (
+                    field_name == "ruby_karaoke_colors"
+                    or field_name in RUBY_DECORATION_OVERRIDE_FIELDS
+                )
+            ):
+                return None
             if field_name == "ruby_karaoke_colors" and scheme is not None:
                 return scheme.ruby_karaoke_colors
             value = getattr(scheme, field_name, None) if scheme is not None else None
@@ -280,6 +290,10 @@ class PropertyStyleController:
                 changes[field] = value
             elif scheme.n3_font_inheritance and field in N3_FONT_INHERITANCE_FIELDS:
                 changes[field] = None
+        if scheme.ruby_colors_follow_main is True:
+            changes["ruby_karaoke_colors"] = None
+            for field_name in RUBY_DECORATION_OVERRIDE_FIELDS:
+                changes[field_name] = None
         return changes
 
     def _legacy_colors(
