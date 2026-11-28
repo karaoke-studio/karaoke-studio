@@ -18,8 +18,14 @@ def host_platform() -> tuple[str, str]:
 
 
 def validate_selection(system: str, arch: str, gpu: str | None, cpu_only: bool) -> None:
-    if system in {"windows", "linux"} and arch != "x64":
-        raise ValueError("P01 Windows/Linux currently support x64 only")
+    # Linux supports native x64 and arm64 (host must match; cross-OS/cross-arch
+    # compilation is rejected in build_skia_renderer.arguments()).
+    # Windows stays x64-only: configure() hardcodes MSVC lib/x64 + INCLUDE/LIB
+    # paths, and skia.lock.json has no windows-arm64 toolchain entry.
+    if system == "windows" and arch != "x64":
+        raise ValueError("P01 Windows currently supports x64 only")
+    if system == "linux" and arch not in {"x64", "arm64"}:
+        raise ValueError("P01 Linux supports x64 and arm64 only")
     if cpu_only and gpu:
         raise ValueError("--cpu-only cannot be combined with --gpu-api")
     expected = "metal" if system == "macos" else "vulkan"
@@ -85,8 +91,20 @@ def configure(lock: dict, root: Path, system: str, arch: str, gpu: str | None,
         identity["sdk_windows_h_sha256"] = sha256(sdk / "Include" / sdk_version / "um/Windows.h")
         identity["stl_yvals_sha256"] = sha256(vc / "Tools/MSVC" / msvc / "include/yvals_core.h")
     else:
-        compiler = (Path(output(["xcrun", "--find", "clang++"])) if system == "macos" else
-                    Path(shutil.which("clang++-21") or shutil.which("clang++") or "clang++"))
+        if system == "macos":
+            compiler = Path(output(["xcrun", "--find", "clang++"]))
+        elif llvm_root is not None:
+            # Pinned LLVM handed over by the caller (e.g. the arm64 bootstrap script).
+            # Never fall back to PATH: a foreign "clang++-21" wrapper can win there
+            # and fail to exec (broken shebang => FileNotFoundError).
+            compiler = llvm_root / "bin/clang++"
+            if not compiler.exists():
+                compiler = next((path for path in sorted(llvm_root.glob("**/clang++"))
+                                 if path.is_file()), None)
+                if compiler is None:
+                    raise RuntimeError(f"--llvm-root does not contain bin/clang++: {llvm_root}")
+        else:
+            compiler = Path(shutil.which("clang++-21") or shutil.which("clang++") or "clang++")
         version = output([str(compiler), "--version"])
         c_compiler = compiler.with_name(compiler.name.replace("clang++", "clang"))
         args |= {"cc": str(c_compiler), "cxx": str(compiler)}
