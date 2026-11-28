@@ -1912,11 +1912,202 @@ class KrokHelperQtApp(QMainWindow):
         return super().eventFilter(watched, event)
 
 
+    @staticmethod
+    def _lyrics_timing_has_data(timing_page: object) -> bool:
+        """判断嵌入的 SUG 打轴模块当前是否已有数据。
+
+        满足任一条件即视为有数据：
+        - 存在未保存修改（``has_unsaved_changes()`` 为真）
+        - 当前项目已有歌词行
+        - 已打开或保存过正式的 ``.sug`` 项目文件
+        - 已加载音频或原始媒体文件
+        """
+        dirty_checker = getattr(timing_page, "has_unsaved_changes", None)
+        if callable(dirty_checker):
+            try:
+                if dirty_checker():
+                    return True
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "检查歌词打轴模块未保存状态失败", exc_info=True
+                )
+                return True
+
+        store = getattr(timing_page, "_store", None)
+        editor = getattr(timing_page, "editorInterface", None)
+        project = getattr(store, "project", None)
+        if project is None:
+            project = getattr(editor, "_project", None)
+        if project is not None and bool(getattr(project, "sentences", None)):
+            return True
+
+        if store is not None:
+            save_path = getattr(store, "save_path", None)
+            if save_path:
+                is_temp = getattr(store, "is_temp_save_path", None)
+                try:
+                    if not (callable(is_temp) and is_temp()):
+                        return True
+                except Exception:
+                    return True
+            if getattr(store, "audio_path", None) or getattr(
+                store, "original_media_path", None
+            ):
+                return True
+
+        if editor is not None and getattr(editor, "_audio_file_path", None):
+            return True
+
+        return False
+
+    @staticmethod
+    def _lyrics_timing_is_parsing_lyrics(timing_page: object) -> bool:
+        editor = getattr(timing_page, "editorInterface", None)
+        file_loader = getattr(editor, "_file_loader", None)
+        return getattr(file_loader, "_lyric_thread", None) is not None
+
+    def _finish_import_lyrics_to_timing(
+        self, timing_page: object, lyrics_text: str
+    ) -> None:
+        try:
+            imported = bool(timing_page.import_lyrics_from_text(lyrics_text))
+        except Exception as exc:
+            show_fluent_error(self, f"导入到打轴失败：\n{exc}")
+            return
+        if not imported:
+            return
+        self._show_module(WORKFLOW_LYRICS_TIMING)
+
+    def _create_fresh_lyrics_timing_project_and_import(
+        self, timing_page: object, lyrics_text: str
+    ) -> None:
+        """新建干净的 SUG 空项目，再导入歌词并切到打轴页。"""
+        editor = getattr(timing_page, "editorInterface", None)
+        file_loader = getattr(editor, "_file_loader", None)
+        create_fresh = getattr(file_loader, "create_fresh_project", None)
+        if callable(create_fresh):
+            try:
+                create_fresh(inherit_audio=False)
+            except Exception as exc:
+                logging.getLogger(__name__).exception("新建歌词打轴项目失败")
+                show_fluent_error(self, f"新建打轴项目失败：\n{exc}")
+                return
+        else:
+            store = getattr(timing_page, "_store", None)
+            load_project = getattr(store, "load_project", None)
+            if not callable(load_project):
+                show_fluent_error(
+                    self, "打轴模块不支持新建空项目，无法继续导入。"
+                )
+                return
+            try:
+                from strange_uta_game.backend.application import ProjectService
+
+                load_project(ProjectService().create_project(), audio_path=None)
+            except Exception as exc:
+                logging.getLogger(__name__).exception("新建歌词打轴项目失败")
+                show_fluent_error(self, f"新建打轴项目失败：\n{exc}")
+                return
+
+        KrokHelperQtApp._finish_import_lyrics_to_timing(
+            self, timing_page, lyrics_text
+        )
+
+    def _save_lyrics_timing_then_import_fresh(
+        self, timing_page: object, lyrics_text: str
+    ) -> None:
+        """先异步保存当前 SUG 项目，保存成功后新建空项目并导入歌词。"""
+        from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
+            fluent_error,
+        )
+
+        if getattr(self, "_lyrics_timing_import_waiting_for_save", False):
+            return
+
+        finished_signal = getattr(timing_page, "project_save_finished", None)
+        failed_signal = getattr(timing_page, "project_save_failed", None)
+        trigger_save = getattr(timing_page, "trigger_save", None)
+        if (
+            finished_signal is None
+            or failed_signal is None
+            or not callable(trigger_save)
+        ):
+            fluent_error(
+                self,
+                "无法保存项目",
+                "歌词打轴模块不支持保存完成通知，无法在保存后新建项目。",
+            )
+            return
+
+        # 极端情况：用户仅加载了音频/视频而尚未创建 Project 对象时，
+        # 先补建继承该音频的 Project，使 trigger_save() 可以正常弹出保存框。
+        store = getattr(timing_page, "_store", None)
+        if store is not None and getattr(store, "project", None) is None:
+            editor = getattr(timing_page, "editorInterface", None)
+            file_loader = getattr(editor, "_file_loader", None)
+            create_fresh = getattr(file_loader, "create_fresh_project", None)
+            if callable(create_fresh):
+                has_audio = bool(
+                    getattr(store, "audio_path", None)
+                    or getattr(store, "original_media_path", None)
+                    or getattr(editor, "_audio_file_path", None)
+                )
+                if has_audio and editor is not None:
+                    editor._preserve_audio_on_project_load = True
+                try:
+                    create_fresh(inherit_audio=has_audio)
+                except Exception as exc:
+                    if editor is not None:
+                        editor._preserve_audio_on_project_load = False
+                    logging.getLogger(__name__).exception("准备待保存打轴项目失败")
+                    fluent_error(self, "保存项目失败", str(exc))
+                    return
+
+        self._lyrics_timing_import_waiting_for_save = True
+
+        def disconnect_callbacks() -> None:
+            self._lyrics_timing_import_waiting_for_save = False
+            for signal, callback in (
+                (finished_signal, on_saved),
+                (failed_signal, on_failed),
+            ):
+                try:
+                    signal.disconnect(callback)
+                except (TypeError, RuntimeError):
+                    pass
+
+        def on_saved(_path: str) -> None:
+            disconnect_callbacks()
+            QTimer.singleShot(
+                0,
+                lambda: KrokHelperQtApp._create_fresh_lyrics_timing_project_and_import(
+                    self, timing_page, lyrics_text
+                ),
+            )
+
+        def on_failed(message: str) -> None:
+            disconnect_callbacks()
+            fluent_error(self, "保存项目失败", str(message))
+
+        finished_signal.connect(on_saved)
+        failed_signal.connect(on_failed)
+        try:
+            started = bool(trigger_save())
+        except Exception as exc:
+            disconnect_callbacks()
+            logging.getLogger(__name__).exception("发起歌词打轴项目保存失败")
+            fluent_error(self, "保存项目失败", str(exc))
+            return
+        if not started:
+            # 未命名项目取消了「保存」对话框，或当前已有保存任务在进行中。
+            disconnect_callbacks()
+
     def _import_current_lyrics_to_timing(self) -> None:
         """把歌词检索页选中的那条交给第 4 步打轴。
 
-        "有没有可导入的歌词"由检索页自己判断（它持有候选与预览）；这里只管
-        装进打轴模块并切页。
+        "有没有可导入的歌词"由检索页自己判断（它持有候选与预览）；若打轴
+        模块当前已有数据，先由用户选择「保存后新建项目 / 直接覆盖 / 取消」，
+        避免静默覆写已有打轴进度。
         """
         lyrics_text = self.lyrics_page.current_lyrics_for_timing()
         if lyrics_text is None:
@@ -1925,14 +2116,42 @@ class KrokHelperQtApp(QMainWindow):
         if lyrics_timing_page is None or not hasattr(lyrics_timing_page, "import_lyrics_from_text"):
             show_fluent_error(self, "打轴模块尚未准备好，无法导入歌词。")
             return
-        try:
-            imported = bool(lyrics_timing_page.import_lyrics_from_text(lyrics_text))
-        except Exception as exc:
-            show_fluent_error(self, f"导入到打轴失败：\n{exc}")
+        if getattr(self, "_lyrics_timing_import_waiting_for_save", False):
+            show_fluent_info(self, "正在保存当前打轴项目，请等待保存完成后再试。")
             return
-        if not imported:
+        if KrokHelperQtApp._lyrics_timing_is_parsing_lyrics(lyrics_timing_page):
+            show_fluent_info(self, "打轴模块正在解析歌词，请稍后再试。")
             return
-        self._show_module(WORKFLOW_LYRICS_TIMING)
+
+        if KrokHelperQtApp._lyrics_timing_has_data(lyrics_timing_page):
+            from krok_helper.subtitle_render.frontend.dialogs.fluent_dialogs import (
+                fluent_choice,
+            )
+
+            choice = fluent_choice(
+                self,
+                "打轴模块已有数据",
+                (
+                    "歌词打轴模块当前已有项目数据，继续导入将影响现有内容。\n"
+                    "请选择处理方式：\n\n"
+                    "· 保存后新建项目：先保存当前打轴项目，再新建空项目并导入新歌词\n"
+                    "· 直接覆盖：不保存当前项目，直接用新歌词覆盖当前歌词内容\n"
+                    "· 取消：中止本次导入，保留现有内容"
+                ),
+                ("保存后新建项目", "直接覆盖", "取消"),
+                default=0,
+            )
+            if choice == 0:
+                KrokHelperQtApp._save_lyrics_timing_then_import_fresh(
+                    self, lyrics_timing_page, lyrics_text
+                )
+                return
+            if choice != 1:
+                return
+
+        KrokHelperQtApp._finish_import_lyrics_to_timing(
+            self, lyrics_timing_page, lyrics_text
+        )
 
     def _set_panel_enabled(self, panel: QWidget, enabled: bool):
         for w in panel.findChildren(QWidget):
