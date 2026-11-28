@@ -21,6 +21,13 @@ from krok_helper.subtitle_render.domain.models import (
     ZOOM_PULSE_PEAK_PCT_MAX,
     ZOOM_PULSE_PEAK_PCT_MIN,
 )
+from krok_helper.subtitle_render.frontend.properties.controls.animation_preview import (
+    ZoomPulseCurveComboBox,
+)
+from krok_helper.subtitle_render.frontend.properties.controls.effect_preview import (
+    install_stroke_flash_hover,
+    make_effect_preview_combo,
+)
 from krok_helper.subtitle_render.frontend.properties.controls.grouped_animation_combo import (
     AnimationGroupSpec,
     ENTRY_ANIMATION_GROUPS,
@@ -399,6 +406,7 @@ class EffectsPropertyPageBuilder:
                 ("图片", "image"),
             ),
             "lit_style",
+            preview_category="lit_style",
         )
         add = group("布局", min_column_width=220, max_columns=2)
         add("形状", host._lit_style_combo)
@@ -520,6 +528,7 @@ class EffectsPropertyPageBuilder:
             section,
             (("无", "none"), ("淡入淡出", "fade"), ("滑动", "slide")),
             "lit_transition_mode",
+            preview_category="lit_transition_mode",
         )
 
         def _lit_transition_mode_changed(_index: int) -> None:
@@ -606,7 +615,11 @@ class EffectsPropertyPageBuilder:
             host._exit_animation_row,
         )
 
-        host._karaoke_anim_combo = WheelFocusedComboBox(section)
+        host._karaoke_anim_combo = make_effect_preview_combo(
+            "karaoke_anim",
+            section,
+            style_provider=lambda: getattr(host, "_style", None),
+        )
         compact_property_control(host._karaoke_anim_combo)
         for label, value in (
             ("无", "none"),
@@ -626,7 +639,14 @@ class EffectsPropertyPageBuilder:
             )
         )
 
-        host._reverse_karaoke_anim_combo = WheelFocusedComboBox(section)
+        host._reverse_karaoke_anim_combo = make_effect_preview_combo(
+            "reverse_karaoke_anim",
+            section,
+            style_provider=lambda: getattr(host, "_style", None),
+            inherit_key_provider=lambda: str(
+                host._karaoke_anim_combo.currentData() or "none"
+            ),
+        )
         compact_property_control(host._reverse_karaoke_anim_combo)
         for label, value in (
             ("跟随唱字特效", "inherit"),
@@ -750,7 +770,10 @@ class EffectsPropertyPageBuilder:
             host._scanline_glow_spin,
         )
         host._scanline_shape_combo = self._combo(
-            host._scanline_section, SCANLINE_SHAPE_OPTIONS, "scanline_shape"
+            host._scanline_section,
+            SCANLINE_SHAPE_OPTIONS,
+            "scanline_shape",
+            preview_category="scanline_shape",
         )
         host._scanline_shape_combo.setToolTip(
             "替换普通高亮带的锋面形态（只在唱字/反向唱字选择扫字线档位时"
@@ -767,7 +790,10 @@ class EffectsPropertyPageBuilder:
             "可同时使用。上方「柔化半径」只对普通高亮生效"
         )
         host._scanline_effect_combo = self._combo(
-            host._scanline_section, SCANLINE_EFFECT_OPTIONS, "scanline_effect"
+            host._scanline_section,
+            SCANLINE_EFFECT_OPTIONS,
+            "scanline_effect",
+            preview_category="scanline_effect",
         )
         host._scanline_effect_combo.setToolTip(
             "沿扫字线锋面发射装饰粒子。唱字或反向唱字选择扫字线档位时可用，"
@@ -777,7 +803,7 @@ class EffectsPropertyPageBuilder:
             "编辑，与入退场、唱字装饰粒子彻底解耦"
         )
         host._scanline_effect_row = host._scanline_effect_combo
-        host._zoom_pulse_curve_combo = WheelFocusedComboBox(section)
+        host._zoom_pulse_curve_combo = ZoomPulseCurveComboBox(section)
         compact_property_control(host._zoom_pulse_curve_combo)
         for label, value in (
             ("0级（线性）", 0),
@@ -829,17 +855,30 @@ class EffectsPropertyPageBuilder:
         host._zoom_pulse_peak_control.valueChanged.connect(
             lambda value: host._update_style(zoom_pulse_peak_pct=value)
         )
+        host._zoom_pulse_curve_combo.set_peak_pct_provider(
+            lambda: int(host._zoom_pulse_peak_control.value())
+        )
+        host._zoom_pulse_curve_combo.set_style_provider(
+            lambda: getattr(host, "_style", None)
+        )
         host._stroke_flash_check = CheckBox("唱字闪光", section)
         host._stroke_flash_check.setToolTip(
             "每个字唱到的瞬间，描边沿字形轮廓闪白脉冲约 240ms 后回落；"
             "可与任意唱字特效叠加，仅主文字生效（注音不闪）"
+        )
+        host._stroke_flash_hover_filter = install_stroke_flash_hover(
+            host._stroke_flash_check,
+            style_provider=lambda: getattr(host, "_style", None),
         )
         host._stroke_flash_check.toggled.connect(
             lambda checked: host._update_style(karaoke_stroke_flash=checked)
         )
 
         host._fx_sing_combo = self._combo(
-            host._particle_section, FX_SING_OPTIONS, "sing_fx"
+            host._particle_section,
+            FX_SING_OPTIONS,
+            "sing_fx",
+            preview_category="sing_fx",
         )
         host._fx_sing_combo.setToolTip(
             "唱字装饰粒子：唱到哪个字就在那个字上生效——星光闪烁=按伪随机"
@@ -1493,9 +1532,18 @@ class EffectsPropertyPageBuilder:
         *,
         transform: Callable[[Any], Any] = lambda value: value,
         force_global: bool = False,
+        preview_category: str | None = None,
     ) -> WheelFocusedComboBox:
         host = self._host
-        combo = WheelFocusedComboBox(parent)
+        combo: WheelFocusedComboBox = (
+            make_effect_preview_combo(
+                preview_category,
+                parent,
+                style_provider=lambda: getattr(host, "_style", None),
+            )
+            if preview_category
+            else WheelFocusedComboBox(parent)
+        )
         compact_property_control(combo)
         for label, value in options:
             combo.addItem(label, value)

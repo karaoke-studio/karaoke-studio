@@ -308,6 +308,125 @@ def test_grouped_animation_menu_hides_preview_when_cursor_moves_away(qapp, monke
         qapp.processEvents()
 
 
+def test_zoom_pulse_curve_combo_hover_previews_all_levels_and_hides_on_leave(
+    qapp, monkeypatch
+) -> None:
+    """整字放大速度等级（0~5级）下拉项均支持悬停动画预览，且移出即收起。"""
+    import pytest
+    from PyQt6.QtCore import QPoint, Qt
+    from krok_helper.subtitle_render.frontend.properties.controls import (
+        animation_preview as ap,
+    )
+
+    host = _Host()
+    EffectsPropertyPageBuilder(host).make_animation_section()
+    combo = host._zoom_pulse_curve_combo
+    assert isinstance(combo, ap.ZoomPulseCurveComboBox)
+
+    # Shared singing timing matches the timed God knows... line 1 (with multi-mora checkpoints & breath pause).
+    assert "".join(spec.char for spec in ap.ANIMATION_PREVIEW_SING_CHARS) == ap.ANIMATION_PREVIEW_LYRIC
+    assert ap.ANIMATION_PREVIEW_SING_CHARS[0].checkpoints_ms == (0, 468)
+    assert ap.ANIMATION_PREVIEW_SING_CHARS[0].end_ms == 710
+    assert ap.ANIMATION_PREVIEW_SING_CHARS[4].checkpoints_ms == (2607, 2839, 3067)
+    assert ap.ANIMATION_PREVIEW_SING_CHARS[4].end_ms == 3273
+    assert ap.ANIMATION_PREVIEW_SING_DURATION_MS == 5561
+    assert ap.sample_sing_wipe_progress(468, ap.ANIMATION_PREVIEW_SING_CHARS[0]) == pytest.approx(0.5)
+    assert ap.sample_sing_wipe_progress(2839, ap.ANIMATION_PREVIEW_SING_CHARS[4]) == pytest.approx(1.0 / 3.0)
+    # Per-kana ruby timing matches temp.sug (渇=かわ, 心=こころ, 駆=か, 抜=ぬ).
+    assert ap.sample_ruby_kana_progress(234, ap.ANIMATION_PREVIEW_SING_CHARS[0], 0, 2) == pytest.approx(0.5)
+    assert ap.sample_ruby_kana_progress(234, ap.ANIMATION_PREVIEW_SING_CHARS[0], 1, 2) == pytest.approx(0.0)
+    assert ap.sample_ruby_kana_progress(589, ap.ANIMATION_PREVIEW_SING_CHARS[0], 0, 2) == pytest.approx(1.0)
+    assert ap.sample_ruby_kana_progress(589, ap.ANIMATION_PREVIEW_SING_CHARS[0], 1, 2) == pytest.approx(0.5)
+    assert [
+        (spec.char, spec.ruby)
+        for spec in ap.ANIMATION_PREVIEW_SING_CHARS
+        if spec.ruby
+    ] == [("渇", "かわ"), ("心", "こころ"), ("駆", "か"), ("抜", "ぬ")]
+
+    # All 6 curve levels render distinct frames across phases and visibly differ between linear & high order.
+    canvas = ap.ZoomPulseCurvePreviewCanvas(0, 140)
+    level_imgs = {}
+    for level in range(6):
+        canvas.set_curve(level, peak_pct=140)
+        canvas.set_phase(0.01)
+        img_idle = canvas.grab().toImage()
+        canvas.set_phase(0.10)  # Inside the 793ms held 「渇」 syllable where 0 vs 5 diverges sharply.
+        img_active = canvas.grab().toImage()
+        assert not img_idle.isNull() and not img_active.isNull()
+        assert img_idle != img_active
+        level_imgs[level] = img_active
+    assert level_imgs[0] != level_imgs[5]
+    canvas.deleteLater()
+
+    # Hovering menu items shows the preview with live peak_pct and hides when cursor leaves.
+    host._zoom_pulse_peak_control.setValue(150)
+    menu = combo.build_preview_menu()
+    try:
+        menu.show()
+        qapp.processEvents()
+        assert [menu.row_curve_level(i) for i in range(6)] == [0, 1, 2, 3, 4, 5]
+
+        row3_center = menu._row_global_rect(3).center()
+        monkeypatch.setattr(ap.QCursor, "pos", staticmethod(lambda: row3_center))
+        pop = menu.preview_for_row(3, track_cursor=True)
+        qapp.processEvents()
+        assert pop is not None
+        assert pop.parent() is None
+        assert pop.isVisible()
+        assert pop.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        assert pop.canvas.curve_level == 3
+        assert pop.canvas.peak_ratio == 1.5
+        assert pop.canvas.is_animating()
+
+        # Switch to level 5 immediately.
+        pop5 = menu.preview_for_row(5, track_cursor=True)
+        qapp.processEvents()
+        assert pop5 is pop
+        assert pop.canvas.curve_level == 5
+
+        # Applying a real global default Style updates the preview lyric colors (before & after).
+        from krok_helper.subtitle_render.domain.models import Style
+        from krok_helper.subtitle_render.domain.paint import KaraokeColors, KaraokeColorState, PaintFill
+
+        pop.canvas.set_phase(0.36)
+        default_img = pop.canvas.grab().toImage()
+        host._style = Style(
+            karaoke_colors=KaraokeColors(
+                before=KaraokeColorState(
+                    text=PaintFill(mode="gradient_vertical", start_color="#FFF7AD", end_color="#FFA9F9"),
+                    stroke=PaintFill(color="#1E1B4B"),
+                ),
+                after=KaraokeColorState(
+                    text=PaintFill(mode="gradient_vertical", start_color="#38BDF8", end_color="#34D399"),
+                    stroke=PaintFill(color="#0F172A"),
+                ),
+            ),
+            stroke_width_px=6,
+            stroke2_enabled=True,
+            stroke2_width_px=4,
+            decoration_kind="glow",
+            glow_after_radius_px=10,
+        )
+        menu.preview_for_row(5, track_cursor=True)
+        pop.canvas.set_phase(0.36)
+        qapp.processEvents()
+        styled_img = pop.canvas.grab().toImage()
+        assert styled_img != default_img
+
+        # Moving cursor outside hides preview even without viewport Leave event.
+        outside = QPoint(menu.x() - 200, menu.y() - 200)
+        monkeypatch.setattr(ap.QCursor, "pos", staticmethod(lambda: outside))
+        menu._sync_preview_with_cursor()
+        qapp.processEvents()
+        assert not pop.isVisible()
+        assert not pop.canvas.is_animating()
+        assert not menu._preview_cursor_timer.isActive()
+    finally:
+        menu.close()
+        menu.deleteLater()
+        qapp.processEvents()
+
+
 def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     host = _Host()
     section = EffectsPropertyPageBuilder(host).make_animation_section()
@@ -658,3 +777,172 @@ def test_effects_lit_builder_routes_transformed_values(qapp) -> None:
         {"lit_appearance_mode": "custom"},
         {"lit_auto_size_ratio_pct": 80},
     ]
+
+
+def test_core_effect_combos_hover_previews_render_and_hide_on_leave(
+    qapp, monkeypatch
+) -> None:
+    """特效页全部 7 个核心视觉效果下拉框均支持悬停动态演示，且移出即收起。"""
+    from PyQt6.QtCore import QPoint, Qt
+    from krok_helper.subtitle_render.domain.models import Style
+    from krok_helper.subtitle_render.domain.paint import (
+        KaraokeColors,
+        KaraokeColorState,
+        PaintFill,
+    )
+    from krok_helper.subtitle_render.frontend.properties.controls import (
+        animation_preview as ap,
+        effect_preview as ep,
+    )
+
+    host = _Host()
+    builder = EffectsPropertyPageBuilder(host)
+    builder.make_animation_section()
+    builder.make_lit_section()
+
+    combos = [
+        (host._karaoke_anim_combo, "karaoke_anim", ep.KARAOKE_ANIM_META, False),
+        (host._reverse_karaoke_anim_combo, "reverse_karaoke_anim", ep.REVERSE_KARAOKE_ANIM_META, False),
+        (host._scanline_shape_combo, "scanline_shape", ep.SCANLINE_SHAPE_META, False),
+        (host._scanline_effect_combo, "scanline_effect", ep.SCANLINE_EFFECT_META, False),
+        (host._fx_sing_combo, "sing_fx", ep.SING_FX_META, False),
+        (host._lit_style_combo, "lit_style", ep.LIT_STYLE_META, True),
+        (host._lit_transition_mode_combo, "lit_transition_mode", ep.LIT_TRANSITION_META, True),
+    ]
+
+    # Verify every single option across all 7 categories has metadata & renders distinct animated frames.
+    sing_canvas = ep.SingingEffectPreviewCanvas()
+    lit_canvas = ep.LitIndicatorPreviewCanvas()
+    try:
+        for combo, category, meta_table, is_lit in combos:
+            assert isinstance(combo, ap.HoverPreviewComboBox)
+            for idx in range(combo.count()):
+                key = str(combo.itemData(idx))
+                assert key in meta_table, f"Missing preview meta for {category}:{key}"
+                if is_lit:
+                    lit_canvas.set_effect(category, key, style=host._style)
+                    lit_canvas.set_phase(0.02)
+                    img_a = lit_canvas.grab().toImage()
+                    lit_canvas.set_phase(0.36)
+                    img_b = lit_canvas.grab().toImage()
+                else:
+                    sing_canvas.set_effect(category, key, style=host._style)
+                    sing_canvas.set_phase(0.01)
+                    img_a = sing_canvas.grab().toImage()
+                    sing_canvas.set_phase(0.24)
+                    img_b = sing_canvas.grab().toImage()
+                assert not img_a.isNull() and not img_b.isNull()
+                assert img_a != img_b, f"Static preview for {category}:{key}"
+    finally:
+        sing_canvas.deleteLater()
+        lit_canvas.deleteLater()
+
+    # Verify live menu hover, global default color scheme sync, inherit tracking & cursor-leave cleanup.
+    host._karaoke_anim_combo.setCurrentIndex(host._karaoke_anim_combo.findData("zoom_pulse"))
+    for combo, category, _meta_table, is_lit in combos:
+        menu = combo.build_preview_menu()
+        try:
+            menu.show()
+            qapp.processEvents()
+            target_row = min(1, combo.count() - 1)
+            row_center = menu._row_global_rect(target_row).center()
+            monkeypatch.setattr(ap.QCursor, "pos", staticmethod(lambda pt=row_center: pt))
+            pop = menu.preview_for_row(target_row, track_cursor=True)
+            qapp.processEvents()
+            assert pop is not None
+            assert pop.parent() is None
+            assert pop.isVisible()
+            assert pop.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            assert pop.canvas.is_animating()
+            assert pop.canvas.category == category
+            assert pop.canvas.effect_key == str(combo.itemData(target_row))
+
+            if category == "reverse_karaoke_anim":
+                # Row 0 is "inherit" and should reflect current _karaoke_anim_combo ("zoom_pulse").
+                row0_center = menu._row_global_rect(0).center()
+                monkeypatch.setattr(ap.QCursor, "pos", staticmethod(lambda pt=row0_center: pt))
+                menu.preview_for_row(0, track_cursor=True)
+                assert pop.canvas._effective_karaoke_mode() == "zoom_pulse"
+
+            if category == "karaoke_anim":
+                pop.canvas.set_phase(0.26)
+                before_img = pop.canvas.grab().toImage()
+                host._style = Style(
+                    karaoke_colors=KaraokeColors(
+                        before=KaraokeColorState(
+                            text=PaintFill(mode="gradient_vertical", start_color="#FEF08A", end_color="#F472B6"),
+                            stroke=PaintFill(color="#1E1B4B"),
+                        ),
+                        after=KaraokeColorState(
+                            text=PaintFill(mode="gradient_vertical", start_color="#38BDF8", end_color="#22C55E"),
+                            stroke=PaintFill(color="#0F172A"),
+                        ),
+                    ),
+                    stroke_width_px=6,
+                )
+                menu.preview_for_row(target_row, track_cursor=True)
+                pop.canvas.set_phase(0.26)
+                qapp.processEvents()
+                after_img = pop.canvas.grab().toImage()
+                assert after_img != before_img
+
+            outside = QPoint(menu.x() - 220, menu.y() - 220)
+            monkeypatch.setattr(ap.QCursor, "pos", staticmethod(lambda pt=outside: pt))
+            menu._sync_preview_with_cursor()
+            qapp.processEvents()
+            assert not pop.isVisible()
+            assert not pop.canvas.is_animating()
+            assert not menu._preview_cursor_timer.isActive()
+        finally:
+            menu.close()
+            menu.deleteLater()
+            qapp.processEvents()
+
+
+def test_stroke_flash_checkbox_hover_preview_and_tooltip_suppression(qapp) -> None:
+    """唱字闪光复选框悬停时弹出走字闪白演示卡片，并屏蔽重复文本 tooltip。"""
+    from PyQt6.QtCore import QEvent, Qt
+    from krok_helper.subtitle_render.frontend.properties.controls import (
+        animation_preview as ap,
+        effect_preview as ep,
+    )
+
+    host = _Host()
+    section = EffectsPropertyPageBuilder(host).make_animation_section()
+    try:
+        section.show()
+        qapp.processEvents()
+
+        hover_filter = host._stroke_flash_hover_filter
+        assert isinstance(hover_filter, ap.WidgetPreviewHoverFilter)
+
+        # Native tooltip event is absorbed so it never doubles up behind the animated card.
+        tooltip_event = QEvent(QEvent.Type.ToolTip)
+        assert hover_filter.eventFilter(host._stroke_flash_check, tooltip_event) is True
+
+        hover_filter.show_popover()
+        qapp.processEvents()
+        pop = hover_filter.popover()
+        assert pop is not None
+        assert pop.parent() is None
+        assert pop.isVisible()
+        assert pop.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        assert isinstance(pop.canvas, ep.SingingEffectPreviewCanvas)
+        assert pop.canvas.category == "stroke_flash"
+        assert pop.canvas.is_animating()
+
+        # Compare pre-sing idle frame vs flash-hit frame right after char 0 start.
+        pop.canvas.set_phase(0.01)
+        idle_img = pop.canvas.grab().toImage()
+        pop.canvas.set_phase(0.05)  # ~320 ms (100 ms into char 0 -> active white stroke flash)
+        flash_img = pop.canvas.grab().toImage()
+        assert idle_img != flash_img
+
+        hover_filter.hide_popover()
+        qapp.processEvents()
+        assert not pop.isVisible()
+        assert not pop.canvas.is_animating()
+    finally:
+        section.close()
+        section.deleteLater()
+        qapp.processEvents()
