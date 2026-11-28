@@ -187,9 +187,9 @@ def decoration_kind_for_state(style: Style, *, after: bool) -> DecorationKind:
         kind = style.decoration_kind
     else:
         kind = style.decoration_kind_before or style.decoration_kind
-    if kind not in {"none", "shadow", "glow"}:
+    if kind not in {"none", "shadow", "glow", "both"}:
         return "none"
-    if kind == "glow":
+    if kind in {"glow", "both"}:
         concentration = glow_concentration_level(style, after=after)
         width = (
             style.glow_after_radius_px
@@ -197,7 +197,7 @@ def decoration_kind_for_state(style: Style, *, after: bool) -> DecorationKind:
             else style.glow_before_radius_px
         )
         if concentration < 0 or max(int(width), 0) <= 0:
-            return "none"
+            return "shadow" if kind == "both" else "none"
     return kind
 
 
@@ -215,18 +215,18 @@ def ruby_decoration_kind(style: Style, *, after: bool = True) -> DecorationKind:
         value = style.ruby_decoration_kind_before
         if value is None:
             value = style.ruby_decoration_kind
-    if value not in {"none", "shadow", "glow"}:
+    if value not in {"none", "shadow", "glow", "both"}:
         value = decoration_kind_for_state(style, after=after)
-    if value == "glow":
+    if value in {"glow", "both"}:
         concentration = ruby_glow_concentration_level(style, after=after)
         width = _ruby_glow_width(style, after=after)
         if concentration < 0 or width <= 0:
-            return "none"
+            return "shadow" if value == "both" else "none"
     return value  # type: ignore[return-value]
 
 
 def ruby_shadow_dx(style: Style, *, after: bool = True) -> int:
-    if ruby_decoration_kind(style, after=after) != "shadow":
+    if ruby_decoration_kind(style, after=after) not in {"shadow", "both"}:
         return 0
     if after or style.decoration_before_sync:
         value = style.ruby_shadow_offset_x
@@ -240,7 +240,7 @@ def ruby_shadow_dx(style: Style, *, after: bool = True) -> int:
 
 
 def ruby_shadow_dy(style: Style, *, after: bool = True) -> int:
-    if ruby_decoration_kind(style, after=after) != "shadow":
+    if ruby_decoration_kind(style, after=after) not in {"shadow", "both"}:
         return 0
     if after or style.decoration_before_sync:
         value = style.ruby_shadow_offset_y
@@ -369,7 +369,7 @@ def style_for_state(style: Style, *, after: bool) -> Style:
 def text_visual_padding(style: Style, *, after: bool) -> int:
     stroke2_width = main_stroke2_width(style)
     pad = visual_stroke_extent(style.stroke_width_px, stroke2_width)
-    if decoration_kind_for_state(style, after=after) == "glow":
+    if decoration_kind_for_state(style, after=after) in {"glow", "both"}:
         pad = max(
             pad,
             glow_extent(
@@ -378,8 +378,8 @@ def text_visual_padding(style: Style, *, after: bool) -> int:
                 glow_radius(style, after=after),
             ),
         )
-    elif decoration_kind_for_state(style, after=after) == "shadow":
-        pad += abs(shadow_offset_y(style, after=after))
+    if decoration_kind_for_state(style, after=after) in {"shadow", "both"}:
+        pad += abs(shadow_offset_y(style, after=after)) + max(style.shadow_blur_px, 0) + max(style.shadow_spread_px, 0)
     return max(pad, 2)
 
 
@@ -387,7 +387,7 @@ def ruby_visual_padding(style: Style, *, after: bool) -> int:
     stroke_width = ruby_stroke_width(style)
     stroke2_width = ruby_stroke2_width(style)
     pad = visual_stroke_extent(stroke_width, stroke2_width)
-    if ruby_decoration_kind(style, after=after) == "glow":
+    if ruby_decoration_kind(style, after=after) in {"glow", "both"}:
         pad = max(
             pad,
             glow_extent(
@@ -396,8 +396,12 @@ def ruby_visual_padding(style: Style, *, after: bool) -> int:
                 ruby_glow_radius(style, after=after),
             ),
         )
-    else:
-        pad += abs(ruby_shadow_dy(style, after=after))
+    if ruby_decoration_kind(style, after=after) in {"shadow", "both"}:
+        blur = style.ruby_shadow_blur_px
+        spread = style.ruby_shadow_spread_px
+        pad += (abs(ruby_shadow_dy(style, after=after))
+                + max(int(blur) if blur is not None else scaled_px(style.shadow_blur_px, ruby_scale(style)), 0)
+                + max(int(spread) if spread is not None else scaled_px(style.shadow_spread_px, ruby_scale(style)), 0))
     return max(pad, 2)
 
 

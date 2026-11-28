@@ -56,6 +56,8 @@ void applyResolvedStyle(
     target.afterStroke2Paint = projectPaint(source.afterStroke2Fill, source.afterStroke2Color);
     target.beforeDecorPaint = projectPaint(source.beforeShadowFill, source.beforeShadowColor);
     target.afterDecorPaint = projectPaint(source.afterShadowFill, source.afterShadowColor);
+    target.beforeGlowPaint = projectPaint(source.beforeGlowFill, source.beforeShadowColor);
+    target.afterGlowPaint = projectPaint(source.afterGlowFill, source.afterShadowColor);
     target.strokeWidth = static_cast<float>(source.strokeWidthPx * scale);
     target.stroke2Width = static_cast<float>(source.stroke2WidthPx * scale);
     // Latin-track strokes for alnum characters (CPU: main_script_stroke_style):
@@ -102,6 +104,8 @@ void applyResolvedStyle(
     );
     target.shadowOffsetX = static_cast<float>(source.shadowOffsetX * scale);
     target.shadowOffsetY = static_cast<float>(source.shadowOffsetY * scale);
+    target.shadowBlur = static_cast<float>(source.shadowBlurPx * scale);
+    target.shadowSpread = static_cast<float>(source.shadowSpreadPx * scale);
     target.shadowBeforeOffsetX = static_cast<float>(beforeShadowX * scale);
     target.shadowBeforeOffsetY = static_cast<float>(beforeShadowY * scale);
     // 扫字线参数：随布局缩放；颜色走纯色画刷（projectColor 的 paint/fallback 同源）。
@@ -296,6 +300,8 @@ void applyResolvedStyle(
     target.rubyAfterDecorPaint = projectPaint(
         source.rubyAfterShadowFill, source.rubyAfterShadowColor
     );
+    target.rubyBeforeGlowPaint = projectPaint(source.rubyBeforeGlowFill, source.rubyBeforeShadowColor);
+    target.rubyAfterGlowPaint = projectPaint(source.rubyAfterGlowFill, source.rubyAfterShadowColor);
     // Ruby stroke/decoration/glow that a scheme left unset follow this scheme's
     // effective main text (same derivation the base parser used to bake from the
     // global main). Resolving here — against the role-resolved ``source`` — is
@@ -379,6 +385,12 @@ void applyResolvedStyle(
     );
     target.rubyShadowOffsetY = static_cast<float>(
         source.rubyShadowOffsetY.value_or(source.shadowOffsetY) * scale
+    );
+    target.rubyShadowBlur = static_cast<float>(
+        source.rubyShadowBlurPx.value_or(scaledFromMain(source.shadowBlurPx)) * scale
+    );
+    target.rubyShadowSpread = static_cast<float>(
+        source.rubyShadowSpreadPx.value_or(scaledFromMain(source.shadowSpreadPx)) * scale
     );
     target.rubyShadowBeforeOffsetX = static_cast<float>(
         source.rubyShadowBeforeOffsetX.value_or(

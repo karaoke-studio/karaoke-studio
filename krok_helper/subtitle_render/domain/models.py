@@ -141,7 +141,7 @@ VIEWPORT_ALIGNS: tuple[ViewportAlign, ...] = (
     "bottom_center",
     "bottom_right",
 )
-DecorationKind = Literal["none", "shadow", "glow"]
+DecorationKind = Literal["none", "shadow", "glow", "both"]
 RubyAlignment = Literal["auto", "center", "equal_space"]
 RUBY_ALIGNMENTS: tuple[RubyAlignment, ...] = ("auto", "center", "equal_space")
 SmartHorizontal = Literal["none", "center_position", "equal_margins"]
@@ -354,8 +354,11 @@ class TitleOverlay:
     glow_concentration_level: int = 0
     """-1 disables glow; NicoKaraMaker3 ``BlurLevel`` 0/1/2 = low/medium/high."""
     shadow: PaintFill = field(default_factory=lambda: _paint_fill("#FFFFFF"))
+    glow: Optional[PaintFill] = None
     shadow_offset_x: int = 5
     shadow_offset_y: int = 5
+    shadow_blur_px: int = 0
+    shadow_spread_px: int = 0
 
     # 位置（锚点 9 宫格 + 内边距 / 偏移；逆向 ニコカラ「タイトル左上」）。
     # 这些字段与上方字体/颜色字段一样，现在是「解析结果」：渲染时由
@@ -504,6 +507,8 @@ class SubtitleStyleScheme:
     shadow_offset_y: Optional[int] = None
     shadow_before_offset_x: Optional[int] = None
     shadow_before_offset_y: Optional[int] = None
+    shadow_blur_px: Optional[int] = None
+    shadow_spread_px: Optional[int] = None
     """走字前阴影偏移；``None`` = 跟随 ``shadow_offset_x/y``。"""
     ruby_font_size_px: Optional[int] = None
     ruby_font_family: Optional[str] = None
@@ -533,6 +538,8 @@ class SubtitleStyleScheme:
     ruby_shadow_offset_y: Optional[int] = None
     ruby_shadow_before_offset_x: Optional[int] = None
     ruby_shadow_before_offset_y: Optional[int] = None
+    ruby_shadow_blur_px: Optional[int] = None
+    ruby_shadow_spread_px: Optional[int] = None
     karaoke_colors: Optional[KaraokeColors] = None
     ruby_colors_follow_main: Optional[bool] = None
     """注音配色是否实时跟随本角色方案的主文字配色。"""
@@ -676,10 +683,11 @@ def default_page_layouts() -> list[LyricsLayout]:
 
 
 def _title_karaoke_colors(
-    fill: PaintFill, stroke: PaintFill, stroke2: PaintFill, shadow: PaintFill
+    fill: PaintFill, stroke: PaintFill, stroke2: PaintFill, shadow: PaintFill,
+    glow: Optional[PaintFill] = None,
 ) -> KaraokeColors:
     """标题永不走字，走字前/走字后同色，编辑任一态都能看到效果。"""
-    state = KaraokeColorState(text=fill, stroke=stroke, stroke2=stroke2, shadow=shadow)
+    state = KaraokeColorState(text=fill, stroke=stroke, stroke2=stroke2, shadow=shadow, glow=glow)
     return KaraokeColors(before=state, after=deepcopy(state))
 
 
@@ -710,8 +718,10 @@ def title_scheme_from_overlay(title: "TitleOverlay") -> SubtitleStyleScheme:
         glow_concentration_level=title.glow_concentration_level,
         shadow_offset_x=title.shadow_offset_x,
         shadow_offset_y=title.shadow_offset_y,
+        shadow_blur_px=title.shadow_blur_px,
+        shadow_spread_px=title.shadow_spread_px,
         karaoke_colors=_title_karaoke_colors(
-            title.fill, title.stroke, title.stroke2, title.shadow
+            title.fill, title.stroke, title.stroke2, title.shadow, title.glow
         ),
     )
 
@@ -981,6 +991,8 @@ class Style:
     shadow_offset_y: int = 5
     shadow_before_offset_x: Optional[int] = None
     shadow_before_offset_y: Optional[int] = None
+    shadow_blur_px: int = 0
+    shadow_spread_px: int = 0
     """走字前阴影偏移；``None`` = 跟随 ``shadow_offset_x/y``。"""
     karaoke_colors: Optional[KaraokeColors] = None
 
@@ -1053,6 +1065,8 @@ class Style:
     ruby_shadow_offset_y: Optional[int] = None
     ruby_shadow_before_offset_x: Optional[int] = None
     ruby_shadow_before_offset_y: Optional[int] = None
+    ruby_shadow_blur_px: Optional[int] = None
+    ruby_shadow_spread_px: Optional[int] = None
     ruby_colors_follow_main: bool = True
     """注音整套配色默认实时跟随主文字；角色方案可独立覆盖。"""
     ruby_horizontal_gradient_with_main: bool = True
@@ -2450,6 +2464,8 @@ RUBY_DECORATION_OVERRIDE_FIELDS: tuple[str, ...] = (
     "ruby_shadow_offset_y",
     "ruby_shadow_before_offset_x",
     "ruby_shadow_before_offset_y",
+    "ruby_shadow_blur_px",
+    "ruby_shadow_spread_px",
 )
 """注音装饰的独立覆盖槽。``None`` = 未设定，渲染时回退主文字对应值。"""
 
@@ -2527,6 +2543,10 @@ def materialize_ruby_decoration_changes(style: Style) -> dict[str, object]:
             if style.ruby_shadow_offset_y is not None
             else _ruby_materialize_signed_px(main_before_shadow_y, scale)
         )
+    if style.ruby_shadow_blur_px is None:
+        changes["ruby_shadow_blur_px"] = _ruby_materialize_px(style.shadow_blur_px, scale)
+    if style.ruby_shadow_spread_px is None:
+        changes["ruby_shadow_spread_px"] = _ruby_materialize_px(style.shadow_spread_px, scale)
     legacy_glow = (
         max(int(style.ruby_glow_radius_px), 0)
         if style.ruby_glow_radius_px is not None
@@ -2712,6 +2732,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "shadow_offset_y",
             "shadow_before_offset_x",
             "shadow_before_offset_y",
+            "shadow_blur_px",
+            "shadow_spread_px",
             "ruby_font_size_px",
             "ruby_gap_px",
             "ruby_interval_px",
@@ -2722,6 +2744,8 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
             "ruby_shadow_offset_y",
             "ruby_shadow_before_offset_x",
             "ruby_shadow_before_offset_y",
+            "ruby_shadow_blur_px",
+            "ruby_shadow_spread_px",
             "viewport_offset_x",
             "viewport_offset_y",
             "viewport_scale_pct",
@@ -2917,9 +2941,9 @@ def style_from_dict(payload: object, *, legacy_project: bool = False) -> Style:
         elif key == "viewport_align":
             changes[key] = value if value in VIEWPORT_ALIGNS else defaults.viewport_align
         elif key == "decoration_kind":
-            changes[key] = value if value in {"none", "shadow", "glow"} else defaults.decoration_kind
+            changes[key] = value if value in {"none", "shadow", "glow", "both"} else defaults.decoration_kind
         elif key in {"decoration_kind_before", "ruby_decoration_kind", "ruby_decoration_kind_before"}:
-            changes[key] = value if value in {"none", "shadow", "glow"} else None
+            changes[key] = value if value in {"none", "shadow", "glow", "both"} else None
         elif key == "ruby_alignment":
             changes[key] = value if value in RUBY_ALIGNMENTS else defaults.ruby_alignment
         elif key == "ruby_main_progress_mode":
@@ -3612,6 +3636,8 @@ _FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
     "shadow_offset_y",
     "shadow_before_offset_x",
     "shadow_before_offset_y",
+    "shadow_blur_px",
+    "shadow_spread_px",
     "ruby_font_size_px",
     "ruby_latin_font_size_px",
     "ruby_stroke_width_px",
@@ -3625,6 +3651,8 @@ _FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
     "ruby_shadow_offset_y",
     "ruby_shadow_before_offset_x",
     "ruby_shadow_before_offset_y",
+    "ruby_shadow_blur_px",
+    "ruby_shadow_spread_px",
 )
 
 _TITLE_FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
@@ -3634,6 +3662,8 @@ _TITLE_FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
     "glow_radius_px",
     "shadow_offset_x",
     "shadow_offset_y",
+    "shadow_blur_px",
+    "shadow_spread_px",
 )
 
 # 扫字线像素字段（粗细 / 柔化半径）采用**固定 1080 基准**存储：内部与存盘
@@ -4063,7 +4093,7 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
             "ruby_decoration_kind_before",
         }:
             changes[key] = (
-                value if value in {"none", "shadow", "glow"} else None
+                value if value in {"none", "shadow", "glow", "both"} else None
             )
         elif key in {
             "font_family_latin",
@@ -4128,7 +4158,7 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
 
 
 def title_overlay_to_dict(title: TitleOverlay) -> dict:
-    return {
+    payload = {
         "name": title.name,
         "enabled": title.enabled,
         "text_template": title.text_template,
@@ -4181,6 +4211,13 @@ def title_overlay_to_dict(title: TitleOverlay) -> dict:
             title_time_window_to_dict(window) for window in title.custom_windows
         ],
     }
+    if title.glow is not None:
+        payload["glow"] = paint_fill_to_dict(title.glow)
+    if title.shadow_blur_px:
+        payload["shadow_blur_px"] = title.shadow_blur_px
+    if title.shadow_spread_px:
+        payload["shadow_spread_px"] = title.shadow_spread_px
+    return payload
 
 
 def _title_guide_symbols_from_dict(
@@ -4234,7 +4271,7 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
     if show_mode not in TITLE_SHOW_MODES:
         show_mode = "whole"
     decoration = payload.get("decoration_kind", defaults.decoration_kind)
-    if decoration not in {"none", "shadow", "glow"}:
+    if decoration not in {"none", "shadow", "glow", "both"}:
         decoration = defaults.decoration_kind
     text_template = str(payload.get("text_template", defaults.text_template))
     scheme_name = payload.get("scheme_name", defaults.scheme_name)
@@ -4280,8 +4317,12 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
             payload.get("glow_concentration_level"), defaults.glow_concentration_level
         ),
         shadow=paint_fill_from_dict(payload.get("shadow"), fallback=defaults.shadow.color),
+        glow=paint_fill_from_dict(payload["glow"], fallback=defaults.shadow.color)
+        if isinstance(payload.get("glow"), dict) else None,
         shadow_offset_x=_int_value(payload.get("shadow_offset_x"), defaults.shadow_offset_x),
         shadow_offset_y=_int_value(payload.get("shadow_offset_y"), defaults.shadow_offset_y),
+        shadow_blur_px=max(0, min(1024, _int_value(payload.get("shadow_blur_px"), 0))),
+        shadow_spread_px=max(0, min(1024, _int_value(payload.get("shadow_spread_px"), 0))),
         anchor=anchor,  # type: ignore[arg-type]
         align=align,  # type: ignore[arg-type]
         offset_x=_int_value(payload.get("offset_x"), defaults.offset_x),

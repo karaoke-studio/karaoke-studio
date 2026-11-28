@@ -81,7 +81,9 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
     };
     const auto fixStyle = [&](TextStyle& style) {
         for (auto* paint : {&style.beforeDecorPaint, &style.afterDecorPaint,
-                            &style.rubyBeforeDecorPaint, &style.rubyAfterDecorPaint})
+                            &style.rubyBeforeDecorPaint, &style.rubyAfterDecorPaint,
+                            &style.beforeGlowPaint, &style.afterGlowPaint,
+                            &style.rubyBeforeGlowPaint, &style.rubyAfterGlowPaint})
             fix(*paint);
     };
     fixStyle(scene.style);
@@ -695,8 +697,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             }
         }
         const bool lineGradientGlow = gradientGlow
-            && ((prepared.glow.before.radius > 0 && style.beforeDecorPaint.mode != "solid")
-                || (prepared.glow.after.radius > 0 && style.afterDecorPaint.mode != "solid"));
+            && ((prepared.glow.before.radius > 0 && style.beforeGlowPaint.mode != "solid")
+                || (prepared.glow.after.radius > 0 && style.afterGlowPaint.mode != "solid"));
         // Image-painted glows are drawn per style group with the image brush.
         const bool imageGlow = (usesImageGlow(style) && (prepared.glow.before.radius > 0 || prepared.glow.after.radius > 0))
             || std::ranges::any_of(line.chars, [&](const auto& cell) {

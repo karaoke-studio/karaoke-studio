@@ -54,7 +54,8 @@ def _title_color(title):
     return KaraokeColorState(text=paint_fill_from_dict(title['fill']),
                              stroke=paint_fill_from_dict(title['stroke']),
                              stroke2=paint_fill_from_dict(title['stroke2']),
-                             shadow=paint_fill_from_dict(title['shadow']))
+                             shadow=paint_fill_from_dict(title['shadow']),
+                             glow=paint_fill_from_dict(title['glow']) if 'glow' in title else None)
 
 
 def title_style(title):
@@ -79,6 +80,8 @@ def title_style(title):
                                             decoration_before_sync=True,
                                             glow_before_radius_px=appearance['glow_radius_px'],
                                             glow_after_radius_px=appearance['glow_radius_px'],
+                                            shadow_blur_px=appearance.get('shadow_blur_px', 0),
+                                            shadow_spread_px=appearance.get('shadow_spread_px', 0),
                                             stroke_width_px=appearance['stroke_width_px'],
                                             stroke2_width_px=appearance['stroke2_width_px'],
                                             stroke2_enabled=appearance['stroke2_width_px'] > 0,
@@ -96,6 +99,7 @@ def title_style(title):
         glow_before_radius_px=title['glow_radius_px'], glow_after_radius_px=title['glow_radius_px'],
         glow_concentration_level=title['glow_concentration_level'],
         shadow_offset_x=title['shadow_offset_x'], shadow_offset_y=title['shadow_offset_y'],
+        shadow_blur_px=title.get('shadow_blur_px', 0), shadow_spread_px=title.get('shadow_spread_px', 0),
         karaoke_colors=KaraokeColors(before=state, after=state),
         custom_style_schemes=schemes,
         dual_line_layout=False, smart_horizontal='none', line_horizontal_layout='asymmetric',

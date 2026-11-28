@@ -36,7 +36,10 @@ void includeShadowPaint(SkRect& bounds, const StaticShadow& shadow) {
     if (bounds.isEmpty()) return;
     const auto silhouette = bounds;
     for (const auto& state : {shadow.before, shadow.after})
-        if (state.visible()) bounds.join(silhouette.makeOffset(state.x, state.y));
+        if (state.visible()) {
+            const float pad = state.blur + state.spread;
+            bounds.join(silhouette.makeOutset(pad, pad).makeOffset(state.x, state.y));
+        }
 }
 }
 

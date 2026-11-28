@@ -166,10 +166,15 @@ float lowerGlowStrength(const QJsonValue& value) {
     if (!shadow.contains(phase)) return {};
     const auto state = shadow.value(phase).toObject();
     const auto offset = state.value("offset").toArray();
-    if (state.size() != 2 || offset.size() != 2)
+    if ((state.size() != 2 && state.size() != 4) || offset.size() != 2)
         throw BackendError("Skia 下方注音实色阴影参数无效");
-    return {true, float(integer(offset[0], -4096, 4096) * dpr),
+    ::subtitle::skia::ShadowState result{true, float(integer(offset[0], -4096, 4096) * dpr),
             float(integer(offset[1], -4096, 4096) * dpr), rgbaPaint(state.value("color"))};
+    if (state.size() == 4) {
+        result.blur = float(integer(state.value("blur"), 0, 1024) * dpr);
+        result.spread = float(integer(state.value("spread"), 0, 1024) * dpr);
+    }
+    return result;
 }
 void validateStandaloneMark(const QString& text, const QJsonObject& cell, const QJsonObject& ir) {
     const auto code = text.toUcs4().front();
@@ -301,19 +306,22 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         const auto& paint = role >= 0 ? scene.charStyles[role] : scene.lineStyles[lineIndex];
         const auto shadowState = [&](bool after) -> ::subtitle::skia::ShadowState {
             const auto kind = paint.rubyDecorationKindForState(after);
-            if (lower || kind == "none" || kind == "glow") return {};
+            if (lower || (kind != "shadow" && kind != "both")) return {};
             const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
             const float x = paint.rubyShadowOffsetXForState(after), y = paint.rubyShadowOffsetYForState(after);
             const bool imagePaint = decor.mode == "image";
             ::subtitle::skia::ShadowState state{true, x, y, (imagePaint || decor.mode == "solid") ? argb(decor.color) : 0u};
+            state.blur = paint.rubyShadowBlur;
+            state.spread = paint.rubyShadowSpread;
             if (imagePaint) state.image = imageCache.fill(decor, scene.layoutReferenceScale);
             return state;
         };
         ::subtitle::skia::StaticShadow shadow{
             shadowState(false), shadowState(true), paint.rubyStrokeWidth, paint.rubyStroke2Width};
         const auto glowState = [&](bool after) -> ::subtitle::skia::GlowState {
-            if (lower || paint.rubyDecorationKindForState(after) != "glow") return {};
-            const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
+            const auto kind = paint.rubyDecorationKindForState(after);
+            if (lower || (kind != "glow" && kind != "both")) return {};
+            const auto& decor = after ? paint.rubyAfterGlowPaint : paint.rubyBeforeGlowPaint;
             const float radius = after ? paint.rubyGlowAfterRadius : paint.rubyGlowBeforeRadius;
             return {int(std::lround(radius)), paint.rubyGlowConcentrationForState(after), argb(decor.color),
                     paint.glowStrength, bool(decor.color.linear)
@@ -433,10 +441,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         }
         const auto lowerShadow = object.value("lower_shadow").toObject();
         if (object.contains("lower_shadow")) {
-            if (!lower || !validPhases(lowerShadow)
-                || (lowerGlow.contains("before") && lowerShadow.contains("before"))
-                || (lowerGlow.contains("after") && lowerShadow.contains("after")))
-                throw BackendError("Skia 下方注音实色阴影缺少对应布局能力或同一阶段重复装饰");
+            if (!lower || !validPhases(lowerShadow))
+                throw BackendError("Skia 下方注音实色阴影缺少对应布局能力");
             shadow = {lowerShadowState(lowerShadow, "before", glyphs.dpr),
                       lowerShadowState(lowerShadow, "after", glyphs.dpr), innerWidth, secondaryWidth};
         }
@@ -664,8 +670,8 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
                                           lowerGlowWithMain.toBool(), source, ink, outlinePad, glyphs.dpr,
                                           roleBounds ? &roleBounds->line : nullptr);
         } else if (hasGlow && glowPaints != GlowPaintSupport::Solid && !lower) {
-            glowGradients = rubyGradients({glow.before.radius > 0 ? &paint.rubyBeforeDecorPaint : nullptr,
-                                           glow.after.radius > 0 ? &paint.rubyAfterDecorPaint : nullptr},
+            glowGradients = rubyGradients({glow.before.radius > 0 ? &paint.rubyBeforeGlowPaint : nullptr,
+                                           glow.after.radius > 0 ? &paint.rubyAfterGlowPaint : nullptr},
                                           paint.rubyHorizontalGradientWithMain, source, ink, outlinePad, glyphs.dpr,
                                           roleBounds ? &roleBounds->forRole(role) : nullptr);
         }
@@ -733,7 +739,7 @@ std::vector<::subtitle::skia::ResolvedRubyGroup> resolvedSkiaRubyGroups(
         // The GPU strokes an image-painted glow with its bitmap brush.
         if (hasGlow && !lower)
             for (const bool after : {false, true}) {
-                const auto& decor = after ? paint.rubyAfterDecorPaint : paint.rubyBeforeDecorPaint;
+                const auto& decor = after ? paint.rubyAfterGlowPaint : paint.rubyBeforeGlowPaint;
                 if ((after ? glow.after : glow.before).radius > 0 && decor.mode == "image")
                     groups.back().glowImages[after] = imageCache.fill(decor, scene.layoutReferenceScale);
             }

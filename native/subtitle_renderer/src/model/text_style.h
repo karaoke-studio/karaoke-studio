@@ -67,6 +67,8 @@ struct TextStyle {
     PaintStyle afterStroke2Paint;
     PaintStyle beforeDecorPaint;
     PaintStyle afterDecorPaint;
+    PaintStyle beforeGlowPaint;
+    PaintStyle afterGlowPaint;
     float strokeWidth = 0.0f;
     float stroke2Width = 0.0f;
     // Script-effective strokes for alnum characters (latin overrides with the
@@ -86,6 +88,8 @@ struct TextStyle {
     float glowStrength = 1.0f;
     float shadowOffsetX = 5.0f;
     float shadowOffsetY = 5.0f;
+    float shadowBlur = 0.0f;
+    float shadowSpread = 0.0f;
     float shadowBeforeOffsetX = 5.0f;
     float shadowBeforeOffsetY = 5.0f;
     std::wstring rubyFontFamily;
@@ -120,6 +124,8 @@ struct TextStyle {
     PaintStyle rubyAfterStroke2Paint;
     PaintStyle rubyBeforeDecorPaint;
     PaintStyle rubyAfterDecorPaint;
+    PaintStyle rubyBeforeGlowPaint;
+    PaintStyle rubyAfterGlowPaint;
     float rubyStrokeWidth = 0.0f;
     float rubyStroke2Width = 0.0f;
     // Script-effective ruby strokes for alnum readings (ruby-latin overrides
@@ -136,6 +142,8 @@ struct TextStyle {
     int rubyGlowBeforeConcentrationLevel = 0;
     float rubyShadowOffsetX = 0.0f;
     float rubyShadowOffsetY = 1.0f;
+    float rubyShadowBlur = 0.0f;
+    float rubyShadowSpread = 0.0f;
     float rubyShadowBeforeOffsetX = 0.0f;
     float rubyShadowBeforeOffsetY = 1.0f;
 
@@ -144,19 +152,19 @@ struct TextStyle {
             after = true;
         }
         if (after) {
-            if (decorationKind == "glow"
+            if ((decorationKind == "glow" || decorationKind == "both")
                 && (glowConcentrationLevel < 0 || glowAfterRadius <= 0.0f)) {
-                return "none";
+                return decorationKind == "both" ? "shadow" : "none";
             }
             return decorationKind;
         }
         const std::string kind = decorationKindBefore.empty()
             ? decorationKind
             : decorationKindBefore;
-        if (kind == "glow"
+        if ((kind == "glow" || kind == "both")
             && (glowBeforeConcentrationLevel < 0
                 || glowBeforeRadius <= 0.0f)) {
-            return "none";
+            return kind == "both" ? "shadow" : "none";
         }
         return kind;
     }
@@ -195,10 +203,10 @@ struct TextStyle {
         } else {
             kind = decorationKindForState(false);
         }
-        if (kind == "glow"
+        if ((kind == "glow" || kind == "both")
             && (rubyGlowConcentrationForState(after) < 0
                 || (after ? rubyGlowAfterRadius : rubyGlowBeforeRadius) <= 0.0f)) {
-            return "none";
+            return kind == "both" ? "shadow" : "none";
         }
         return kind;
     }

@@ -1,7 +1,7 @@
 """Materialize lower-reading provenance and appearance at the IR boundary."""
 from krok_helper.subtitle_render.domain.gradient_path import rgba
 from krok_helper.subtitle_render.domain.color import linear_rgba
-from krok_helper.subtitle_render.domain.models import normalize_glow_strength
+from krok_helper.subtitle_render.domain.models import materialize_ruby_decoration_changes, normalize_glow_strength
 from krok_helper.subtitle_render.engine.ruby.style_semantics import ruby_stroke_width, ruby_stroke2_width
 from krok_helper.subtitle_render.engine.style.style_semantics import effective_ruby_karaoke_colors
 from krok_helper.subtitle_render.native.protocol import ruby_to_ir
@@ -105,31 +105,47 @@ def lower_appearance(style, *, legacy_vertical_gradient=False):
     if outline_images:
         result['lower_outline_image'] = outline_images
     glow, shadow, shadow_gradients, shadow_images, glow_gradients, glow_images = {}, {}, {}, {}, {}, {}
+    ruby_shadow_defaults = materialize_ruby_decoration_changes(style)
     for phase, kind in (('before', before), ('after', after)):
         if kind == 'none':
             continue
         sung = phase == 'after'
-        radius = ruby_glow_radius(style, after=sung) if kind == 'glow' else 0
+        radius = ruby_glow_radius(style, after=sung) if kind in {'glow', 'both'} else 0
         if kind == 'glow' and radius <= 0:
             continue
-        layer = getattr(colors, phase).shadow
-        if layer.mode == 'image' and kind in {'shadow', 'glow'}:
-            (shadow_images if kind == 'shadow' else glow_images)[phase] = _image_payload(layer)
-        elif layer.mode != 'solid':
-            if layer.mode not in _GRADIENT_MODES:
-                raise ValueError('Skia 下方注音装饰当前不支持此画笔')
-            # Lower glows take gradient paints like lower shadows, as in the GPU.
-            (shadow_gradients if kind == 'shadow' else glow_gradients)[phase] = _gradient_payload(layer)
-        color = list(rgba(layer.color))
-        if kind == 'glow':
+        state = getattr(colors, phase)
+        shadow_layer = state.shadow
+        glow_layer = state.glow or shadow_layer
+        if kind in {'glow', 'both'} and radius > 0:
+            layer = glow_layer
+            if layer.mode not in {'solid', 'image', *_GRADIENT_MODES}:
+                raise ValueError('Skia 下方注音发光画笔类型无效')
+            color = list(rgba(layer.color))
             glow[phase] = {'radius': radius, 'color': color,
                            'concentration': ruby_glow_concentration_level(style, after=sung),
                            'strength': normalize_glow_strength(style.glow_strength)}
-        elif kind == 'shadow':
-            shadow[phase] = {'offset': [_shadow_offset(style, 'x', sung), _shadow_offset(style, 'y', sung)],
-                             'color': color}
-        else:
-            raise ValueError('Skia 下方注音装饰类型无效')
+            if layer.mode == 'image':
+                glow_images[phase] = _image_payload(layer)
+            elif layer.mode != 'solid':
+                glow_gradients[phase] = _gradient_payload(layer)
+        if kind in {'shadow', 'both'}:
+            layer = shadow_layer
+            if layer.mode not in {'solid', 'image', *_GRADIENT_MODES}:
+                raise ValueError('Skia 下方注音阴影画笔类型无效')
+            color = list(rgba(layer.color))
+            blur = style.ruby_shadow_blur_px
+            spread = style.ruby_shadow_spread_px
+            shadow_state = {'offset': [_shadow_offset(style, 'x', sung), _shadow_offset(style, 'y', sung)],
+                            'color': color}
+            blur_px = int(blur if blur is not None else ruby_shadow_defaults['ruby_shadow_blur_px'])
+            spread_px = int(spread if spread is not None else ruby_shadow_defaults['ruby_shadow_spread_px'])
+            if blur_px or spread_px:
+                shadow_state.update(blur=blur_px, spread=spread_px)
+            shadow[phase] = shadow_state
+            if layer.mode == 'image':
+                shadow_images[phase] = _image_payload(layer)
+            elif layer.mode != 'solid':
+                shadow_gradients[phase] = _gradient_payload(layer)
     if glow:
         result['lower_glow'] = glow
     if shadow:

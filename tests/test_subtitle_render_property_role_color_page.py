@@ -84,12 +84,14 @@ def test_role_color_builder_preserves_tabs_layers_and_editor_order(qapp) -> None
     assert section.header.text() == "颜色"
     assert host._color_state_combo.currentData() == "after"
     assert host._color_subject_combo.count() == 2
-    assert host._color_layer_combo.count() == 4
+    assert host._color_layer_combo.count() == 5
     assert host._color_layer_pill.current() == "text"
     assert host._fill_mode_combo.count() == 5
     assert host._fill_mode_pill.current() == "solid"
     assert host._fill_editor_stack.count() == 4
     assert host._decoration_type_combo.count() == 3
+    assert host._shadow_enabled_check.text() == "阴影"
+    assert host._glow_enabled_check.text() == "发光"
     assert host._ruby_colors_follow_main_check.isChecked()
 
 

@@ -109,8 +109,8 @@ void resolveRoleBodyPaints(::subtitle::skia::ResolvedLine& line, const TextLine&
 
 bool usesImageGlow(const TextStyle& style) {
     const auto glow = skiaStaticGlow(style);
-    return (glow.before.radius > 0 && style.beforeDecorPaint.mode == "image")
-        || (glow.after.radius > 0 && style.afterDecorPaint.mode == "image");
+    return (glow.before.radius > 0 && style.beforeGlowPaint.mode == "image")
+        || (glow.after.radius > 0 && style.afterGlowPaint.mode == "image");
 }
 
 void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& source, const TextStyle& base,
@@ -143,14 +143,14 @@ void resolveRoleGlows(::subtitle::skia::ResolvedLine& line, const TextLine& sour
                         }
                         return ::subtitle::skia::lineGradient(paint, ink, hasTextBounds ? gradientBounds->outlinePad : 0.f);
                     };
-                    if (glow.before.radius > 0) gradients[0] = shader(style.beforeDecorPaint);
-                    if (glow.after.radius > 0) gradients[1] = shader(style.afterDecorPaint);
+                    if (glow.before.radius > 0) gradients[0] = shader(style.beforeGlowPaint);
+                    if (glow.after.radius > 0) gradients[1] = shader(style.afterGlowPaint);
                 }
                 ::subtitle::skia::GlowImages glowImages;
-                if (glow.before.radius > 0 && style.beforeDecorPaint.mode == "image")
-                    glowImages[0] = images.fill(style.beforeDecorPaint, layoutScale);
-                if (glow.after.radius > 0 && style.afterDecorPaint.mode == "image")
-                    glowImages[1] = images.fill(style.afterDecorPaint, layoutScale);
+                if (glow.before.radius > 0 && style.beforeGlowPaint.mode == "image")
+                    glowImages[0] = images.fill(style.beforeGlowPaint, layoutScale);
+                if (glow.after.radius > 0 && style.afterGlowPaint.mode == "image")
+                    glowImages[1] = images.fill(style.afterGlowPaint, layoutScale);
                 it->second = int(line.roleGlows.size());
                 line.roleGlows.push_back({glow, {}, std::move(gradients), std::move(glowImages)});
             }

@@ -286,6 +286,8 @@ void refreshLegacyMainFills(ResolvedStyle &cfg) {
     cfg.afterStroke2Fill = solidPaintFill(cfg.afterStroke2Color);
     cfg.beforeShadowFill = solidPaintFill(cfg.beforeShadowColor);
     cfg.afterShadowFill = solidPaintFill(cfg.afterShadowColor);
+    cfg.beforeGlowFill = cfg.beforeShadowFill;
+    cfg.afterGlowFill = cfg.afterShadowFill;
 }
 
 void applyMainKaraokeColors(ResolvedStyle &cfg, const QJsonObject &colors) {
@@ -305,6 +307,12 @@ void applyMainKaraokeColors(ResolvedStyle &cfg, const QJsonObject &colors) {
     cfg.afterStroke2Fill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
     cfg.beforeShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
     cfg.afterShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
+    cfg.beforeGlowFill = colors.value(QStringLiteral("before")).toObject().contains(QStringLiteral("glow"))
+        ? karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("glow"), cfg.beforeShadowColor)
+        : cfg.beforeShadowFill;
+    cfg.afterGlowFill = colors.value(QStringLiteral("after")).toObject().contains(QStringLiteral("glow"))
+        ? karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("glow"), cfg.afterShadowColor)
+        : cfg.afterShadowFill;
 }
 
 void copyMainColorsToRuby(ResolvedStyle &cfg) {
@@ -324,6 +332,8 @@ void copyMainColorsToRuby(ResolvedStyle &cfg) {
     cfg.rubyAfterStroke2Fill = cfg.afterStroke2Fill;
     cfg.rubyBeforeShadowFill = cfg.beforeShadowFill;
     cfg.rubyAfterShadowFill = cfg.afterShadowFill;
+    cfg.rubyBeforeGlowFill = cfg.beforeGlowFill;
+    cfg.rubyAfterGlowFill = cfg.afterGlowFill;
 }
 
 void refreshLegacyRubyFills(ResolvedStyle &cfg) {
@@ -343,6 +353,8 @@ void refreshLegacyRubyFills(ResolvedStyle &cfg) {
     cfg.rubyAfterStroke2Fill = solidPaintFill(cfg.rubyAfterStroke2Color);
     cfg.rubyBeforeShadowFill = solidPaintFill(cfg.rubyBeforeShadowColor);
     cfg.rubyAfterShadowFill = solidPaintFill(cfg.rubyAfterShadowColor);
+    cfg.rubyBeforeGlowFill = cfg.rubyBeforeShadowFill;
+    cfg.rubyAfterGlowFill = cfg.rubyAfterShadowFill;
 }
 
 void applyRubyKaraokeColors(ResolvedStyle &cfg, const QJsonObject &colors) {
@@ -362,6 +374,12 @@ void applyRubyKaraokeColors(ResolvedStyle &cfg, const QJsonObject &colors) {
     cfg.rubyAfterStroke2Fill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.rubyAfterStroke2Color);
     cfg.rubyBeforeShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.rubyBeforeShadowColor);
     cfg.rubyAfterShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.rubyAfterShadowColor);
+    cfg.rubyBeforeGlowFill = colors.value(QStringLiteral("before")).toObject().contains(QStringLiteral("glow"))
+        ? karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("glow"), cfg.rubyBeforeShadowColor)
+        : cfg.rubyBeforeShadowFill;
+    cfg.rubyAfterGlowFill = colors.value(QStringLiteral("after")).toObject().contains(QStringLiteral("glow"))
+        ? karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("glow"), cfg.rubyAfterShadowColor)
+        : cfg.rubyAfterShadowFill;
 }
 
 void applySignalStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
@@ -790,6 +808,10 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("shadow_offset_y"))) {
         cfg.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY);
     }
+    if (hasNonNull(style, QStringLiteral("shadow_blur_px")))
+        cfg.shadowBlurPx = std::clamp(intValue(style, QStringLiteral("shadow_blur_px"), 0), 0, 1024);
+    if (hasNonNull(style, QStringLiteral("shadow_spread_px")))
+        cfg.shadowSpreadPx = std::clamp(intValue(style, QStringLiteral("shadow_spread_px"), 0), 0, 1024);
     if (hasNonNull(style, QStringLiteral("shadow_before_offset_x"))) {
         cfg.shadowBeforeOffsetX = intValue(
             style, QStringLiteral("shadow_before_offset_x"), cfg.shadowOffsetX
@@ -959,6 +981,10 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             style, QStringLiteral("ruby_shadow_offset_y"), cfg.shadowOffsetY
         );
     }
+    if (hasNonNull(style, QStringLiteral("ruby_shadow_blur_px")))
+        cfg.rubyShadowBlurPx = std::clamp(intValue(style, QStringLiteral("ruby_shadow_blur_px"), 0), 0, 1024);
+    if (hasNonNull(style, QStringLiteral("ruby_shadow_spread_px")))
+        cfg.rubyShadowSpreadPx = std::clamp(intValue(style, QStringLiteral("ruby_shadow_spread_px"), 0), 0, 1024);
     if (hasNonNull(style, QStringLiteral("ruby_shadow_before_offset_x"))) {
         cfg.rubyShadowBeforeOffsetX = intValue(
             style,
@@ -1016,6 +1042,8 @@ ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &s
         cfg.rubyShadowOffsetY.reset();
         cfg.rubyShadowBeforeOffsetX.reset();
         cfg.rubyShadowBeforeOffsetY.reset();
+        cfg.rubyShadowBlurPx.reset();
+        cfg.rubyShadowSpreadPx.reset();
         if (cfg.hasMainKaraokeColors) {
             cfg.hasRubyKaraokeColors = true;
             copyMainColorsToRuby(cfg);
@@ -1127,6 +1155,10 @@ ResolvedStyle resolvedStyleFromTitle(
     cfg.beforeShadowColor = cfg.beforeShadowFill.color;
     cfg.afterShadowFill = cfg.beforeShadowFill;
     cfg.afterShadowColor = cfg.beforeShadowColor;
+    cfg.beforeGlowFill = title.contains(QStringLiteral("glow"))
+        ? paintFillSpec(title.value(QStringLiteral("glow")).toObject(), cfg.beforeShadowColor)
+        : cfg.beforeShadowFill;
+    cfg.afterGlowFill = cfg.beforeGlowFill;
     cfg.strokeWidthPx = std::max(
         0, intValue(title, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx)
     );
@@ -1166,6 +1198,8 @@ ResolvedStyle resolvedStyleFromTitle(
     cfg.shadowOffsetY = intValue(
         title, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY
     );
+    cfg.shadowBlurPx = std::clamp(intValue(title, QStringLiteral("shadow_blur_px"), 0), 0, 1024);
+    cfg.shadowSpreadPx = std::clamp(intValue(title, QStringLiteral("shadow_spread_px"), 0), 0, 1024);
     cfg.shadowBeforeOffsetX = cfg.shadowOffsetX;
     cfg.shadowBeforeOffsetY = cfg.shadowOffsetY;
     cfg.hasMainKaraokeColors = true;
@@ -1498,6 +1532,8 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     base.glowStrength = glowStrengthValue(style, base.glowStrength);
     base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
     base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
+    base.shadowBlurPx = std::clamp(intValue(style, QStringLiteral("shadow_blur_px"), base.shadowBlurPx), 0, 1024);
+    base.shadowSpreadPx = std::clamp(intValue(style, QStringLiteral("shadow_spread_px"), base.shadowSpreadPx), 0, 1024);
     if (style.value(QStringLiteral("shadow_before_offset_x")).isDouble()) {
         base.shadowBeforeOffsetX = style.value(
             QStringLiteral("shadow_before_offset_x")
@@ -1514,6 +1550,10 @@ void applyStyleSection(RenderConfig &cfg, const QJsonObject &style) {
     if (style.value(QStringLiteral("ruby_shadow_offset_y")).isDouble()) {
         base.rubyShadowOffsetY = style.value(QStringLiteral("ruby_shadow_offset_y")).toInt();
     }
+    if (style.value(QStringLiteral("ruby_shadow_blur_px")).isDouble())
+        base.rubyShadowBlurPx = std::clamp(intValue(style, QStringLiteral("ruby_shadow_blur_px"), 0), 0, 1024);
+    if (style.value(QStringLiteral("ruby_shadow_spread_px")).isDouble())
+        base.rubyShadowSpreadPx = std::clamp(intValue(style, QStringLiteral("ruby_shadow_spread_px"), 0), 0, 1024);
     if (style.value(QStringLiteral("ruby_shadow_before_offset_x")).isDouble()) {
         base.rubyShadowBeforeOffsetX = style.value(
             QStringLiteral("ruby_shadow_before_offset_x")

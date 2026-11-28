@@ -98,6 +98,8 @@ SCHEME_FIELDS = frozenset(
         "shadow_offset_y",
         "shadow_before_offset_x",
         "shadow_before_offset_y",
+        "shadow_blur_px",
+        "shadow_spread_px",
         "ruby_font_size_px",
         "ruby_font_family",
         "ruby_font_family_latin",
@@ -125,6 +127,8 @@ SCHEME_FIELDS = frozenset(
         "ruby_shadow_offset_y",
         "ruby_shadow_before_offset_x",
         "ruby_shadow_before_offset_y",
+        "ruby_shadow_blur_px",
+        "ruby_shadow_spread_px",
         "ruby_colors_follow_main",
         "ruby_horizontal_gradient_with_main",
         "karaoke_colors",
@@ -647,7 +651,7 @@ def normalize_viewport_align(value: object) -> ViewportAlign:
 
 
 def normalize_decoration_kind(value: object) -> DecorationKind:
-    if value in {"none", "shadow", "glow"}:
+    if value in {"none", "shadow", "glow", "both"}:
         return value  # type: ignore[return-value]
     return "shadow"
 

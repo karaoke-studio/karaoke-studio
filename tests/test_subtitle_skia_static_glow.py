@@ -14,6 +14,7 @@ import pytest
 
 from test_subtitle_skia_static_shadow import application, binary, project, ir_for, collect, configure, selection
 from test_subtitle_skia_static_shadow import shadow_source, shaded_ruby, premultiplied
+from krok_helper.subtitle_render.domain.models import TitleOverlay
 from test_subtitle_skia_outline_ruby import (
     annotated, mixed, pages, reading, upper_ir, render_skia, UPPER_TIMES,
 )
@@ -49,6 +50,97 @@ def glow_source(project, case):
     elif case == 'shadow_and_glow':
         fields['decoration_kind_before'] = 'shadow'
     return track, replace(style, **fields)
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_shadow_and_glow_coexist_with_independent_color_and_soft_zero_offset(binary, project, target):
+    track, base = shadow_source(project, 'transparent')
+    colors = replace(base.karaoke_colors,
+        before=replace(base.karaoke_colors.before, glow=PaintFill(color='#C000FF40')),
+        after=replace(base.karaoke_colors.after, glow=PaintFill(color='#C000FF40')))
+    style = replace(base, karaoke_colors=colors, decoration_kind='both', decoration_kind_before='both',
+                    glow_before_radius_px=10, glow_after_radius_px=10,
+                    shadow_offset_x=0, shadow_offset_y=0, shadow_before_offset_x=0,
+                    shadow_before_offset_y=0, shadow_blur_px=12, shadow_spread_px=3)
+    ir = ir_for(binary, (track, style), dpr=1)
+    assert {'p06_static_shadow', 'p06_static_glow'} <= set(ir['required_features'])
+    variants = (style, replace(style, decoration_kind='shadow', decoration_kind_before='shadow'),
+                replace(style, decoration_kind='glow', decoration_kind_before='glow'))
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        frames = []
+        for generation, variant in enumerate(variants, 1):
+            configure(process, ir if generation == 1 else ir_for(binary, (track, variant), dpr=1))
+            images, _ = collect(process, [750, 750], generation=generation)
+            assert np.array_equal(images[0], images[1])
+            frames.append(images[0])
+    assert np.count_nonzero(frames[1][..., 3]) > 0  # zero-offset blurred shadow remains visible
+    assert not np.array_equal(frames[0], frames[1])
+    assert not np.array_equal(frames[0], frames[2])
+
+
+def test_soft_shadow_and_glow_match_gpu_raster(binary, project):
+    track, base = shadow_source(project, 'transparent')
+    palette = replace(base.karaoke_colors,
+        before=replace(base.karaoke_colors.before, glow=PaintFill(color='#C020E050')),
+        after=replace(base.karaoke_colors.after, glow=PaintFill(color='#C020E050')))
+    style = replace(base, karaoke_colors=palette, decoration_kind='both',
+                    decoration_kind_before='both', glow_before_radius_px=10,
+                    glow_after_radius_px=10, shadow_offset_x=0, shadow_offset_y=0,
+                    shadow_before_offset_x=0, shadow_before_offset_y=0,
+                    shadow_blur_px=12, shadow_spread_px=3)
+    gpu, raster = render_skia(binary, ir_for(binary, (track, style)), (750,))
+    assert_glow_parity((750,), None, gpu, raster, 'soft_shadow_and_glow')
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_upper_ruby_follows_both_main_decorations_and_scaled_shadow(binary, reading, target):
+    track, base = shaded_ruby(reading, False, False)
+    palette = replace(base.karaoke_colors,
+        before=replace(base.karaoke_colors.before, shadow=PaintFill(color='#C0E03020'),
+                       glow=PaintFill(color='#C020E050')),
+        after=replace(base.karaoke_colors.after, shadow=PaintFill(color='#C0E03020'),
+                      glow=PaintFill(color='#C020E050')))
+    style = replace(base, karaoke_colors=palette, ruby_karaoke_colors=None,
+                    ruby_colors_follow_main=True, decoration_kind='both',
+                    decoration_kind_before='both', glow_before_radius_px=8,
+                    glow_after_radius_px=8, shadow_blur_px=12, shadow_spread_px=4)
+    ir = ir_for(binary, (track, style))
+    assert {'p06_ruby_shadow', 'p06_ruby_glow'} <= set(ir['required_features'])
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        frames = []
+        for generation, kind in enumerate(('both', 'shadow', 'glow'), 1):
+            variant = replace(style, decoration_kind=kind, decoration_kind_before=kind)
+            configure(process, ir if generation == 1 else ir_for(binary, (track, variant)))
+            images, _ = collect(process, [900], generation=generation)
+            frames.append(images[0])
+    assert not np.array_equal(frames[0], frames[1])
+    assert not np.array_equal(frames[0], frames[2])
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_title_shadow_and_glow_use_independent_paints(binary, project, target):
+    track, base = shadow_source(project, 'transparent')
+    title = TitleOverlay(enabled=True, text_template='A', scheme_name=None,
+                         font_family=base.font_family, font_family_latin=base.font_family,
+                         font_size_px=48, show_mode='whole', decoration_kind='both',
+                         fill=PaintFill(color='#00000000'), shadow=PaintFill(color='#E0E03020'),
+                         glow=PaintFill(color='#C020E050'), shadow_offset_x=0,
+                         shadow_offset_y=0, shadow_blur_px=10, shadow_spread_px=3,
+                         glow_radius_px=9)
+    style = replace(base, title_overlays=[title], custom_style_schemes={})
+    ir = ir_for(binary, (track, style))
+    title_style_ir = ir['skia_titles'][0]['source']['style']
+    assert title_style_ir['shadow_blur_px'] == 10
+    assert title_style_ir['karaoke_colors']['before']['glow']['color'] == '#C020E050'
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        frames = []
+        for generation, kind in enumerate(('both', 'shadow', 'glow'), 1):
+            variant = replace(title, decoration_kind=kind)
+            configure(process, ir if generation == 1 else ir_for(binary, (track, replace(style, title_overlays=[variant]))))
+            images, _ = collect(process, [750], generation=generation)
+            frames.append(images[0])
+    assert not np.array_equal(frames[0], frames[1])
+    assert not np.array_equal(frames[0], frames[2])
 
 
 @pytest.mark.parametrize('case', CASES)

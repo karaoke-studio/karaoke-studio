@@ -14,7 +14,7 @@ ColorFillMode = Literal[
     "image",
 ]
 ColorStateKey = Literal["before", "after"]
-ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
+ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow", "glow"]
 
 
 @dataclass
@@ -78,6 +78,7 @@ class KaraokeColorState:
     stroke: PaintFill = field(default_factory=lambda: _paint_fill("#222222"))
     stroke2: PaintFill = field(default_factory=lambda: _paint_fill("#000000"))
     shadow: PaintFill = field(default_factory=lambda: _paint_fill("#000000"))
+    glow: Optional[PaintFill] = None
 
 
 @dataclass

@@ -63,6 +63,8 @@ SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "shadow_offset_y",
     "shadow_before_offset_x",
     "shadow_before_offset_y",
+    "shadow_blur_px",
+    "shadow_spread_px",
     "ruby_font_size_px",
     "ruby_font_family",
     "ruby_font_family_latin",
@@ -90,6 +92,8 @@ SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "ruby_shadow_offset_y",
     "ruby_shadow_before_offset_x",
     "ruby_shadow_before_offset_y",
+    "ruby_shadow_blur_px",
+    "ruby_shadow_spread_px",
     "ruby_colors_follow_main",
     "ruby_horizontal_gradient_with_main",
     "karaoke_colors",
@@ -152,8 +156,8 @@ def style_for_role(style: Style, role_label: str | None) -> Style:
 
 def uses_authored_decoration(style: Style, kind: str) -> bool:
     """Report the configured karaoke decoration before width and paint projection."""
-    return style.decoration_kind == kind or (
-        not style.decoration_before_sync and style.decoration_kind_before == kind
+    return style.decoration_kind in {kind, "both"} or (
+        not style.decoration_before_sync and style.decoration_kind_before in {kind, "both"}
     )
 
 

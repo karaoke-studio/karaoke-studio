@@ -260,6 +260,8 @@ struct ResolvedStyle {
     PaintFillSpec afterStroke2Fill;
     PaintFillSpec beforeShadowFill;
     PaintFillSpec afterShadowFill;
+    PaintFillSpec beforeGlowFill;
+    PaintFillSpec afterGlowFill;
     QString rubyColor = QStringLiteral("#FF5A6F");
     QString rubyBaseColor = QStringLiteral("#FFFFFF");
     QString rubyFillColor = QStringLiteral("#FF5A6F");
@@ -277,6 +279,8 @@ struct ResolvedStyle {
     PaintFillSpec rubyAfterStroke2Fill;
     PaintFillSpec rubyBeforeShadowFill;
     PaintFillSpec rubyAfterShadowFill;
+    PaintFillSpec rubyBeforeGlowFill;
+    PaintFillSpec rubyAfterGlowFill;
     int strokeWidthPx = 9;
     int stroke2WidthPx = 0;
     // Tracked separately from the width because ``stroke2WidthPx`` is zeroed as
@@ -308,6 +312,10 @@ struct ResolvedStyle {
     double glowStrength = 1.0;
     int shadowOffsetX = 0;
     int shadowOffsetY = 1;
+    int shadowBlurPx = 0;
+    int shadowSpreadPx = 0;
+    std::optional<int> rubyShadowBlurPx;
+    std::optional<int> rubyShadowSpreadPx;
     std::optional<int> shadowBeforeOffsetX;
     std::optional<int> shadowBeforeOffsetY;
     std::optional<int> rubyShadowOffsetX;
@@ -538,10 +546,10 @@ inline QString rubyDecorationKindForState(const ResolvedStyle &style, bool after
     if (kind.isEmpty()) {
         kind = decorationKindForState(style, after);
     }
-    if (kind == QStringLiteral("glow")
+    if ((kind == QStringLiteral("glow") || kind == QStringLiteral("both"))
         && (rubyGlowConcentrationForState(style, after) < 0
             || rubyGlowRadiusForState(style, after) <= 0)) {
-        return QStringLiteral("none");
+        return kind == QStringLiteral("both") ? QStringLiteral("shadow") : QStringLiteral("none");
     }
     return kind;
 }

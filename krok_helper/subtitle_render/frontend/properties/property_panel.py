@@ -311,6 +311,8 @@ _RUBY_DECORATION_SLOTS = {
     "shadow_offset_y": "ruby_shadow_offset_y",
     "shadow_before_offset_x": "ruby_shadow_before_offset_x",
     "shadow_before_offset_y": "ruby_shadow_before_offset_y",
+    "shadow_blur_px": "ruby_shadow_blur_px",
+    "shadow_spread_px": "ruby_shadow_spread_px",
 }
 #: 主文字装饰字段 → 对应的走字前槽位（用于「同步」路由）。
 _DECORATION_BEFORE_SLOTS = {
@@ -2818,41 +2820,44 @@ class PropertyPanel(QWidget):
         seed: dict[str, object] = {}
         ruby_subject = self._current_color_subject_key() == "ruby"
 
-        def current(field: str) -> int:
+        def current(field: str, *, after: bool) -> int:
             """该编辑主体当前的生效值（注音独立槽位与主文字分开读）。"""
             if ruby_subject:
-                field = _RUBY_DECORATION_SLOTS.get(field, field)
-            return int(self._scheme_value(field) or 0)
+                ruby_field = _RUBY_DECORATION_SLOTS.get(field, field)
+                return int(self._effective_ruby_decoration_values(after=after).get(ruby_field) or 0)
+            value = self._scheme_value(field)
+            if value is None and field.startswith("shadow_before_offset_"):
+                value = self._scheme_value(field.replace("shadow_before_", "shadow_"))
+            return int(value or 0)
 
         for kind_field, state in (
             ("decoration_kind", "after"),
             ("decoration_kind_before", "before"),
         ):
-            if routed.get(kind_field) not in {"glow", "shadow"}:
+            if routed.get(kind_field) not in {"glow", "shadow", "both"}:
                 continue
-            if routed[kind_field] == "glow":
+            if routed[kind_field] in {"glow", "both"}:
                 radius_field = (
                     "glow_before_radius_px"
                     if state == "before"
                     else "glow_after_radius_px"
                 )
-                if radius_field in routed or radius_field in source:
-                    continue
-                if max(current(radius_field), 0) > 0:
-                    continue
-                seed[radius_field] = 2
-            else:
+                if (radius_field not in routed and radius_field not in source
+                    and max(current(radius_field, after=state == "after"), 0) <= 0):
+                    seed[radius_field] = 2
+            if routed[kind_field] in {"shadow", "both"}:
                 x_field, y_field = (
                     ("shadow_before_offset_x", "shadow_before_offset_y")
                     if state == "before"
                     else ("shadow_offset_x", "shadow_offset_y")
                 )
-                if x_field in routed or y_field in routed:
-                    continue
-                if abs(current(x_field)) or abs(current(y_field)):
-                    continue
-                seed.setdefault(x_field, 5)
-                seed.setdefault(y_field, 5)
+                if (x_field not in routed and y_field not in routed
+                    and not (abs(current(x_field, after=state == "after"))
+                             or abs(current(y_field, after=state == "after"))
+                             or current("shadow_blur_px", after=state == "after")
+                             or current("shadow_spread_px", after=state == "after"))):
+                    seed.setdefault(x_field, 5)
+                    seed.setdefault(y_field, 5)
         if not seed:
             return routed
         merged = dict(routed)
@@ -2871,6 +2876,18 @@ class PropertyPanel(QWidget):
         已经显式改类型的调用不会被覆盖。
         """
         implied = dict(routed)
+        def add_layer(kind_field: str, layer: str) -> None:
+            if self._current_color_subject_key() == "ruby":
+                ruby_field = _RUBY_DECORATION_SLOTS[kind_field]
+                current = self._effective_ruby_decoration_values(
+                    after=kind_field == "decoration_kind"
+                )[ruby_field]
+            else:
+                current = self._scheme_value(kind_field) or self._scheme_value("decoration_kind")
+            current = str(implied.get(kind_field) or current or "none")
+            layers = ({"shadow", "glow"} if current == "both" else {current}) & {"shadow", "glow"}
+            layers.add(layer)
+            implied[kind_field] = "both" if len(layers) == 2 else layer
         for radius_field, kind_field in (
             ("glow_before_radius_px", "decoration_kind_before"),
             ("glow_after_radius_px", "decoration_kind"),
@@ -2878,7 +2895,7 @@ class PropertyPanel(QWidget):
             if kind_field in routed:
                 continue
             if int(routed.get(radius_field) or 0) > 0:
-                implied[kind_field] = "glow"
+                add_layer(kind_field, "glow")
         for offset_fields, kind_field in (
             (
                 ("shadow_before_offset_x", "shadow_before_offset_y"),
@@ -2891,8 +2908,27 @@ class PropertyPanel(QWidget):
             if any(
                 abs(int(routed.get(field) or 0)) > 0 for field in offset_fields
             ):
-                implied[kind_field] = "shadow"
+                add_layer(kind_field, "shadow")
         return implied
+
+    def _toggle_decoration_layer(self, layer: str, enabled: bool) -> None:
+        if self._syncing:
+            return
+        after = self._current_color_state_key() == "after"
+        if self._current_color_subject_key() == "ruby":
+            values = self._effective_ruby_decoration_values(after=after)
+            field = "ruby_decoration_kind" if after else "ruby_decoration_kind_before"
+            kind = str(values[field])
+        else:
+            field = "decoration_kind" if after else "decoration_kind_before"
+            kind = str(self._scheme_value(field) or self._scheme_value("decoration_kind"))
+        layers = ({"shadow", "glow"} if kind == "both" else {kind}) & {"shadow", "glow"}
+        if enabled:
+            layers.add(layer)
+        else:
+            layers.discard(layer)
+        new_kind = "both" if len(layers) == 2 else next(iter(layers), "none")
+        self._update_shared_decoration(decoration_kind=new_kind)
 
     def _update_shared_decoration(self, **changes) -> None:
         """装饰编辑按配色主体路由：主文字槽位是权威存储；注音在独立模式
@@ -5240,7 +5276,7 @@ class PropertyPanel(QWidget):
 
     def _current_color_layer_key(self) -> ColorLayerKey:
         data = self._color_layer_combo.currentData()
-        if data in {"text", "stroke", "stroke2", "shadow"}:
+        if data in {"text", "stroke", "stroke2", "shadow", "glow"}:
             return data  # type: ignore[return-value]
         return "text"
 
@@ -5315,6 +5351,8 @@ class PropertyPanel(QWidget):
                 "ruby_glow_concentration_level",
                 "ruby_shadow_offset_x",
                 "ruby_shadow_offset_y",
+                "ruby_shadow_blur_px",
+                "ruby_shadow_spread_px",
             )
             if after
             else (
@@ -5324,6 +5362,8 @@ class PropertyPanel(QWidget):
                 "ruby_glow_before_concentration_level",
                 "ruby_shadow_before_offset_x",
                 "ruby_shadow_before_offset_y",
+                "ruby_shadow_blur_px",
+                "ruby_shadow_spread_px",
             )
         )
         values: dict[str, object] = {}
@@ -5362,7 +5402,8 @@ class PropertyPanel(QWidget):
     def _current_paint_fill(self) -> PaintFill:
         colors = self._current_editing_karaoke_colors()
         state = getattr(colors, self._current_color_state_key())
-        return deepcopy(getattr(state, self._current_color_layer_key()))
+        layer = self._current_color_layer_key()
+        return deepcopy(getattr(state, layer) or state.shadow)
 
     def _sync_color_fill_controls(self) -> None:
         """把当前填充回灌到颜色编辑区的控件。
@@ -5435,7 +5476,8 @@ class PropertyPanel(QWidget):
     def _sync_decoration_visibility(self) -> None:
         if not hasattr(self, "_decoration_type_field"):
             return
-        is_decoration = self._current_color_layer_key() == "shadow"
+        layer = self._current_color_layer_key()
+        is_decoration = layer in {"shadow", "glow"}
         after = self._current_color_state_key() == "after"
         if self._current_color_subject_key() == "ruby":
             values = self._effective_ruby_decoration_values(after=after)
@@ -5455,19 +5497,21 @@ class PropertyPanel(QWidget):
             if kind is None:
                 kind = self._scheme_value("decoration_kind")
             decoration_kind = str(kind)
-        is_shadow = decoration_kind == "shadow"
-        is_glow = decoration_kind == "glow"
+        is_shadow = decoration_kind in {"shadow", "both"}
+        is_glow = decoration_kind in {"glow", "both"}
         self._decoration_type_field.setVisible(is_decoration)
         if hasattr(self, "_decoration_sync_check"):
             self._decoration_sync_check.setVisible(is_decoration and not after)
-        self._shadow_x_field.setVisible(is_decoration and is_shadow)
-        self._shadow_y_field.setVisible(is_decoration and is_shadow)
-        self._glow_controls_row.setVisible(is_decoration and is_glow)
-        self._glow_radius_field.setVisible(is_decoration and is_glow)
-        self._glow_after_radius_field.setVisible(is_decoration and is_glow)
-        self._glow_concentration_field.setVisible(is_decoration and is_glow)
+        self._shadow_x_field.setVisible(layer == "shadow" and is_shadow)
+        self._shadow_y_field.setVisible(layer == "shadow" and is_shadow)
+        self._shadow_blur_field.setVisible(layer == "shadow" and is_shadow)
+        self._shadow_spread_field.setVisible(layer == "shadow" and is_shadow)
+        self._glow_controls_row.setVisible(layer == "glow" and is_glow)
+        self._glow_radius_field.setVisible(layer == "glow" and is_glow)
+        self._glow_after_radius_field.setVisible(layer == "glow" and is_glow)
+        self._glow_concentration_field.setVisible(layer == "glow" and is_glow)
         self._glow_strength_field.setVisible(
-            is_decoration and is_glow and self._skia_backend_active()
+            layer == "glow" and is_glow and self._skia_backend_active()
         )
 
     def _skia_backend_active(self) -> bool:
@@ -5480,7 +5524,7 @@ class PropertyPanel(QWidget):
         self._sync_decoration_visibility()
 
     def _sync_color_subject_style_controls(self) -> None:
-        if not hasattr(self, "_decoration_type_combo"):
+        if not hasattr(self, "_shadow_enabled_check"):
             return
         after = self._current_color_state_key() == "after"
         was_syncing = self._syncing
@@ -5506,7 +5550,11 @@ class PropertyPanel(QWidget):
                     concentration = int(
                         values["ruby_glow_before_concentration_level"]
                     )
+                shadow_blur = int(values["ruby_shadow_blur_px"])
+                shadow_spread = int(values["ruby_shadow_spread_px"])
             else:
+                shadow_blur = int(self._scheme_value("shadow_blur_px") or 0)
+                shadow_spread = int(self._scheme_value("shadow_spread_px") or 0)
                 kind_after = str(self._scheme_value("decoration_kind"))
                 if after:
                     kind = kind_after
@@ -5544,10 +5592,15 @@ class PropertyPanel(QWidget):
                     )
                 glow_before = int(self._scheme_value("glow_before_radius_px"))
                 glow_after = int(self._scheme_value("glow_after_radius_px"))
-            self._decoration_type_combo.setCurrentIndex(
-                max(0, self._decoration_type_combo.findData(kind))
-            )
+            self._shadow_enabled_check.setChecked(kind in {"shadow", "both"})
+            self._glow_enabled_check.setChecked(kind in {"glow", "both"})
+            if kind != "both":
+                self._decoration_type_combo.setCurrentIndex(
+                    max(0, self._decoration_type_combo.findData(kind))
+                )
             self._glow_radius_spin.setValue(glow_before)
+            self._shadow_blur_spin.setValue(shadow_blur)
+            self._shadow_spread_spin.setValue(shadow_spread)
             self._glow_after_radius_spin.setValue(glow_after)
             self._glow_concentration_combo.setCurrentIndex(
                 max(
@@ -5579,7 +5632,7 @@ class PropertyPanel(QWidget):
         state_key = self._current_color_state_key()
         layer_key = self._current_color_layer_key()
         state = deepcopy(getattr(colors, state_key))
-        fill = _replace_fill(getattr(state, layer_key), **changes)
+        fill = _replace_fill(getattr(state, layer_key) or state.shadow, **changes)
         if (
             str(changes.get("mode") or "")
             in {"gradient_horizontal", "gradient_vertical"}

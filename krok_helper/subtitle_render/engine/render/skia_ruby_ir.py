@@ -142,8 +142,8 @@ def prepared_ruby_layout(prepared, *, width, height, dpr=1, lower_source_indices
                 has_lower_glow_gradient |= 'lower_glow_gradient' in serialized
             else:
                 decorations = ruby_decoration_kinds(group.target.style)
-                has_shadow = has_shadow or 'shadow' in decorations
-                has_glow = has_glow or 'glow' in decorations
+                has_shadow = has_shadow or bool({'shadow', 'both'} & set(decorations))
+                has_glow = has_glow or bool({'glow', 'both'} & set(decorations))
             groups.append(serialized)
         line = {'cells': cells, 'ruby_groups': groups}
         if singing:

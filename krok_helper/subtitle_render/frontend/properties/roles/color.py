@@ -95,7 +95,8 @@ class RoleColorPropertyPageBuilder:
         host._color_layer_combo.addItem("文字", "text")
         host._color_layer_combo.addItem("描边", "stroke")
         host._color_layer_combo.addItem("描边2", "stroke2")
-        host._color_layer_combo.addItem("装饰", "shadow")
+        host._color_layer_combo.addItem("阴影", "shadow")
+        host._color_layer_combo.addItem("发光", "glow")
         host._color_layer_combo.hide()
         host._color_layer_combo.currentIndexChanged.connect(
             lambda _index: host._on_color_target_combo_changed()
@@ -145,7 +146,8 @@ class RoleColorPropertyPageBuilder:
                 ("text", "文字"),
                 ("stroke", "描边"),
                 ("stroke2", "描边2"),
-                ("shadow", "装饰"),
+                ("shadow", "阴影"),
+                ("glow", "发光"),
             ),
             section,
             vertical=True,
@@ -193,15 +195,27 @@ class RoleColorPropertyPageBuilder:
             )
         )
 
+        # Keep the old combo as a programmatic compatibility adapter for existing
+        # callers; the user-facing controls are independent switches.
         host._decoration_type_combo = self._combo_factory(section)
-        compact_property_control(host._decoration_type_combo)
-        host._decoration_type_combo.addItem("无", "none")
-        host._decoration_type_combo.addItem("阴影", "shadow")
-        host._decoration_type_combo.addItem("发光", "glow")
-        host._decoration_type_combo.currentIndexChanged.connect(
-            lambda _index: host._update_shared_decoration(
-                decoration_kind=str(host._decoration_type_combo.currentData())
-            )
+        for label, value in (("无", "none"), ("阴影", "shadow"), ("发光", "glow")):
+            host._decoration_type_combo.addItem(label, value)
+        host._decoration_type_combo.hide()
+        def legacy_decoration_changed(_index: int) -> None:
+            kind = str(host._decoration_type_combo.currentData())
+            if not getattr(host, "_syncing", False) and kind in {"shadow", "glow"}:
+                host._color_layer_combo.setCurrentIndex(
+                    host._color_layer_combo.findData(kind)
+                )
+            host._update_shared_decoration(decoration_kind=kind)
+        host._decoration_type_combo.currentIndexChanged.connect(legacy_decoration_changed)
+        host._shadow_enabled_check = CheckBox("阴影", section)
+        host._glow_enabled_check = CheckBox("发光", section)
+        host._shadow_enabled_check.toggled.connect(
+            lambda checked: host._toggle_decoration_layer("shadow", checked)
+        )
+        host._glow_enabled_check.toggled.connect(
+            lambda checked: host._toggle_decoration_layer("glow", checked)
         )
         host._decoration_sync_check = CheckBox("同步", section)
         host._decoration_sync_check.setChecked(True)
@@ -216,12 +230,13 @@ class RoleColorPropertyPageBuilder:
         decoration_type_layout = QHBoxLayout(host._decoration_type_row)
         decoration_type_layout.setContentsMargins(0, 0, 0, 0)
         decoration_type_layout.setSpacing(8)
-        decoration_type_layout.addWidget(host._decoration_type_combo, 1)
+        decoration_type_layout.addWidget(host._shadow_enabled_check)
+        decoration_type_layout.addWidget(host._glow_enabled_check)
         decoration_type_layout.addWidget(
             host._decoration_sync_check, 0, Qt.AlignmentFlag.AlignVCenter
         )
         host._decoration_type_field = property_field(
-            "装饰类型", host._decoration_type_row
+            "文字装饰", host._decoration_type_row
         )
 
         host._fill_editor_stack = DynamicStackedWidget(section)
@@ -267,6 +282,19 @@ class RoleColorPropertyPageBuilder:
         )
         host._shadow_y_field = property_field("阴影 Y", host._shadow_y_spin)
         detail_layout.addWidget(host._shadow_y_field, 1, 1)
+
+        host._shadow_blur_spin = self._spin_factory(0, 120, suffix=" px")
+        host._shadow_blur_spin.valueChanged.connect(
+            lambda value: host._update_shared_decoration(shadow_blur_px=value)
+        )
+        host._shadow_blur_field = property_field("阴影柔化", host._shadow_blur_spin)
+        detail_layout.addWidget(host._shadow_blur_field, 2, 0)
+        host._shadow_spread_spin = self._spin_factory(0, 120, suffix=" px")
+        host._shadow_spread_spin.valueChanged.connect(
+            lambda value: host._update_shared_decoration(shadow_spread_px=value)
+        )
+        host._shadow_spread_field = property_field("阴影扩张", host._shadow_spread_spin)
+        detail_layout.addWidget(host._shadow_spread_field, 2, 1)
 
         host._glow_before_radius_spin = self._spin_factory(0, 120, suffix=" px")
         host._glow_before_radius_spin.valueChanged.connect(

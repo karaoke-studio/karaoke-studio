@@ -77,8 +77,9 @@ def _has_textured_upper_ruby(layout, plan):
 
 
 def _decoration_paints(palette, before, after, decoration):
-    return {state.shadow.mode for state, kind in ((palette.before, before), (palette.after, after))
-            if kind == decoration}
+    return {(state.glow or state.shadow).mode if decoration == 'glow' else state.shadow.mode
+            for state, kind in ((palette.before, before), (palette.after, after))
+            if kind in {decoration, 'both'}}
 
 
 def _body_decoration_kinds(style):

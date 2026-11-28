@@ -33,12 +33,15 @@ def karaoke_colors_from_dict(payload: object) -> Optional[KaraokeColors]:
 
 
 def karaoke_color_state_to_dict(state: KaraokeColorState) -> dict:
-    return {
+    result = {
         "text": paint_fill_to_dict(state.text),
         "stroke": paint_fill_to_dict(state.stroke),
         "stroke2": paint_fill_to_dict(state.stroke2),
         "shadow": paint_fill_to_dict(state.shadow),
     }
+    if state.glow is not None:
+        result["glow"] = paint_fill_to_dict(state.glow)
+    return result
 
 
 def karaoke_color_state_from_dict(payload: object) -> KaraokeColorState:
@@ -49,6 +52,7 @@ def karaoke_color_state_from_dict(payload: object) -> KaraokeColorState:
         stroke=paint_fill_from_dict(payload.get("stroke"), fallback="#222222"),
         stroke2=paint_fill_from_dict(payload.get("stroke2"), fallback="#000000"),
         shadow=paint_fill_from_dict(payload.get("shadow"), fallback="#000000"),
+        glow=paint_fill_from_dict(payload["glow"], fallback="#000000") if isinstance(payload.get("glow"), dict) else None,
     )
 
 

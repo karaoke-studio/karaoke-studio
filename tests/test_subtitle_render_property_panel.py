@@ -6783,6 +6783,7 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("glow")
     )
+    panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("glow"))
     assert emitted[-1].decoration_kind == "glow"
     assert panel._shadow_x_field.isHidden()
     assert panel._shadow_y_field.isHidden()
@@ -6827,6 +6828,7 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("shadow")
     )
+    panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("shadow"))
     assert emitted[-1].decoration_kind == "shadow"
     assert not panel._shadow_x_field.isHidden()
     assert not panel._shadow_y_field.isHidden()
@@ -8212,6 +8214,68 @@ def test_ruby_follow_off_snapshots_decoration_and_main_edits_stop_leaking(qapp):
     assert restored.ruby_karaoke_colors is None
     panel._sync_color_subject_style_controls()
     assert panel._shadow_x_spin.value() == 15
+
+
+def test_skia_shadow_glow_switches_and_ruby_snapshot_keep_independent_paints(qapp):
+    panel = PropertyPanel()
+    panel.set_style(Style(font_size_px=100, ruby_font_size_px=50,
+                          decoration_kind="shadow", shadow_offset_x=0, shadow_offset_y=0,
+                          shadow_blur_px=12, shadow_spread_px=4))
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("shadow"))
+    panel._glow_enabled_check.setChecked(True)
+    assert emitted[-1].decoration_kind == "both"
+    assert emitted[-1].decoration_kind_before == "both"
+    assert (emitted[-1].shadow_offset_x, emitted[-1].shadow_offset_y) == (0, 0)
+
+    panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("glow"))
+    panel._update_current_fill(color="#FF3366AA")
+    main_glow = panel._current_karaoke_colors().after.glow
+    assert main_glow is not None and main_glow.color == "#FF3366AA"
+    assert panel._current_karaoke_colors().after.shadow.color != main_glow.color
+
+    panel._color_subject_combo.setCurrentIndex(panel._color_subject_combo.findData("ruby"))
+    assert panel._glow_enabled_check.isChecked() and panel._shadow_enabled_check.isChecked()
+    panel._ruby_colors_follow_main_check.setChecked(False)
+    detached = emitted[-1]
+    assert detached.ruby_decoration_kind == "both"
+    assert detached.ruby_shadow_blur_px == 6
+    assert detached.ruby_shadow_spread_px == 2
+    assert detached.ruby_karaoke_colors.after.glow == main_glow
+
+    panel._color_subject_combo.setCurrentIndex(panel._color_subject_combo.findData("main"))
+    panel._update_current_fill(color="#FFBB3300")
+    assert emitted[-1].ruby_karaoke_colors.after.glow == main_glow
+
+
+def test_skia_dual_decoration_survives_project_roundtrip_and_resolution_scale():
+    from krok_helper.subtitle_render.domain.models import (
+        SubtitleStyleScheme, rescale_font_sizes, style_from_dict, style_to_dict,
+    )
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+
+    base = Style(font_reference_height=1080, decoration_kind="both",
+                 decoration_kind_before="both", ruby_decoration_kind="both",
+                 shadow_blur_px=12, shadow_spread_px=4,
+                 ruby_shadow_blur_px=6, ruby_shadow_spread_px=2)
+    colors = base.karaoke_colors or KaraokeColors()
+    colors = replace(colors, after=replace(colors.after, glow=PaintFill(color="#FF3366AA")))
+    scheme = SubtitleStyleScheme(decoration_kind="both", decoration_kind_before="both",
+                                 ruby_decoration_kind_before="both", shadow_blur_px=12,
+                                 shadow_spread_px=4, ruby_shadow_blur_px=6,
+                                 ruby_shadow_spread_px=2, karaoke_colors=colors)
+    style = replace(base, karaoke_colors=colors, custom_style_schemes={"测试": scheme})
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.decoration_kind == restored.decoration_kind_before == "both"
+    assert restored.karaoke_colors.after.glow.color == "#FF3366AA"
+    assert restored.custom_style_schemes["测试"].decoration_kind_before == "both"
+    assert restored.custom_style_schemes["测试"].ruby_shadow_spread_px == 2
+    scaled = rescale_font_sizes(restored, 540)
+    assert (scaled.shadow_blur_px, scaled.shadow_spread_px) == (6, 2)
+    assert (scaled.ruby_shadow_blur_px, scaled.ruby_shadow_spread_px) == (3, 1)
+    assert (scaled.custom_style_schemes["测试"].shadow_blur_px,
+            scaled.custom_style_schemes["测试"].ruby_shadow_spread_px) == (6, 1)
 
 
 def test_ruby_decoration_edit_exits_follow_with_full_snapshot(qapp):

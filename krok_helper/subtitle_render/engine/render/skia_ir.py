@@ -386,7 +386,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                                        for kind in ruby_decoration_kinds(reading.target.style)}
                 drip_lines.add(index)
                 paired_drips |= dripping_in and dripping_out
-                drip_glow |= 'glow' in reading_decorations or uses_authored_decoration(look, 'glow')
+                drip_glow |= bool({'glow', 'both'} & reading_decorations) or uses_authored_decoration(look, 'glow')
             # Readings take each geometry phase of their owner whatever the
             # other phase, karaoke mode, particles or decorations do.
             entering = source.get('entry_duration_ms', 0) > 0
@@ -431,7 +431,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                         ruby_decorations = {kind for reading in readings
                                             for kind in ruby_decoration_kinds(reading.target.style)}
                         body_glow = uses_authored_decoration(look, 'glow')
-                        reading_glow = 'glow' in ruby_decorations
+                        reading_glow = bool({'glow', 'both'} & ruby_decorations)
                         glow_allowed = not paired and (not with_flame or note_exit)
                         particle_entry_glow |= body_glow
                         particle_entry_reading_glow |= reading_glow and not body_glow
@@ -556,7 +556,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 and _composes_character_fade(ir['track']['lines'][item.track_index], item, entering=False,
                                              other_animations=(*exit_fade_entry_modes, 'spin_flip')
                                              if index in spin_lines else exit_fade_entry_modes)
-                and all('shadow' not in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
+                and all(not ({'shadow', 'both'} & set(ruby_decoration_kinds(group.target.style))) for group in reading.rubies)
             }
         paired_fade_lines = exit_fade_lines | spin_lines
         entry_fade_lines = {
@@ -696,7 +696,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
             if not (reading.rubies and not item.line.wipe_reverse):
                 continue
             body_glow = uses_authored_decoration(look, 'glow')
-            ruby_glow = any('glow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
+            ruby_glow = any({'glow', 'both'} & set(ruby_decoration_kinds(group.target.style)) for group in reading.rubies)
             phase = source.get('entry_anim'), source.get('exit_anim')
             if phase[0] == 'utopia':
                 utopia_entry_lines.add(index)
@@ -716,7 +716,7 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 look = item.layout_style
                 source = ir['track']['lines'][item.track_index]
                 shadow = uses_authored_decoration(look, 'shadow') or any(
-                    'shadow' in ruby_decoration_kinds(group.target.style) for group in reading.rubies)
+                    {'shadow', 'both'} & set(ruby_decoration_kinds(group.target.style)) for group in reading.rubies)
                 moving = {source.get('entry_anim'), source.get('exit_anim')} != {'none'}
                 karaoke = source.get('karaoke_anim')
                 has_lower = any(group.target.lower for group in reading.rubies)
@@ -987,9 +987,9 @@ def _build_source_ir(track, style, *, measure, resolve_font, title_geometry=None
                 rubies = geometry.ruby.lines[index].rubies if geometry.ruby is not None else ()
                 kinds = {kind for group in rubies for kind in ruby_decoration_kinds(group.target.style)}
                 kinds.update(kind for kind in ('shadow', 'glow') if uses_authored_decoration(item.layout_style, kind))
-                if 'shadow' in kinds:
+                if {'shadow', 'both'} & kinds:
                     motion_decorations.add('shadow')
-                elif 'glow' in kinds and not role_line_fade and 'p06_gradient_glow' not in features:
+                if {'glow', 'both'} & kinds and not role_line_fade and 'p06_gradient_glow' not in features:
                     motion_decorations.add('glow')
         ir['required_features'].extend(f'p07_horizontal_{kind}_line_animation' for kind in sorted(motion_decorations))
     if 'p07_character_fade' in ir['required_features']:

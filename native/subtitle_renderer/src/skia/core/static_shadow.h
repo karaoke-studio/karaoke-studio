@@ -7,20 +7,37 @@
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkShader.h"
+#include "include/effects/SkImageFilters.h"
 #include <cstdint>
+#include <algorithm>
 #include <span>
 #include <utility>
+#include <cmath>
 
 namespace subtitle::skia {
 struct ShadowState {
     bool enabled = false;
     float x = 0, y = 0;
     std::uint32_t color = 0;
+    float blur = 0, spread = 0;
     sk_sp<SkShader> shader;
     ImageFill image;
 
-    bool visible() const { return enabled && (x != 0 || y != 0) && (shader || image || (color >> 24)); }
+    bool visible() const { return enabled && (x != 0 || y != 0 || blur > 0 || spread > 0)
+        && (shader || image || (color >> 24)); }
 };
+
+inline void applyShadowFilter(SkPaint& paint, const ShadowState& state) {
+    sk_sp<SkImageFilter> filter;
+    if (state.spread > 0) {
+        const int spread = std::clamp(int(std::lround(state.spread)), 1, 1024);
+        filter = SkImageFilters::Dilate(spread, spread, nullptr);
+    }
+    if (state.blur > 0)
+        filter = SkImageFilters::Blur(state.blur / 3.f, state.blur / 3.f,
+                                      SkTileMode::kDecal, std::move(filter));
+    paint.setImageFilter(std::move(filter));
+}
 
 struct StaticShadow {
     ShadowState before, after;
@@ -70,6 +87,7 @@ struct StaticShadow {
                     brush.setColor(shader ? SK_ColorWHITE : state.color);
                     brush.setShader(std::move(shader));
                     brush.setAlphaf(brush.getAlphaf() * opacity);
+                    applyShadowFilter(brush, state);
                     silhouette(cells[index], brush);
                 }
                 return;
@@ -93,6 +111,7 @@ struct StaticShadow {
             auto shader = state.image ? state.image.shaderAt(canvas.getTotalMatrix()) : state.shader;
             brush.setColor(shader ? SK_ColorWHITE : state.color);
             brush.setShader(std::move(shader));
+            applyShadowFilter(brush, state);
             if (opacity < 1.f) brush.setAlphaf(brush.getAlphaf() * opacity);
             for (const auto& cell : cells) silhouette(cell, brush);
         };
@@ -170,6 +189,7 @@ struct StaticShadow {
                 auto shader = state.image ? state.image.shaderAt(canvas.getTotalMatrix()) : state.shader;
                 paint.setColor(shader ? SK_ColorWHITE : state.color);
                 paint.setShader(std::move(shader));
+                applyShadowFilter(paint, state);
                 paint.setAlphaf(paint.getAlphaf() * pose.transform.opacity);
                 if (width > 0) {
                     if (pose.transform.transformed) drawFixedOutline(canvas, path, paint, width);

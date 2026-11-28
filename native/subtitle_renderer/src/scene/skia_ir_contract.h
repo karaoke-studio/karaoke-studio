@@ -6,7 +6,7 @@
 namespace krok::subtitle::native::scene {
 // The sidecar and its IR builder ship from one source tree. Any change to the
 // IR, the measurement protocol or the frame protocol bumps this one version.
-inline constexpr int kSkiaProtocolVersion = 4;
+inline constexpr int kSkiaProtocolVersion = 5;
 inline constexpr int kScanlineBandSchema = 6;
 inline constexpr int kCharacterTransformSchema = 8;
 inline constexpr int kSingingParticleSchema = 13;

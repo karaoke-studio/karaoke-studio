@@ -113,6 +113,9 @@ def resolve_title_overlay(
                 else merged.glow_concentration_level
             ),
             shadow=colors.shadow,
+            glow=colors.glow,
+            shadow_blur_px=int(merged.shadow_blur_px),
+            shadow_spread_px=int(merged.shadow_spread_px),
             shadow_offset_x=int(
                 merged.shadow_before_offset_x
                 if merged.shadow_before_offset_x is not None
@@ -223,6 +226,9 @@ def resolve_title_role_overlay(
             else merged.glow_concentration_level
         ),
         shadow=colors.shadow,
+        glow=colors.glow,
+        shadow_blur_px=int(merged.shadow_blur_px),
+        shadow_spread_px=int(merged.shadow_spread_px),
         shadow_offset_x=int(
             merged.shadow_before_offset_x
             if merged.shadow_before_offset_x is not None

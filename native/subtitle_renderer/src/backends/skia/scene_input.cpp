@@ -40,16 +40,22 @@ void supportedStyle(const TextStyle& s, bool canonical, const SkiaPaintCapabilit
     };
     const auto supportedDecoration = [&](bool after) {
         const auto kind = s.decorationKindForState(after);
-        const auto& paint = after ? s.afterDecorPaint : s.beforeDecorPaint;
         if (kind == "none") return true;
-        if (kind == "shadow")
+        const auto shadow = [&] {
+            const auto& paint = after ? s.afterDecorPaint : s.beforeDecorPaint;
             return caps.staticShadow && (supportsSkiaShadowPaint(paint, caps.bodyShadowGradients)
                     || (paint.mode == "image" && caps.bodyShadowImages))
-                && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after));
+                && std::isfinite(s.shadowOffsetXForState(after)) && std::isfinite(s.shadowOffsetYForState(after))
+                && std::isfinite(s.shadowBlur) && s.shadowBlur >= 0.f
+                && std::isfinite(s.shadowSpread) && s.shadowSpread >= 0.f;
+        };
+        if (kind == "shadow") return shadow();
         // Ganesh's pinned blur image filter clamps larger sigmas.
         const float radius = after ? s.glowAfterRadius : s.glowBeforeRadius;
-        return caps.staticGlow && kind == "glow" && (supportsSkiaGlowPaint(paint, caps.glowPaints) || paint.mode == "image")
+        const auto& glowPaint = after ? s.afterGlowPaint : s.beforeGlowPaint;
+        const bool glow = caps.staticGlow && (supportsSkiaGlowPaint(glowPaint, caps.glowPaints) || glowPaint.mode == "image")
             && std::isfinite(radius) && radius <= 532.f;
+        return (kind == "glow" && glow) || (kind == "both" && shadow() && glow);
     };
     if ((canonical ? (s.layoutSemantics != "legacy" && s.layoutSemantics != "n3_1074") : s.layoutSemantics != "legacy")
         || (s.vertical && !canonical) || (s.rightToLeft && !canonical) || s.laneCount < 1 || s.laneCount > 32
@@ -175,17 +181,22 @@ SkMatrix skiaViewport(const RenderScene& scene) {
 ::subtitle::skia::StaticShadow skiaStaticShadow(const TextStyle& style) {
     const auto state = [&](bool after) {
         const auto& paint = after ? style.afterDecorPaint : style.beforeDecorPaint;
-        return ::subtitle::skia::ShadowState{style.decorationKindForState(after) == "shadow",
+        const auto kind = style.decorationKindForState(after);
+        auto state = ::subtitle::skia::ShadowState{kind == "shadow" || kind == "both",
             style.shadowOffsetXForState(after), style.shadowOffsetYForState(after),
             paint.mode == "solid" ? argb(paint.color) : 0u};
+        state.blur = style.shadowBlur;
+        state.spread = style.shadowSpread;
+        return state;
     };
     return {state(false), state(true), style.strokeWidth, style.stroke2Width};
 }
 
 ::subtitle::skia::StaticGlow skiaStaticGlow(const TextStyle& style) {
     const auto state = [&](bool after) {
-        if (style.decorationKindForState(after) != "glow") return ::subtitle::skia::GlowState{};
-        const auto& paint = after ? style.afterDecorPaint : style.beforeDecorPaint;
+        const auto kind = style.decorationKindForState(after);
+        if (kind != "glow" && kind != "both") return ::subtitle::skia::GlowState{};
+        const auto& paint = after ? style.afterGlowPaint : style.beforeGlowPaint;
         const auto radius = after ? style.glowAfterRadius : style.glowBeforeRadius;
         return ::subtitle::skia::GlowState{int(std::lround(radius)), style.glowConcentrationForState(after), argb(paint.color),
                                            style.glowStrength, bool(paint.color.linear)

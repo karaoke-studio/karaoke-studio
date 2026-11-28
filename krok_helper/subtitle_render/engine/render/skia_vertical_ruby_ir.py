@@ -77,9 +77,10 @@ def vertical_ruby_layout(prepared, *, width, height, dpr, singing_tracks):
             ruby_column = column + style.font_size_px / 2 + style.ruby_gap_px + target.style.ruby_font_size_px / 2
             outlines, gradients = ruby_outlines(target.style)
             outline_gradients.update(gradients)
-            decoration = set(ruby_decoration_kinds(target.style)) & {'shadow', 'glow'}
-            singing_shadow |= singing_scale and 'shadow' in decoration
-            decorations.update(decoration)
+            decoration = set(ruby_decoration_kinds(target.style)) & {'shadow', 'glow', 'both'}
+            singing_shadow |= singing_scale and bool({'shadow', 'both'} & decoration)
+            decorations.update(kind for kind in ('shadow', 'glow')
+                               if kind in decoration or 'both' in decoration)
             wipe_pad = (outlines.get('stroke', {}).get('width', 0) // 2) / dpr
             units = _reading_units(ruby.readings[reading_index], clock, ruby_column, top + first * height_per_cell,
                                    (end - first) * height_per_cell, len(measured.runs),

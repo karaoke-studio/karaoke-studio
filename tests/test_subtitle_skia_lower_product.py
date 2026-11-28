@@ -213,18 +213,27 @@ def test_lower_shadow_keeps_its_own_wipe_phase_and_offset(binary, independent, t
     assert abs(x.max() - fill_x.max() - offset[0] * 1.5) <= 1
 
 
-def test_lower_shadow_cannot_replace_valid_scene_with_two_decorations_in_same_phase(binary, independent):
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_lower_shadow_and_glow_coexist_in_same_phase(binary, independent, target):
     track, style, resolve = independent
-    valid = ir_for(binary, (track, lower_shadow_style(style, 'after'), resolve))
-    bad = copy.deepcopy(valid)
-    group = next(g for g in bad['skia_layout']['lines'][0]['ruby_groups'] if g.get('lower'))
-    group['lower_shadow']['before'] = group['lower_shadow']['after']
-    with SkiaRendererProcess(binary, selection=selection('raster')) as process:
-        configure(process, valid)
-        before, _ = collect(process, [900])
-        with pytest.raises(NativeRendererError): configure(process, bad)
-        after, _ = collect(process, [900], generation=2)
-    assert np.array_equal(before[0], after[0])
+    style = lower_shadow_style(style, 'after')
+    lower = {**style.lower_ruby_style, 'ruby_decoration_kind': 'both',
+             'ruby_shadow_blur_px': 4, 'ruby_shadow_spread_px': 2}
+    lower['ruby_karaoke_colors'] = {
+        **lower['ruby_karaoke_colors'],
+        'after': {**lower['ruby_karaoke_colors']['after'], 'glow': {'color': '#FF00FF'}},
+    }
+    style = replace(style, lower_ruby_style=lower)
+    ir = ir_for(binary, (track, style, resolve))
+    groups = [g for g in ir['skia_layout']['lines'][0]['ruby_groups'] if g.get('lower')]
+    assert all(g['lower_shadow']['after']['blur'] == 4 for g in groups)
+    assert all(g['lower_shadow']['after']['spread'] == 2 for g in groups)
+    assert all(g['lower_shadow']['after']['color'] == [0, 255, 255, 255] for g in groups)
+    assert all(g['lower_glow']['after']['color'] == [255, 0, 255, 255] for g in groups)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [1900, 1900])
+    assert frames[0].any() and np.array_equal(frames[0], frames[1])
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Actual Direct2D GPU reference')
