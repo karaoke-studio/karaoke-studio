@@ -11,12 +11,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Sequence
 
-from PyQt6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen
+from PyQt6 import sip
+from PyQt6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    QTimer,
+    Qt,
+    pyqtSignal as Signal,
+)
+from PyQt6.QtGui import QAction, QColor, QCursor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QHBoxLayout, QSizePolicy, QToolButton, QWidget
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
+from krok_helper.subtitle_render.frontend.properties.controls.animation_preview import (
+    AnimationPreviewPopover,
+)
 from krok_helper.subtitle_render.frontend.properties.controls.inputs import (
     WheelFocusedComboBox,
 )
@@ -283,6 +298,14 @@ class _GroupHeaderWidget(QWidget):
         painter.end()
 
 
+def _infer_animation_direction(groups: Sequence[AnimationGroupSpec]) -> str:
+    """Infer ``'exit'`` vs ``'entry'`` from a group specification tuple."""
+    values = {val for group in groups for val in group.values}
+    if values & {"slide_out", "scatter_out", "converge_out", "stretch_out", "glow_out", "dissolve_out"}:
+        return "exit"
+    return "entry"
+
+
 class GroupedComboBoxMenu(ComboBoxMenu):
     """Stable Fluent dropdown menu with pinned category tabs and group headers."""
 
@@ -290,28 +313,71 @@ class GroupedComboBoxMenu(ComboBoxMenu):
     _TAB_SIDE_INSET = 10
     _TAB_GAP = 6
     _MIN_MENU_WIDTH = 276
+    _PREVIEW_SHOW_DELAY_MS = 110
+    _PREVIEW_HIDE_DELAY_MS = 60
+    _PREVIEW_CURSOR_POLL_MS = 50
 
     def __init__(
         self,
         groups: Sequence[AnimationGroupSpec],
         parent: Optional[QWidget] = None,
+        *,
+        direction: Optional[str] = None,
     ) -> None:
         super().__init__(parent=parent)
         self._groups = tuple(groups)
+        self._direction = direction or _infer_animation_direction(self._groups)
         self._active_category = "all"
         # Maps list-widget row -> (category_key, is_header).
         self._row_meta: list[tuple[str, bool]] = []
+        # Maps list-widget row -> (anim_key, display_label); empty for headers.
+        self._row_anim: list[tuple[str, str]] = []
         # Maps combo item index -> QAction so current item can be highlighted.
         self._combo_actions: dict[int, QAction] = {}
 
+        self._preview_popover: Optional[AnimationPreviewPopover] = None
+        self._hovered_row: int = -1
+        self._pending_preview_row: int = -1
+        self._preview_show_timer = QTimer(self)
+        self._preview_show_timer.setSingleShot(True)
+        self._preview_show_timer.setInterval(self._PREVIEW_SHOW_DELAY_MS)
+        self._preview_show_timer.timeout.connect(self._show_pending_preview)
+
+        self._preview_hide_timer = QTimer(self)
+        self._preview_hide_timer.setSingleShot(True)
+        self._preview_hide_timer.setInterval(self._PREVIEW_HIDE_DELAY_MS)
+        self._preview_hide_timer.timeout.connect(self.hide_preview)
+
+        # QMenu popup grabs swallow child viewport Leave events on Windows;
+        # poll QCursor.pos() only while a real hover preview is active/pending.
+        self._preview_cursor_timer = QTimer(self)
+        self._preview_cursor_timer.setInterval(self._PREVIEW_CURSOR_POLL_MS)
+        self._preview_cursor_timer.timeout.connect(self._sync_preview_with_cursor)
+
         self._tab_strip = _CategoryTabStrip(self._groups, self.view)
         self._tab_strip.categoryChanged.connect(self.set_category)
+        self._tab_strip.installEventFilter(self)
         self._tab_strip.raise_()
         self._tab_strip.show()
+
+        self.setMouseTracking(True)
+        self.view.setMouseTracking(True)
+        self.view.viewport().setMouseTracking(True)
+        self.view.installEventFilter(self)
+        self.view.viewport().installEventFilter(self)
+        self.view.itemEntered.connect(self._on_list_item_entered)
+        self.view.verticalScrollBar().valueChanged.connect(
+            lambda _v: self._reposition_active_preview()
+        )
+        self.aboutToHide.connect(self.hide_preview)
 
         top_margin = self._TAB_TOP_INSET + self._tab_strip.height() + self._TAB_GAP
         self.view.setViewportMargins(0, top_margin, 0, 6)
         self.setMaxVisibleItems(12)
+
+    @property
+    def direction(self) -> str:
+        return self._direction
 
     @property
     def active_category(self) -> str:
@@ -321,20 +387,230 @@ class GroupedComboBoxMenu(ComboBoxMenu):
     def tab_strip(self) -> _CategoryTabStrip:
         return self._tab_strip
 
+    def preview_popover(self) -> Optional[AnimationPreviewPopover]:
+        if self._preview_popover is not None and sip.isdeleted(self._preview_popover):
+            self._preview_popover = None
+        return self._preview_popover
+
+    def _ensure_preview_popover(self) -> AnimationPreviewPopover:
+        pop = self.preview_popover()
+        if pop is None:
+            pop = AnimationPreviewPopover(None)
+            self._preview_popover = pop
+
+            def _cleanup(_obj: Any = None, target: AnimationPreviewPopover = pop) -> None:
+                if not sip.isdeleted(target):
+                    target.hide()
+                    target.close()
+                    target.deleteLater()
+
+            self.destroyed.connect(_cleanup)
+        return pop
+
     def add_group_header(self, category_key: str, title: str, count: int) -> None:
         header = _GroupHeaderWidget(title, count, self)
         self.addWidget(header, selectable=False)
         self._row_meta.append((category_key, True))
+        self._row_anim.append(("", ""))
 
     def add_grouped_action(
         self,
         category_key: str,
         combo_index: int,
         action: QAction,
+        *,
+        anim_key: str = "",
     ) -> None:
         self.addAction(action)
         self._row_meta.append((category_key, False))
+        self._row_anim.append((anim_key, action.text()))
         self._combo_actions[combo_index] = action
+
+    def row_animation_key(self, row: int) -> str:
+        if 0 <= row < len(self._row_anim):
+            return self._row_anim[row][0]
+        return ""
+
+    def _row_global_rect(self, row: int) -> QRect:
+        item = self.view.item(row)
+        if item is None or item.isHidden():
+            return QRect()
+        rect = self.view.visualItemRect(item)
+        top_left = self.view.viewport().mapToGlobal(rect.topLeft())
+        return QRect(top_left, rect.size())
+
+    def _menu_global_rect(self) -> QRect:
+        return QRect(self.mapToGlobal(QPoint(0, 0)), self.size())
+
+    def _row_under_cursor(self) -> int:
+        """Return the selectable animation row currently under ``QCursor.pos()``, or -1."""
+        if not self.isVisible():
+            return -1
+        viewport = self.view.viewport()
+        local_pos = viewport.mapFromGlobal(QCursor.pos())
+        if not viewport.rect().contains(local_pos):
+            return -1
+        item = self.view.itemAt(local_pos)
+        if item is None or item.isHidden():
+            return -1
+        row = self.view.row(item)
+        return row if self.row_animation_key(row) else -1
+
+    def preview_for_row(
+        self,
+        row: int,
+        *,
+        track_cursor: bool = False,
+    ) -> Optional[AnimationPreviewPopover]:
+        """Immediately show the hover animation preview for ``row`` (also used in tests)."""
+        self._preview_show_timer.stop()
+        self._preview_hide_timer.stop()
+        if not (0 <= row < len(self._row_anim)):
+            self.hide_preview()
+            return None
+        anim_key, label = self._row_anim[row]
+        if not anim_key:
+            self.hide_preview()
+            return None
+        item = self.view.item(row)
+        if item is None or item.isHidden():
+            self.hide_preview()
+            return None
+        self._hovered_row = row
+        pop = self._ensure_preview_popover()
+        pop.set_animation(self._direction, anim_key, display_label=label)
+        pop.show_beside(self._menu_global_rect(), self._row_global_rect(row))
+        if track_cursor and not self._preview_cursor_timer.isActive():
+            self._preview_cursor_timer.start()
+        return pop
+
+    def hide_preview(self) -> None:
+        self._preview_show_timer.stop()
+        self._preview_hide_timer.stop()
+        self._preview_cursor_timer.stop()
+        self._hovered_row = -1
+        self._pending_preview_row = -1
+        pop = self.preview_popover()
+        if pop is not None and pop.isVisible():
+            pop.hide()
+
+    def _clear_viewport_hover(self) -> None:
+        viewport = self.view.viewport()
+        if viewport is not None and not sip.isdeleted(viewport):
+            from PyQt6.QtWidgets import QApplication
+            QApplication.sendEvent(viewport, QEvent(QEvent.Type.Leave))
+            viewport.update()
+
+    def _schedule_preview_for_row(self, row: int) -> None:
+        if not (0 <= row < len(self._row_anim)):
+            self._schedule_hide_preview()
+            return
+        anim_key, _label = self._row_anim[row]
+        item = self.view.item(row)
+        if not anim_key or item is None or item.isHidden():
+            self._schedule_hide_preview()
+            return
+        self._preview_hide_timer.stop()
+        if not self._preview_cursor_timer.isActive():
+            self._preview_cursor_timer.start()
+        if row == self._hovered_row:
+            pop = self.preview_popover()
+            if pop is not None and pop.isVisible():
+                return
+        pop = self.preview_popover()
+        if pop is not None and pop.isVisible():
+            # Already open: switch immediately without flicker.
+            self.preview_for_row(row, track_cursor=True)
+            return
+        self._pending_preview_row = row
+        self._preview_show_timer.start()
+
+    def _schedule_hide_preview(self) -> None:
+        self._preview_show_timer.stop()
+        self._pending_preview_row = -1
+        pop = self.preview_popover()
+        if pop is not None and pop.isVisible():
+            self._preview_hide_timer.start()
+        else:
+            self._preview_cursor_timer.stop()
+
+    def _show_pending_preview(self) -> None:
+        row = self._pending_preview_row
+        self._pending_preview_row = -1
+        if row >= 0 and self.isVisible() and self._row_under_cursor() == row:
+            self.preview_for_row(row, track_cursor=True)
+        else:
+            self.hide_preview()
+
+    def _sync_preview_with_cursor(self) -> None:
+        row = self._row_under_cursor()
+        if row < 0:
+            self.hide_preview()
+            self._clear_viewport_hover()
+            return
+        pop = self.preview_popover()
+        if pop is not None and pop.isVisible():
+            if row != self._hovered_row:
+                self.preview_for_row(row, track_cursor=True)
+        elif self._pending_preview_row >= 0 and row != self._pending_preview_row:
+            self._pending_preview_row = row
+
+    def _reposition_active_preview(self) -> None:
+        pop = self.preview_popover()
+        if pop is None or not pop.isVisible() or self._hovered_row < 0:
+            return
+        row_rect = self._row_global_rect(self._hovered_row)
+        if row_rect.isNull():
+            self.hide_preview()
+            return
+        pop.move(pop._compute_position(self._menu_global_rect(), row_rect))
+
+    def _on_list_item_entered(self, item: Any) -> None:
+        if item is None:
+            self._schedule_hide_preview()
+            return
+        row = self.view.row(item)
+        self._schedule_preview_for_row(row)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched is self.view.viewport():
+            etype = event.type()
+            if etype == QEvent.Type.MouseMove:
+                item = self.view.itemAt(event.position().toPoint())
+                if item is None:
+                    self.hide_preview()
+                else:
+                    self._schedule_preview_for_row(self.view.row(item))
+            elif etype in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+                self.hide_preview()
+        elif watched in (self.view, self._tab_strip):
+            if event.type() in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+                self.hide_preview()
+            elif watched is self._tab_strip and event.type() in (
+                QEvent.Type.Enter,
+                QEvent.Type.HoverEnter,
+            ):
+                self.hide_preview()
+        return super().eventFilter(watched, event)
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802
+        if self._row_under_cursor() < 0:
+            self.hide_preview()
+            self._clear_viewport_hover()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: Any) -> None:  # noqa: N802
+        self.hide_preview()
+        self._clear_viewport_hover()
+        super().leaveEvent(event)
+
+    def hideEvent(self, event: Any) -> None:  # noqa: N802
+        self.hide_preview()
+        super().hideEvent(event)
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802
+        self.hide_preview()
+        super().closeEvent(event)
 
     def action_for_combo_index(self, combo_index: int) -> Optional[QAction]:
         return self._combo_actions.get(combo_index)
@@ -357,6 +633,7 @@ class GroupedComboBoxMenu(ComboBoxMenu):
         return texts
 
     def set_category(self, category_key: str) -> None:
+        self.hide_preview()
         self._active_category = category_key
         self._tab_strip.set_category(category_key)
         show_all = category_key == "all"
@@ -408,17 +685,28 @@ class GroupedAnimationComboBox(WheelFocusedComboBox):
         self,
         groups: Sequence[AnimationGroupSpec],
         parent: Optional[QWidget] = None,
+        *,
+        direction: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
         self._animation_groups = tuple(groups)
+        self._direction = direction or _infer_animation_direction(self._animation_groups)
 
     @property
     def animation_groups(self) -> tuple[AnimationGroupSpec, ...]:
         return self._animation_groups
 
+    @property
+    def direction(self) -> str:
+        return self._direction
+
     def build_grouped_menu(self) -> GroupedComboBoxMenu:
         """Build the categorized popup menu (exposed for testing and reuse)."""
-        menu = GroupedComboBoxMenu(self._animation_groups, self)
+        menu = GroupedComboBoxMenu(
+            self._animation_groups,
+            self,
+            direction=self._direction,
+        )
         index_by_data: dict[str, int] = {}
         for i, item in enumerate(self.items):
             if item.userData is not None:
@@ -437,7 +725,7 @@ class GroupedAnimationComboBox(WheelFocusedComboBox):
                 triggered=lambda _c=False, x=none_idx: self._onItemClicked(x),
             )
             action.setEnabled(item.isEnabled)
-            menu.add_grouped_action("none", none_idx, action)
+            menu.add_grouped_action("none", none_idx, action, anim_key="none")
             placed.add(none_idx)
 
         # Populate each configured category group.
@@ -459,7 +747,12 @@ class GroupedAnimationComboBox(WheelFocusedComboBox):
                     triggered=lambda _c=False, x=idx: self._onItemClicked(x),
                 )
                 action.setEnabled(item.isEnabled)
-                menu.add_grouped_action(group.key, idx, action)
+                menu.add_grouped_action(
+                    group.key,
+                    idx,
+                    action,
+                    anim_key=str(item.userData or ""),
+                )
                 placed.add(idx)
 
         # Defensive fallback: include any uncategorized item so nothing is ever lost.
@@ -475,7 +768,12 @@ class GroupedAnimationComboBox(WheelFocusedComboBox):
                     triggered=lambda _c=False, x=idx: self._onItemClicked(x),
                 )
                 action.setEnabled(item.isEnabled)
-                menu.add_grouped_action("other", idx, action)
+                menu.add_grouped_action(
+                    "other",
+                    idx,
+                    action,
+                    anim_key=str(item.userData or ""),
+                )
 
         min_w = max(self.width(), GroupedComboBoxMenu._MIN_MENU_WIDTH)
         menu.view.setMinimumWidth(min_w)

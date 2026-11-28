@@ -148,6 +148,166 @@ def test_grouped_animation_combos_categorize_and_filter_all_options(qapp) -> Non
     qapp.processEvents()
 
 
+def test_animation_preview_covers_all_entry_and_exit_options_with_sample_lyric(qapp) -> None:
+    """全部 25 种入场与 25 种退场动画均具备元数据与跨相位可见变化，示例歌词固定。"""
+    from krok_helper.subtitle_render.frontend.properties.controls.animation_preview import (
+        ANIMATION_PREVIEW_LYRIC,
+        AnimationPreviewCanvas,
+        ENTRY_ANIMATION_META,
+        EXIT_ANIMATION_META,
+    )
+    from krok_helper.subtitle_render.frontend.properties.pages.effects import (
+        ENTRY_ANIMATION_OPTIONS,
+        EXIT_ANIMATION_OPTIONS,
+    )
+
+    assert ANIMATION_PREVIEW_LYRIC == "渇いた 心で駆け抜ける"
+
+    for direction, options, meta_table in (
+        ("entry", ENTRY_ANIMATION_OPTIONS, ENTRY_ANIMATION_META),
+        ("exit", EXIT_ANIMATION_OPTIONS, EXIT_ANIMATION_META),
+    ):
+        option_keys = {key for _label, key in options}
+        assert option_keys <= set(meta_table)
+        canvas = AnimationPreviewCanvas(direction, "fade")
+        for _label, key in options:
+            canvas.set_animation(direction, key)
+            # Entry: phase 0.03 = empty, 0.34 = mid-entry, 0.76 = hold.
+            # Exit:  phase 0.12 = hold,  0.52 = mid-exit,  0.85 = empty.
+            phase_a, phase_b = (0.34, 0.76) if direction == "entry" else (0.12, 0.52)
+            if key == "none":
+                phase_a, phase_b = (0.03, 0.76) if direction == "entry" else (0.12, 0.85)
+            canvas.set_phase(phase_a)
+            img_a = canvas.grab().toImage()
+            canvas.set_phase(phase_b)
+            img_b = canvas.grab().toImage()
+            assert not img_a.isNull() and not img_b.isNull()
+            assert img_a != img_b, f"{direction}/{key} should animate visibly across phases"
+        canvas.deleteLater()
+        qapp.processEvents()
+
+
+def test_grouped_animation_menu_hover_shows_switches_and_hides_preview(qapp) -> None:
+    """悬停下拉列表项弹出无焦点动画预览卡片，切换/分类/关闭菜单时同步联动并清理。"""
+    from PyQt6.QtCore import Qt
+
+    host = _Host()
+    EffectsPropertyPageBuilder(host).make_animation_section()
+
+    for combo, expected_dir, sample_key_a, sample_key_b in (
+        (host._entry_anim_combo, "entry", "random_zoom", "petal"),
+        (host._exit_anim_combo, "exit", "scatter_out", "flame"),
+    ):
+        menu = combo.build_grouped_menu()
+        try:
+            assert menu.direction == expected_dir
+            menu.show()
+            qapp.processEvents()
+
+            row_header = next(
+                row for row in range(menu.view.count()) if menu.row_animation_key(row) == ""
+            )
+            row_a = next(
+                row for row in range(menu.view.count()) if menu.row_animation_key(row) == sample_key_a
+            )
+            row_b = next(
+                row for row in range(menu.view.count()) if menu.row_animation_key(row) == sample_key_b
+            )
+
+            # Group header rows do not open a preview popover.
+            assert menu.preview_for_row(row_header) is None
+            assert menu.preview_popover() is None
+
+            # Hovering an animation row opens the parentless, mouse-transparent popover.
+            pop = menu.preview_for_row(row_a)
+            qapp.processEvents()
+            assert pop is not None
+            assert pop.parent() is None
+            assert pop.isVisible()
+            assert pop.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            assert pop.canvas.direction == expected_dir
+            assert pop.canvas.anim_key == sample_key_a
+            assert pop.canvas.is_animating()
+
+            # Moving to another option updates the same popover immediately.
+            pop_b = menu.preview_for_row(row_b)
+            qapp.processEvents()
+            assert pop_b is pop
+            assert pop.canvas.anim_key == sample_key_b
+            assert pop.isVisible()
+
+            # Switching category hides the active preview.
+            menu.set_category("particle")
+            qapp.processEvents()
+            assert not pop.isVisible()
+            assert not pop.canvas.is_animating()
+
+            # Re-showing then closing the menu hides and stops the animation cleanly.
+            menu.set_category("all")
+            menu.preview_for_row(row_a)
+            qapp.processEvents()
+            assert pop.isVisible()
+            menu.close()
+            qapp.processEvents()
+            assert not pop.isVisible()
+            assert not pop.canvas.is_animating()
+        finally:
+            menu.close()
+            menu.deleteLater()
+            qapp.processEvents()
+
+
+def test_grouped_animation_menu_hides_preview_when_cursor_moves_away(qapp, monkeypatch) -> None:
+    """即使 QMenu 弹窗吞掉 viewport Leave 事件，鼠标移出列表或移到分组头也会立即收起预览。"""
+    from PyQt6.QtCore import QPoint
+    from krok_helper.subtitle_render.frontend.properties.controls import (
+        grouped_animation_combo as gac,
+    )
+
+    host = _Host()
+    EffectsPropertyPageBuilder(host).make_animation_section()
+    menu = host._entry_anim_combo.build_grouped_menu()
+    try:
+        menu.show()
+        qapp.processEvents()
+
+        row_fade = next(
+            row for row in range(menu.view.count()) if menu.row_animation_key(row) == "fade"
+        )
+        row_header = next(
+            row for row in range(menu.view.count()) if menu.row_animation_key(row) == ""
+        )
+        fade_center = menu._row_global_rect(row_fade).center()
+        header_center = menu._row_global_rect(row_header).center()
+        outside_pos = QPoint(menu.x() - 200, menu.y() - 200)
+
+        # Cursor over fade row -> preview opens and tracks cursor.
+        monkeypatch.setattr(gac.QCursor, "pos", staticmethod(lambda: fade_center))
+        pop = menu.preview_for_row(row_fade, track_cursor=True)
+        qapp.processEvents()
+        assert pop is not None and pop.isVisible()
+        assert menu._preview_cursor_timer.isActive()
+
+        # Cursor moves outside menu without delivering Leave -> cursor sync hides preview.
+        monkeypatch.setattr(gac.QCursor, "pos", staticmethod(lambda: outside_pos))
+        menu._sync_preview_with_cursor()
+        qapp.processEvents()
+        assert not pop.isVisible()
+        assert not pop.canvas.is_animating()
+        assert not menu._preview_cursor_timer.isActive()
+
+        # Pending preview canceled if cursor already moved onto a non-animation header.
+        menu._pending_preview_row = row_fade
+        monkeypatch.setattr(gac.QCursor, "pos", staticmethod(lambda: header_center))
+        menu._show_pending_preview()
+        qapp.processEvents()
+        assert not pop.isVisible()
+    finally:
+        menu.close()
+        menu.deleteLater()
+        qapp.processEvents()
+
+
 def test_effects_animation_builder_preserves_options_and_layout(qapp) -> None:
     host = _Host()
     section = EffectsPropertyPageBuilder(host).make_animation_section()
