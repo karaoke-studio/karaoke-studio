@@ -31,5 +31,6 @@ struct ShapedCell {
 };
 // Cell boundaries are authored timing boundaries. Never form ligatures across them.
 ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<const FontInstance>>& fonts,
-                     const std::string& language = "und", bool rightToLeft = false, bool allowMixed = false);
+                     const std::string& language = "und", bool rightToLeft = false, bool allowMixed = false,
+                     bool allowNotdefFallback = false);
 }

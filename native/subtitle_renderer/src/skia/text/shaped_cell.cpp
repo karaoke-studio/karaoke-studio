@@ -32,7 +32,7 @@ std::vector<SkUnichar> decode(const std::string& text) {
 
 }
 ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<const FontInstance>>& fonts,
-                     const std::string& language, bool rightToLeft, bool allowMixed) {
+                     const std::string& language, bool rightToLeft, bool allowMixed, bool allowNotdefFallback) {
     if (utf8.size() > 65536 || fonts.empty() || !fonts.front()) throw std::runtime_error("Skia 度量单元或字体链无效");
     if (utf8.empty()) {
         // empty_cell_schema=1: an authored empty cell keeps its clock and the
@@ -49,6 +49,9 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
     ShapedRange handler;
     std::size_t selected = 0;
     std::vector<std::vector<ShapedGlyph>> candidates;
+    ShapedRange bestFallbackHandler;
+    std::size_t bestFallbackIndex = 0;
+    std::size_t bestMissingCount = std::size_t(-1);
     for (; selected < fonts.size(); ++selected) {
         if (!fonts[selected]) throw std::runtime_error("Skia 字体链包含空实例");
         auto candidate = shapeFontRange(utf8, *fonts[selected], 0, std::uint32_t(utf8.size()), language, rightToLeft,
@@ -60,12 +63,34 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
             handler = std::move(candidate);
             break;
         }
+        if (allowNotdefFallback && !candidate.glyphs.empty()) {
+            const auto missing = std::size_t(std::count_if(
+                candidate.glyphs.begin(), candidate.glyphs.end(),
+                [](const auto& glyph) { return glyph.id == 0; }));
+            if (missing < bestMissingCount) {
+                bestMissingCount = missing;
+                bestFallbackIndex = selected;
+                bestFallbackHandler = candidate;
+            }
+        }
         if (allowMixed) candidates.push_back(std::move(candidate.glyphs));
     }
     if (selected == fonts.size()) {
-        if (allowMixed && !rightToLeft && fonts.size() > 1)
-            return shapeMixedCell(utf8, fonts, language, candidates, opentype);
-        throw std::runtime_error("Skia 显式字体链缺少该歌词单元的完整字形");
+        if (allowMixed && !rightToLeft && fonts.size() > 1) {
+            if (!allowNotdefFallback) return shapeMixedCell(utf8, fonts, language, candidates, opentype);
+            try {
+                return shapeMixedCell(utf8, fonts, language, candidates, opentype);
+            } catch (const std::exception&) {
+                // In-Skia graceful fallback: fall through to best single-face .notdef shaping
+                // instead of aborting the Skia backend back to D2D/QPainter.
+            }
+        }
+        if (allowNotdefFallback && !bestFallbackHandler.glyphs.empty()) {
+            selected = bestFallbackIndex;
+            handler = std::move(bestFallbackHandler);
+        } else {
+            throw std::runtime_error("Skia 显式字体链缺少该歌词单元的完整字形");
+        }
     }
     const auto& instance = *fonts[selected];
     const auto& font = instance.shapingFont();
@@ -99,7 +124,7 @@ ShapedCell shapeCell(const std::string& utf8, const std::vector<std::shared_ptr<
     SkPathBuilder outlines;
     std::size_t geometryIndex = 0;
     for (auto& glyph : result.glyphs) {
-        if (!glyph.id) throw std::runtime_error("Skia shaping 返回缺字 glyph");
+        if (!glyph.id && !allowNotdefFallback) throw std::runtime_error("Skia shaping 返回缺字 glyph");
         glyph.clusterEnd = *std::upper_bound(boundaries.begin(), boundaries.end(), glyph.clusterStart);
         const auto& path = geometries[geometryIndex++].path;
         SkRect bounds = path ? path->computeTightBounds() : font.getBounds(glyph.id, nullptr);

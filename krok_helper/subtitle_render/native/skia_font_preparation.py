@@ -82,10 +82,12 @@ def scene_fallback_requests(track, style, extra_tracks=()):
 def iter_prepare_skia_fallbacks(track, style, extra_tracks=()):
     from krok_helper.subtitle_render.engine.text.font_fallback import prewarm_fallback, grapheme_clusters
     from .skia_fonts import body_symbol_family
-    from .skia_font_aliases import gui_font_instance
+    from .skia_font_aliases import gui_font_instance, prepare_safe_system_fallback
+    prepare_safe_system_fallback(400, False)
     symbol_requests = set()
     for (family, weight, italic), texts in scene_fallback_requests(track, style, extra_tracks).items():
         instance = gui_font_instance(family, weight, italic)  # Includes verified localized aliases.
+        prepare_safe_system_fallback(weight, italic)
         for text in texts:
             if symbol := body_symbol_family(text):
                 symbol_requests.add((symbol, weight, italic))

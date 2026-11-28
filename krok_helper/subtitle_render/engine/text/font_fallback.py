@@ -42,7 +42,8 @@ from krok_helper.subtitle_render.engine.text.font_weight import build_weight_fon
 # ---------------------------------------------------------------------------
 
 _VARIATION_SELECTORS = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
-_OPTIONAL_CATEGORIES = frozenset({"Mn", "Me", "Cf", "Cc"})
+_OPTIONAL_CATEGORIES = frozenset({"Cf", "Cc"})
+_KANA_VOICING_MARKS = frozenset({"\u3099", "\u309a"})
 
 # 回退表键： (代际, 规范族名, 字重, 斜体, 文本簇)
 _FALLBACK_TABLE: dict[tuple, str | None] = {}
@@ -72,11 +73,14 @@ def _is_variation_selector(code: int) -> bool:
 
 
 def _is_optional_scalar(char: str) -> bool:
-    """组合符/格式符/控制符/空白/变体选择符——无独立可见字形是正常的。"""
+    """格式符/控制符/变体选择符——无独立可见字形是正常的。
+
+    注意：空格（如 ``' '``、``'\u3000'``）和组合音标（``Mn``/``Me``，如德语 IPA
+    连音弧 ``U+0361``、非音节弧 ``U+032F``）在 Skia/HarfBuzz 塑形时必须真实有
+    非零字形，不能跳过覆盖检查。
+    """
     code = ord(char)
     if _is_variation_selector(code):
-        return True
-    if char.isspace():
         return True
     return unicodedata.category(char) in _OPTIONAL_CATEGORIES
 
@@ -144,11 +148,19 @@ def _scalar_covered(raw: QRawFont, char: str) -> bool:
 
 
 def cluster_covered(raw: QRawFont, cluster: str) -> bool:
-    """簇是否被该 face 覆盖（只看必需码点，跳过组合符/变体选择符/控制符）。"""
+    """簇是否被该 face 覆盖（含空格与组合音标；支持 NFC 预组字形，假名浊音除外）。"""
     required = [char for char in cluster if not _is_optional_scalar(char)]
     if not required:
         return True
-    return all(_scalar_covered(raw, char) for char in required)
+    if all(_scalar_covered(raw, char) for char in required):
+        return True
+    # HarfBuzz composes Latin/Hangul base + combining mark to NFC precomposed
+    # glyphs (except kana voicing U+3099/U+309A which Skia keeps uncomposed).
+    if len(required) > 1 and not any(ch in _KANA_VOICING_MARKS for ch in cluster):
+        composed = unicodedata.normalize("NFC", "".join(required))
+        if composed != "".join(required) and all(_scalar_covered(raw, ch) for ch in composed):
+            return True
+    return False
 
 
 def missing_clusters(family: str, weight: int, italic: bool, text: str) -> tuple[str, ...]:
@@ -333,24 +345,55 @@ def prewarm_fallback(
         family_hit = resolved_by_cluster.get(cluster)
         if not family_hit:
             continue
+        from krok_helper.subtitle_render.engine.text.font_resource import FontResourceError
         from krok_helper.subtitle_render.engine.text.font_weight import remember_fallback_face
         layout = QTextLayout(cluster, slot_font(family, weight, italic))
         layout.beginLayout()
         line = layout.createLine()
         line.setLineWidth(1_000_000)
         layout.endLayout()
-        instance = None
+        requested_cf = canonical_family(str(family)).casefold()
+        hit_cf = family_hit.casefold()
+        candidate_raws: list[QRawFont] = []
+        fallback_raw: QRawFont | None = None
         for run in line.glyphRuns():
             raw = run.rawFont()
-            if raw.familyName().casefold() == family_hit.casefold():
-                instance = remember_fallback_face(family_hit, weight, italic, raw)
+            rname = raw.familyName().casefold()
+            if rname == hit_cf:
+                candidate_raws.insert(0, raw)
+            elif rname and rname != requested_cf:
+                candidate_raws.append(raw)
+        # Prefer a fallback face that covers the entire cluster (crucial for
+        # IPA tie bars like t͡s where Skia forbids splitting across two faces).
+        ordered_raws: list[QRawFont] = []
+        for raw in candidate_raws:
+            if cluster_covered(raw, cluster):
+                ordered_raws.append(raw)
+        for raw in candidate_raws:
+            if raw not in ordered_raws:
+                ordered_raws.append(raw)
+        instance = None
+        chosen_family = family_hit
+        for raw in ordered_raws:
+            raw_family = raw.familyName() or family_hit
+            try:
+                instance = remember_fallback_face(raw_family, weight, italic, raw)
+                chosen_family = raw_family
                 break
+            except (FontResourceError, OSError, ValueError, RuntimeError):
+                instance = None
+        if ordered_raws and instance is None:
+            # Qt selected an unexportable face (e.g. legacy Windows .fon bitmap
+            # font like Fixedsys for a PUA codepoint). Never leak that broken
+            # family into _FALLBACK_TABLE where protocol._line_char_fallbacks
+            # would later crash resolving it.
+            continue
         with _TABLE_LOCK:
             # Cluster resolution is shared, but every owning text needs its
             # own lookup entry: all have already been marked as resolved.
             for text in owners:
                 key = (generation,) + (cache_key_base, text)
-                _FALLBACK_TABLE[key] = family_hit
+                _FALLBACK_TABLE[key] = chosen_family
                 if instance is not None:
                     _FALLBACK_FONT_TABLE[key] = instance
                 else:

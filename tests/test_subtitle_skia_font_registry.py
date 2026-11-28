@@ -788,3 +788,113 @@ def test_product_export_recovers_when_font_snapshot_deleted_before_export(binary
     assert output.is_file() and output.stat().st_size > 1000
     assert any('Skia 字幕后端' in line for line in logs)
     assert not any('Skia 字幕导出失败' in line for line in logs)
+
+
+def test_negative_os2_cap_height_font_succeeds_in_skia(binary, registry):
+    """Fonts with OS/2 sCapHeight=-1 (e.g. Alte DIN 1451) must measure and render in Skia."""
+    family = 'LinK Negative CapHeight'
+    path = registry.font('neg-cap', family, 640)
+    with TTFont(path) as font:
+        os2 = font['OS/2']
+        os2.version = 3
+        os2.sCapHeight = -1
+        os2.sxHeight = -1
+        os2.usDefaultChar = 0
+        os2.usBreakChar = 32
+        os2.usMaxContext = 0
+        font.save(path)
+    registry.add('neg-cap', path)
+
+    line = TimingLine(
+        chars=[TimingChar(c, 200 + i * 200) for i, c in enumerate('A字A')],
+        end_ms=1400,
+        track_line_index=0,
+        display_start_override_ms=0,
+        display_end_override_ms=3000,
+    )
+    track = TimingTrack(lines=[line])
+    style = replace(sample()[1], font_family=family, font_family_latin=family, font_size_px=50)
+    ir = prepare(binary, track, style, SkiaFontResolver())
+    rendered = frames(binary, ir, 'raster')
+    assert rendered[1][..., 3].max() > 0
+
+
+def test_in_skia_notdef_fallback_recovers_all_system_missing_pua_glyph(binary, registry):
+    """All-system missing glyphs (e.g. PUA) must recover inside Skia rather than killing Skia."""
+    from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
+
+    path = registry.font('main-pua', MAIN, 600)
+    registry.add('main-pua', path)
+    line = TimingLine(
+        chars=[TimingChar(c, 200 + i * 200) for i, c in enumerate(['A', '\uE999', 'A'])],
+        end_ms=1400,
+        track_line_index=0,
+        display_start_override_ms=0,
+        display_end_override_ms=3000,
+    )
+    track = TimingTrack(lines=[line])
+    style = replace(sample()[1], font_family=MAIN, font_family_latin=MAIN, font_size_px=50)
+    list(iter_prepare_skia_fallbacks(track, style))
+    ir = prepare_skia_scene_ir(track, style, executable=binary, width=640, height=360, fps=60)
+    assert any(run.get('allow_notdef_fallback') for run in ir['skia_layout']['runs'])
+    rendered = frames(binary, ir, 'raster')
+    assert rendered[1][..., 3].max() > 0
+
+
+def test_in_skia_safe_fallback_recovers_font_resource_error_on_worker(binary, registry, monkeypatch):
+    """Legacy non-OpenType (.fon) FontResourceError must fall back inside Skia, even on workers."""
+    from concurrent.futures import ThreadPoolExecutor
+    from krok_helper.subtitle_render.engine.text import font_weight
+    from krok_helper.subtitle_render.engine.text.font_resource import FontResourceError
+    from krok_helper.subtitle_render.native import skia_font_aliases, skia_fonts
+    from krok_helper.subtitle_render.native.skia_scene import prepare_skia_scene_ir
+
+    safe_path = registry.font('safe-fallback', MAIN, 620)
+    registry.add('safe-fallback', safe_path)
+
+    broken_family = 'LinK Legacy Broken FON'
+    real_resolve = font_weight.resolve_font_instance
+    real_prepared = font_weight.prepared_font_instance
+
+    def patched_resolve(family, weight, italic=False, stretch_pct=100):
+        if family == broken_family:
+            raise FontResourceError(f'字体“{family}”资源加载失败（字重 {weight}）：Qt font face has no usable OpenType tables')
+        return real_resolve(family, weight, italic=italic, stretch_pct=stretch_pct)
+
+    def patched_prepared(family, weight, italic=False, stretch_pct=100):
+        if family == broken_family:
+            raise FontResourceError(f'字体“{family}”资源加载失败（字重 {weight}）：Qt font face has no usable OpenType tables')
+        return real_prepared(family, weight, italic=italic, stretch_pct=stretch_pct)
+
+    monkeypatch.setattr(font_weight, 'resolve_font_instance', patched_resolve)
+    monkeypatch.setattr(skia_font_aliases, 'resolve_font_instance', patched_resolve)
+    monkeypatch.setattr(skia_fonts, 'resolve_font_instance', patched_resolve)
+    monkeypatch.setattr(skia_fonts, 'prepared_font_instance', patched_prepared)
+
+    line = TimingLine(
+        chars=[TimingChar(c, 200 + i * 200) for i, c in enumerate('A字A')],
+        end_ms=1400,
+        track_line_index=0,
+        display_start_override_ms=0,
+        display_end_override_ms=3000,
+    )
+    track = TimingTrack(lines=[line])
+    style = replace(sample()[1], font_family=broken_family, font_family_latin=broken_family, font_size_px=50)
+    list(iter_prepare_skia_fallbacks(track, style))
+
+    missing: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        ir = pool.submit(
+            prepare_skia_scene_ir,
+            track,
+            style,
+            executable=binary,
+            missing_fallbacks=missing,
+            width=640,
+            height=360,
+            fps=60,
+        ).result(timeout=30)
+    assert broken_family in missing
+    assert missing[broken_family] != broken_family
+    rendered = frames(binary, ir, 'raster')
+    assert rendered[1][..., 3].max() > 0

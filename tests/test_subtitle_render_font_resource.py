@@ -396,3 +396,76 @@ print(json.dumps({{"path": restored.resource_path, "exists": Path(restored.resou
     payload = json.loads(stdout.strip().splitlines()[-1])
     assert payload["exists"]
     assert Path(payload["path"]).parent == cache_root / "font-resources"
+
+
+def test_ensure_unicode_cmap_synthesizes_bmp_subtable_from_shift_jis():
+    import struct
+    from krok_helper.subtitle_render.engine.text.font_resource import (
+        _build_cmap_format4,
+        _ensure_unicode_cmap,
+        _parse_cmap_format4,
+    )
+
+    # Build a legacy Shift-JIS-only cmap table: platform 3, encoding 2 (Shift-JIS).
+    sjis_map = {
+        ord(" "): 3,
+        ord("A"): 36,
+        int.from_bytes("あ".encode("cp932"), "big"): 120,
+        int.from_bytes("桜".encode("cp932"), "big"): 512,
+    }
+    subtable = _build_cmap_format4(sjis_map)
+    header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 2, 12)
+    sjis_cmap = header + subtable
+
+    tables = {"cmap": sjis_cmap}
+    _ensure_unicode_cmap(tables)
+    patched = tables["cmap"]
+    assert patched != sjis_cmap
+    version, num_tables = struct.unpack_from(">HH", patched, 0)
+    assert version == 0 and num_tables == 2
+    records = [
+        struct.unpack_from(">HHI", patched, 4 + i * 8)
+        for i in range(num_tables)
+    ]
+    unicode_offsets = [off for pid, eid, off in records if pid == 3 and eid == 1]
+    assert len(unicode_offsets) == 1
+    unicode_map = _parse_cmap_format4(patched[unicode_offsets[0]:])
+    assert unicode_map[ord(" ")] == 3
+    assert unicode_map[ord("A")] == 36
+    assert unicode_map[ord("あ")] == 120
+    assert unicode_map[ord("桜")] == 512
+    # Already-Unicode cmap must be left unchanged.
+    already = {"cmap": patched}
+    _ensure_unicode_cmap(already)
+    assert already["cmap"] == patched
+
+
+def test_cluster_covered_checks_combining_marks_spaces_and_nfc():
+    from krok_helper.subtitle_render.engine.text.font_fallback import cluster_covered
+
+    class FakeRawFont:
+        def __init__(self, covered: set[str]):
+            self._covered = covered
+
+        def glyphIndexesForString(self, text: str):
+            return [1 if ch in self._covered else 0 for ch in text]
+
+    # Missing IPA tie bar (U+0361, category Mn) must fail coverage.
+    no_tie = FakeRawFont({"t", "s", "ɪ"})
+    assert not cluster_covered(no_tie, "t\u0361s")
+    assert not cluster_covered(no_tie, "ɪ\u032f")
+    with_tie = FakeRawFont({"t", "s", "\u0361"})
+    assert cluster_covered(with_tie, "t\u0361s")
+
+    # Missing space glyph (Marlett-style symbol fonts) must fail coverage.
+    no_space = FakeRawFont({"A"})
+    assert not cluster_covered(no_space, " ")
+    assert cluster_covered(FakeRawFont({" "}), " ")
+
+    # NFC precomposed Latin (e + U+0301 -> é) succeeds if é is covered.
+    nfc_only = FakeRawFont({"e", "\u00e9"})
+    assert cluster_covered(nfc_only, "e\u0301")
+
+    # Kana voicing mark U+3099 must NOT be hidden via NFC composition.
+    kana_precomposed = FakeRawFont({"か", "が"})
+    assert not cluster_covered(kana_precomposed, "か\u3099")

@@ -198,13 +198,44 @@ def gui_font_instance(family: str, weight: int, italic: bool, *, resolve=None, a
     """GUI thread: the shared decision, a verified alias, or an explicit fallback.
 
     ``resolve`` is the caller's discovery seam (default: the shared resolver).
+    Also falls back inside Skia when an installed face is non-OpenType (e.g.
+    Windows legacy ``.fon`` raster fonts) or fails snapshot export.
     """
     resolve = resolve or resolve_font_instance
-    instance = resolve(family, weight, italic=italic)
+    try:
+        instance = resolve(family, weight, italic=italic)
+    except FontResourceError:
+        if not allow_missing_fallback:
+            raise
+        fallback = resolve_missing_fallback(family, weight, italic, resolve=resolve)
+        if fallback is not None:
+            return fallback
+        raise
     if missing_family(instance) and (alias := verify_alias(family)):
-        instance = resolve(alias, weight, italic=italic)
+        try:
+            instance = resolve(alias, weight, italic=italic)
+        except FontResourceError:
+            if not allow_missing_fallback:
+                raise
+            fallback = resolve_missing_fallback(family, weight, italic, resolve=resolve)
+            if fallback is not None:
+                return fallback
+            raise
     if allow_missing_fallback and missing_family(instance):
         fallback = resolve_missing_fallback(family, weight, italic, resolve=resolve)
         if fallback is not None:
             return fallback
     return instance
+
+
+_SAFE_FALLBACK_KEY = "__skia_safe_system_fallback__"
+
+
+def prepare_safe_system_fallback(weight: int = 400, italic: bool = False, *, resolve=None):
+    """GUI thread: ensure a verified OpenType system CJK+Latin fallback face is prepared."""
+    return resolve_missing_fallback(_SAFE_FALLBACK_KEY, weight, italic, resolve=resolve)
+
+
+def prepared_safe_system_fallback() -> str | None:
+    """Worker-safe lookup of the prepared safe OpenType fallback family."""
+    return prepared_missing_fallback(_SAFE_FALLBACK_KEY)

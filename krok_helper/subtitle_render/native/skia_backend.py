@@ -114,77 +114,123 @@ class SkiaRendererProcess(SkiaSidecarProcess):
         return ready
 
     def configure(self, track, style, *, progress=None, **kwargs):
-        from .skia_scene import prepare_skia_scene_ir
+        from .skia_scene import _is_recoverable_skia_font_error, prepare_skia_scene_ir
 
         started_at = time.monotonic()
         missing_fallbacks: dict[str, str] = {}
+
+        def _prepare(force_safe: bool) -> tuple[dict[str, Any], float]:
+            prep_started = time.monotonic()
+            try:
+                built_ir = prepare_skia_scene_ir(
+                    track,
+                    style,
+                    executable=self.executable_path,
+                    missing_fallbacks=missing_fallbacks,
+                    force_safe_fallback=force_safe,
+                    **kwargs,
+                )
+            except (ValueError, NotImplementedError) as exc:
+                _log.warning(
+                    "Skia 场景构建判定不支持: pid=%s elapsed=%.0fms err=%s",
+                    self.process_id,
+                    (time.monotonic() - started_at) * 1000.0,
+                    exc,
+                )
+                raise SkiaSceneUnsupportedError(f"Skia 暂不支持当前工程：{exc}") from exc
+            except NativeRendererError as exc:
+                _log.error(
+                    "Skia 场景准备（含字体度量）失败: pid=%s elapsed=%.0fms err_type=%s err=%s",
+                    self.process_id,
+                    (time.monotonic() - started_at) * 1000.0,
+                    type(exc).__name__,
+                    exc,
+                )
+                raise
+            return built_ir, (time.monotonic() - prep_started) * 1000.0
+
+        def _rpc_configure(built_ir: dict[str, Any], prep_ms: float) -> tuple[dict[str, Any], float]:
+            if progress is not None:
+                progress()
+            rpc_started = time.monotonic()
+            self._send({"cmd": "configure", "ir": built_ir})
+            try:
+                response = self._expect_ok(self._read_until_event(
+                    "configured",
+                    timeout_s=self.configure_timeout_s,
+                    heartbeat_lease_s=heartbeat_lease_s(),
+                ))
+            except (
+                SkiaGpuDeviceError,
+                NativeRendererLaunchError,
+                NativeRendererTimeoutError,
+                NativeRendererExitError,
+                NativeRendererStallError,
+            ) as exc:
+                _log.error(
+                    "Skia configure RPC 运行失败: pid=%s prepare_ir=%.0fms configure_elapsed=%.0fms "
+                    "timeout=%.1fs err_type=%s err=%s stderr_tail=%r",
+                    self.process_id,
+                    prep_ms,
+                    (time.monotonic() - rpc_started) * 1000.0,
+                    self.configure_timeout_s,
+                    type(exc).__name__,
+                    exc,
+                    self._stderr_excerpt(),
+                )
+                raise
+            return response, (time.monotonic() - rpc_started) * 1000.0
+
+        ir, ir_ms = _prepare(False)
         try:
-            ir = prepare_skia_scene_ir(
-                track,
-                style,
-                executable=self.executable_path,
-                missing_fallbacks=missing_fallbacks,
-                **kwargs,
-            )
-        except (ValueError, NotImplementedError) as exc:
-            _log.warning(
-                "Skia 场景构建判定不支持: pid=%s elapsed=%.0fms err=%s",
-                self.process_id,
-                (time.monotonic() - started_at) * 1000.0,
-                exc,
-            )
-            raise SkiaSceneUnsupportedError(f"Skia 暂不支持当前工程：{exc}") from exc
-        except NativeRendererError as exc:
-            _log.error(
-                "Skia 场景准备（含字体度量）失败: pid=%s elapsed=%.0fms err_type=%s err=%s",
-                self.process_id,
-                (time.monotonic() - started_at) * 1000.0,
-                type(exc).__name__,
-                exc,
-            )
-            raise
-        ir_ms = (time.monotonic() - started_at) * 1000.0
-        if progress is not None:
-            progress()
-        cfg_started = time.monotonic()
-        self._send({"cmd": "configure", "ir": ir})
-        try:
-            out = self._expect_ok(self._read_until_event("configured", timeout_s=self.configure_timeout_s,
-                                                        heartbeat_lease_s=heartbeat_lease_s()))
+            out, cfg_ms = _rpc_configure(ir, ir_ms)
         except (
             SkiaGpuDeviceError,
             NativeRendererLaunchError,
             NativeRendererTimeoutError,
             NativeRendererExitError,
             NativeRendererStallError,
-        ) as exc:
-            _log.error(
-                "Skia configure RPC 运行失败: pid=%s prepare_ir=%.0fms configure_elapsed=%.0fms "
-                "timeout=%.1fs err_type=%s err=%s stderr_tail=%r",
-                self.process_id,
-                ir_ms,
-                (time.monotonic() - cfg_started) * 1000.0,
-                self.configure_timeout_s,
-                type(exc).__name__,
-                exc,
-                self._stderr_excerpt(),
-            )
+        ):
             raise
         except NativeRendererError as exc:
-            _log.warning(
-                "Skia configure 拒绝当前工程: pid=%s prepare_ir=%.0fms configure_elapsed=%.0fms err=%s",
-                self.process_id,
-                ir_ms,
-                (time.monotonic() - cfg_started) * 1000.0,
-                exc,
-            )
-            raise SkiaSceneUnsupportedError(f"Skia 无法配置当前工程：{exc}") from exc
+            if _is_recoverable_skia_font_error(exc):
+                _log.warning(
+                    "Skia configure 字体校验拒绝，尝试在 Skia 内部以安全系统字体重试: pid=%s err=%s",
+                    self.process_id,
+                    exc,
+                )
+                ir, ir_ms = _prepare(True)
+                try:
+                    out, cfg_ms = _rpc_configure(ir, ir_ms)
+                except (
+                    SkiaGpuDeviceError,
+                    NativeRendererLaunchError,
+                    NativeRendererTimeoutError,
+                    NativeRendererExitError,
+                    NativeRendererStallError,
+                ):
+                    raise
+                except NativeRendererError as retry_exc:
+                    _log.warning(
+                        "Skia configure 安全字体重试仍拒绝当前工程: pid=%s err=%s",
+                        self.process_id,
+                        retry_exc,
+                    )
+                    raise SkiaSceneUnsupportedError(f"Skia 无法配置当前工程：{retry_exc}") from retry_exc
+            else:
+                _log.warning(
+                    "Skia configure 拒绝当前工程: pid=%s prepare_ir=%.0fms elapsed=%.0fms err=%s",
+                    self.process_id,
+                    ir_ms,
+                    (time.monotonic() - started_at) * 1000.0,
+                    exc,
+                )
+                raise SkiaSceneUnsupportedError(f"Skia 无法配置当前工程：{exc}") from exc
         if out.get('metrics_identity') != ir['skia_layout']['metrics_identity']:
             raise NativeRendererError('Skia 场景未确认规范度量快照')
         self.skia_info = out.get("backend_info", {})
         info = self.skia_info
         target = "GPU" if info.get("execution_target") == "gpu" else "Raster CPU"
-        cfg_ms = (time.monotonic() - cfg_started) * 1000.0
         _log.info(
             "Skia 场景配置完成: pid=%s size=%sx%s dpr=%s prepare_ir=%.0fms configure=%.0fms total=%.0fms",
             self.process_id,

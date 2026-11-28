@@ -4,14 +4,17 @@ import hashlib
 import os
 import sys
 import threading
+from krok_helper.subtitle_render.engine.text.font_resource import FontResourceError
 from krok_helper.subtitle_render.engine.text.font_slots import is_emoji_text
 from krok_helper.subtitle_render.engine.text.font_weight import resolve_font_instance, prepared_font_instance
 from .backend import NativeRendererError
 from .skia_font_aliases import (
     gui_font_instance,
     missing_family,
+    prepare_safe_system_fallback,
     prepared_alias,
     prepared_missing_fallback,
+    prepared_safe_system_fallback,
 )
 
 
@@ -48,11 +51,20 @@ def font_instance(family, weight, italic):
     """
     if _on_gui_thread():
         return gui_font_instance(family, weight, italic, resolve=resolve_font_instance)
-    instance = prepared_font_instance(family, weight, italic)
-    if missing_family(instance) and (alias := prepared_alias(family)):
-        instance = prepared_font_instance(alias, weight, italic)
-    if missing_family(instance) and (fallback := prepared_missing_fallback(family)):
-        instance = prepared_font_instance(fallback, weight, italic)
+    try:
+        instance = prepared_font_instance(family, weight, italic)
+    except FontResourceError:
+        if fallback := prepared_missing_fallback(family):
+            instance = prepared_font_instance(fallback, weight, italic) or prepared_font_instance(fallback, 400, False)
+        else:
+            raise
+    if (instance is None or missing_family(instance)) and (alias := prepared_alias(family)):
+        try:
+            instance = prepared_font_instance(alias, weight, italic)
+        except FontResourceError:
+            instance = None
+    if (instance is None or missing_family(instance)) and (fallback := prepared_missing_fallback(family)):
+        instance = prepared_font_instance(fallback, weight, italic) or prepared_font_instance(fallback, 400, False)
     if instance is None:
         raise SkiaFontNotPreparedError(f'Skia 字体资源未在界面线程准备（字体库可能已变化）：{family}')
     if instance.resource_path and not os.path.isfile(instance.resource_path):
@@ -103,9 +115,66 @@ class SkiaFontResolver:
     """
     allow_mixed_fonts = True
 
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        allow_notdef_fallback: bool = False,
+        force_safe_fallback: bool = False,
+    ):
         self._local = threading.local()  # Per preparation thread: {path: sha256}.
         self.missing_fallbacks: dict[str, str] = {}
+        self.allow_notdef_fallback = bool(allow_notdef_fallback)
+        self.force_safe_fallback = bool(force_safe_fallback)
+
+    def _safe_fallback_instance(self, weight: int, italic: bool):
+        if _on_gui_thread():
+            return prepare_safe_system_fallback(weight, italic)
+        fam = prepared_safe_system_fallback()
+        if fam:
+            return prepared_font_instance(fam, weight, italic) or prepared_font_instance(fam, 400, False)
+        return None
+
+    def _resolve_primary(self, style):
+        if self.force_safe_fallback:
+            safe = self._safe_fallback_instance(style.font_weight, style.italic)
+            if safe is not None and safe.resource_path:
+                if style.font_family and safe.family.casefold() != style.font_family.casefold():
+                    self.missing_fallbacks[style.font_family] = safe.family
+                return safe
+        instance = font_instance(style.font_family, style.font_weight, style.italic)
+        self._note_missing_fallback(style.font_family, instance)
+        return instance
+
+    def resolve_slot_face(self, family: str, weight: int, italic: bool = False):
+        """Resolve a style slot face for ``apply_resolved_font_faces`` inside Skia."""
+        if self.force_safe_fallback:
+            safe = self._safe_fallback_instance(weight, italic)
+            if safe is not None and safe.resource_path:
+                if family and safe.family.casefold() != family.casefold():
+                    self.missing_fallbacks[family] = safe.family
+                return safe
+        try:
+            instance = font_instance(family, weight, italic)
+        except FontResourceError:
+            safe = self._safe_fallback_instance(weight, italic)
+            if safe is not None and safe.resource_path:
+                if family and safe.family.casefold() != family.casefold():
+                    self.missing_fallbacks[family] = safe.family
+                return safe
+            raise
+        except SkiaFontNotPreparedError as exc:
+            # Unused roles/titles in the IR may reference a family that was not
+            # in scene_fallback_requests; fall back to the prepared safe system
+            # face instead of failing legacy style-slot metadata injection, while
+            # still letting missing snapshot files trigger GUI re-preparation.
+            if isinstance(exc, SkiaFontResourceMissingError):
+                raise
+            safe = self._safe_fallback_instance(weight, italic)
+            if safe is not None and safe.resource_path:
+                return safe
+            raise
+        self._note_missing_fallback(family, instance)
+        return instance
 
     def _note_missing_fallback(self, requested_family: str, instance) -> None:
         if (
@@ -140,8 +209,7 @@ class SkiaFontResolver:
             return _export_instance(instance, family, digests[path])
 
     def __call__(self, style):
-        instance = font_instance(style.font_family, style.font_weight, style.italic)
-        self._note_missing_fallback(style.font_family, instance)
+        instance = self._resolve_primary(style)
         return self._export(instance, style.font_family)
 
     def resolve_body_cell_fonts(self, style, text):
@@ -159,8 +227,7 @@ class SkiaFontResolver:
             prewarm_fallback, lookup_fallback_instance, grapheme_clusters,
         )
         texts = list(dict.fromkeys([text, *grapheme_clusters(text)]))
-        instance = font_instance(style.font_family, style.font_weight, style.italic)
-        self._note_missing_fallback(style.font_family, instance)
+        instance = self._resolve_primary(style)
         # A verified localized alias must use that same physical family for
         # fallback discovery and lookup. Asking Qt for the missing spelling
         # again can add unrelated (even unreadable) faces to an otherwise
@@ -180,4 +247,10 @@ class SkiaFontResolver:
             options = dict(options, size=style.font_size_px * fallback.fallback_scale, scale_x=1)
             if (resource, options) not in chain:
                 chain.append((resource, options))
+        if self.allow_notdef_fallback:
+            safe = self._safe_fallback_instance(style.font_weight, style.italic)
+            if safe is not None and safe.resource_path:
+                safe_entry = self._export(safe, safe.family)
+                if safe_entry not in chain:
+                    chain.append(safe_entry)
         return chain

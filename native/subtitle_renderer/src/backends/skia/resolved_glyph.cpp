@@ -45,8 +45,9 @@ void same(const QJsonValue& expected, const QJsonValue& actual, const QString& k
         || runIndex < 0 || runIndex >= fonts.size())
         throw BackendError("Skia 最终单元引用了无效字体实例");
     const auto text = sourceText.toUtf8();
+    const bool allowNotdef = int(runIndex) < int(allowNotdefFallback.size()) && allowNotdefFallback[int(runIndex)];
     auto shaped = ::subtitle::skia::text::shapeCell(text.toStdString(), fonts[int(runIndex)], languages[int(runIndex)],
-                                                  false, mixedFallback[int(runIndex)]);
+                                                  false, mixedFallback[int(runIndex)], allowNotdef);
     same(cell.value("metrics"), scene::skiaCellMetricsJson(shaped));
     if (!shaped.outlineAvailable) throw BackendError("Skia 当前绘制仅支持有矢量轮廓的字体单元");
     const auto x = finite(cell, "origin_x"), y = finite(cell, "baseline_y");

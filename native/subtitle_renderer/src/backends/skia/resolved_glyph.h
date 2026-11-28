@@ -16,6 +16,7 @@ struct ResolvedGlyphContext {
     std::vector<Fonts> fonts;
     std::vector<std::string> languages;
     std::vector<bool> mixedFallback;
+    std::vector<bool> allowNotdefFallback;
     double dpr = 1;
     ::subtitle::skia::ResolvedCell cell(const QJsonObject&, const QString& text, int startMs, int endMs,
                                      std::uint32_t before, std::uint32_t after, double wipePad = 0) const;

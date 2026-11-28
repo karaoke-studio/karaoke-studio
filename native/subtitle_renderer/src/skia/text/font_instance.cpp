@@ -97,8 +97,7 @@ FontInstance::FontInstance(const FontSpec& spec) {
     font_.setLinearMetrics(true);
     SkFontMetrics metrics;
     font_.getMetrics(&metrics);
-    if (!std::isfinite(metrics.fAscent) || !std::isfinite(metrics.fDescent) || !std::isfinite(metrics.fLeading)
-        || !std::isfinite(metrics.fCapHeight) || metrics.fCapHeight < 0)
+    if (!std::isfinite(metrics.fAscent) || !std::isfinite(metrics.fDescent) || !std::isfinite(metrics.fLeading))
         throw std::runtime_error("Skia 字体包含非有限基线度量");
     // Float bit patterns avoid locale/decimal rounding collisions in metric cache keys.
     std::ostringstream key;
@@ -174,5 +173,21 @@ float FontInstance::descent() const {
     SkFontMetrics m; font_.getMetrics(&m); return m.fDescent;
 }
 float FontInstance::leading() const { SkFontMetrics m; font_.getMetrics(&m); return m.fLeading; }
-float FontInstance::capHeight() const { SkFontMetrics m; font_.getMetrics(&m); return m.fCapHeight; }
+float FontInstance::capHeight() const {
+    SkFontMetrics m;
+    font_.getMetrics(&m);
+    if (std::isfinite(m.fCapHeight) && m.fCapHeight > 0.f) return m.fCapHeight;
+    // Legacy/freeware fonts (e.g. Alte DIN 1451) often write sCapHeight = -1 or 0
+    // in OS/2. Derive a real positive cap height from 'H' outline bounds, then
+    // fall back to a standard 0.72 * ascent proportion.
+    const SkGlyphID hGlyph = font_.unicharToGlyph('H');
+    if (hGlyph != 0) {
+        if (const auto path = font_.getPath(hGlyph)) {
+            const SkRect bounds = path->computeTightBounds();
+            if (bounds.isFinite() && -bounds.fTop > 0.f) return -bounds.fTop;
+        }
+    }
+    const float fallback = ascent() * 0.72f;
+    return std::isfinite(fallback) && fallback > 0.f ? fallback : std::max(font_.getSize() * 0.72f, 1.f);
+}
 }

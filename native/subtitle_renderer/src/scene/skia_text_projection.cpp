@@ -109,6 +109,8 @@ std::vector<std::shared_ptr<const ::subtitle::skia::text::FontInstance>> skiaRun
     const auto ids = run.value("font_ids").toArray();
     if (run.contains("mixed_fallback") && !run.value("mixed_fallback").isBool())
         throw std::runtime_error("Skia 混合字体开关必须为布尔值");
+    if (run.contains("allow_notdef_fallback") && !run.value("allow_notdef_fallback").isBool())
+        throw std::runtime_error("Skia 缺字兜底开关必须为布尔值");
     const auto options = run.value("font_options");
     if (options.isUndefined() == false && (!options.isArray() || options.toArray().size() != ids.size()))
         throw std::runtime_error("Skia 字体链实例参数数量或类型无效");

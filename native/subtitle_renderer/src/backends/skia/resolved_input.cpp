@@ -155,6 +155,7 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
         if (run.value("rtl").toBool()) throw BackendError("Skia 当前规范布局尚不支持 RTL");
         glyphs.fonts.push_back(scene::skiaRunFonts(run, resources));
         glyphs.mixedFallback.push_back(run.value("mixed_fallback").toBool());
+        glyphs.allowNotdefFallback.push_back(run.value("allow_notdef_fallback").toBool());
         glyphs.languages.push_back(run.value("language").toString("und").toStdString());
     }
     glyphs.dpr = ir.value("screen").toObject().value("dpr").toDouble(1);

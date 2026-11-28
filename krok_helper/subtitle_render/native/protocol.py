@@ -210,7 +210,7 @@ def gpu_unsupported_feature_labels(reasons: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(GPU_UNSUPPORTED_FEATURE_LABELS.get(reason, reason) for reason in reasons)
 
 
-def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
+def _font_face_slot_overrides(payload: dict[str, Any], *, resolve_face: Any = None) -> None:
     """为单个样式字典追加字体解析结果（顺应引擎 + 双后端同一份决策）。
 
     GPU 端不再自行就近匹配、自行判可变：Python 侧（Qt 引擎实测口径）算好
@@ -231,6 +231,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         resolve_font_instance,
     )
 
+    face_resolver = resolve_face or resolve_font_instance
     if "font_family" not in payload or "font_weight" not in payload:
         return
     base_italic = bool(payload.get("italic"))
@@ -263,7 +264,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
             # 持 Qt 字体锁触发 DirectWrite 告警→消息处理器抢 GIL，等锁的
             # GUI 线程随之「未响应」（2026-10 打开工程卡死，py-spy 定位）。
             return False, None
-        instance = resolve_font_instance(name, int(weight), italic=italic)
+        instance = face_resolver(name, int(weight), italic=italic)
         trivial = (
             not instance.synthetic_bold
             and not instance.synthetic_italic
@@ -373,7 +374,7 @@ def _font_face_slot_overrides(payload: dict[str, Any]) -> None:
         raise errors[0]
 
 
-def apply_resolved_font_faces(node: Any) -> None:
+def apply_resolved_font_faces(node: Any, *, resolve_face: Any = None) -> None:
     """整棵渲染 IR 递归注入统一字重解析结果（configure 发送前调用一次）。
 
     命中所有携带 ``font_family``+``font_weight`` 的样式字典：全局 style、
@@ -381,12 +382,12 @@ def apply_resolved_font_faces(node: Any) -> None:
     C++ 渲染端按 (family, weight) 解析 face。
     """
     if isinstance(node, dict):
-        _font_face_slot_overrides(node)
+        _font_face_slot_overrides(node, resolve_face=resolve_face)
         for value in node.values():
-            apply_resolved_font_faces(value)
+            apply_resolved_font_faces(value, resolve_face=resolve_face)
     elif isinstance(node, list):
         for item in node:
-            apply_resolved_font_faces(item)
+            apply_resolved_font_faces(item, resolve_face=resolve_face)
 
 
 _FONT_AXIS_FAMILY_FIELD_SUFFIX = ("font_family", "font_family_latin")
