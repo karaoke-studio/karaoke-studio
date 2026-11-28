@@ -213,7 +213,7 @@ def build_preview_ruby_layouts(
     # Position ruby baseline snugly above main text cap height.
     gap = max(2.2, main_font_px * 0.10)
     ruby_baseline_y = -(main_ascent * 0.88 + r_descent + gap)
-    tracking = 0.4
+    tracking = 1.4
 
     layouts: list[Optional[PreviewRubyLayout]] = []
     for idx, spec in enumerate(sing_chars):
@@ -488,7 +488,11 @@ class AnimationPreviewCanvas(QWidget):
         self._ascent = fm.ascent()
         self._chars = list(ANIMATION_PREVIEW_LYRIC)
         self._char_widths = [max(fm.horizontalAdvance(ch), 7.0) for ch in self._chars]
-        self._line_width = sum(self._char_widths)
+        self._char_spacing = preview_char_spacing(stroke_px=2.6)
+        self._line_width = (
+            sum(self._char_widths)
+            + self._char_spacing * max(len(self._char_widths) - 1, 0)
+        )
         # Prebuild vector glyph paths centered around each glyph origin for crisp transforms.
         self._glyph_paths: list[QPainterPath] = []
         for ch in self._chars:
@@ -609,7 +613,7 @@ class AnimationPreviewCanvas(QWidget):
         cursor = start_x
         for w in self._char_widths:
             char_xs.append(cursor)
-            cursor += w
+            cursor += w + self._char_spacing
 
         # Paint back-layer particles (flame glow / smoke / ripple / sparkle back).
         if stage_mode == "active" or (stage_mode == "hold" and not is_exit and self._anim_key in {"petal", "snow", "snow_solid", "feather", "flame"}):
@@ -1596,6 +1600,22 @@ class _PreviewTextAppearance:
     after_shadow: tuple[float, float]
 
 
+def preview_char_spacing(
+    *,
+    appearance: Optional[_PreviewTextAppearance] = None,
+    stroke_px: float = 0.0,
+) -> float:
+    """Compute subtle per-character tracking so stroked preview glyphs do not overlap."""
+    if appearance is not None:
+        outer = appearance.stroke1_px + appearance.stroke2_px * 2.0
+    else:
+        outer = max(float(stroke_px), 0.0)
+    # Bold CJK kanji fill nearly their full advance width, so adjacent strokes
+    # expand toward each other by ~outer px total; add a small 0.5px breathing
+    # room while keeping the 11-char sample comfortably inside 368px.
+    return max(2.8, min(outer + 0.5, 5.0))
+
+
 def _resolve_preview_text_appearance(
     style: Any,
     *,
@@ -1997,7 +2017,11 @@ class ZoomPulseCurvePreviewCanvas(QWidget):
         self._sing_chars = ANIMATION_PREVIEW_SING_CHARS
         self._chars = [spec.char for spec in self._sing_chars]
         self._char_widths = [max(fm.horizontalAdvance(ch), 6.5) for ch in self._chars]
-        self._line_width = sum(self._char_widths)
+        self._char_spacing = preview_char_spacing(appearance=self._appearance)
+        self._line_width = (
+            sum(self._char_widths)
+            + self._char_spacing * max(len(self._char_widths) - 1, 0)
+        )
         self._glyph_paths: list[QPainterPath] = []
         self._char_intervals: list[tuple[int, int] | None] = []
         for spec in self._sing_chars:
@@ -2047,6 +2071,11 @@ class ZoomPulseCurvePreviewCanvas(QWidget):
             self._style = style
             self._appearance = _resolve_preview_text_appearance(style, preview_font_px=22.0)
             self._ruby_appearance = resolve_preview_ruby_appearance(style, ruby_font_px=10.0)
+            self._char_spacing = preview_char_spacing(appearance=self._appearance)
+            self._line_width = (
+                sum(self._char_widths)
+                + self._char_spacing * max(len(self._char_widths) - 1, 0)
+            )
         self._meta = zoom_pulse_curve_meta(self._curve_level)
         self._phase = 0.0
         self._last_status = ("", False)
@@ -2171,7 +2200,7 @@ class ZoomPulseCurvePreviewCanvas(QWidget):
                     active_dot_u = split + shrink * (1.0 - split)
                     active_scale = scale
                 char_entries.append((idx, cursor_x, w, scale, wipe))
-            cursor_x += w
+            cursor_x += w + self._char_spacing
 
         char_entries.sort(key=lambda item: item[3])
         for idx, cx_left, w, scale, wipe in char_entries:

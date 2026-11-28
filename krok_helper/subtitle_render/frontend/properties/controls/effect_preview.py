@@ -83,6 +83,7 @@ from krok_helper.subtitle_render.frontend.properties.controls.animation_preview 
     install_widget_preview_hover,
     paint_styled_karaoke_glyph,
     paint_styled_ruby_for_char,
+    preview_char_spacing,
     resolve_preview_ruby_appearance,
     sample_ruby_kana_progress,
     sample_sing_wipe_progress,
@@ -380,7 +381,11 @@ class SingingEffectPreviewCanvas(QWidget):
         self._sing_chars = ANIMATION_PREVIEW_SING_CHARS
         self._chars = [spec.char for spec in self._sing_chars]
         self._char_widths = [max(fm.horizontalAdvance(ch), 7.0) for ch in self._chars]
-        self._line_width = sum(self._char_widths)
+        self._char_spacing = preview_char_spacing(appearance=self._appearance)
+        self._line_width = (
+            sum(self._char_widths)
+            + self._char_spacing * max(len(self._char_widths) - 1, 0)
+        )
         self._glyph_paths: list[QPainterPath] = []
         for spec in self._sing_chars:
             gp = QPainterPath()
@@ -425,6 +430,11 @@ class SingingEffectPreviewCanvas(QWidget):
             self._style = style
             self._appearance = _resolve_preview_text_appearance(style, preview_font_px=23.0)
             self._ruby_appearance = resolve_preview_ruby_appearance(style, ruby_font_px=10.0)
+            self._char_spacing = preview_char_spacing(appearance=self._appearance)
+            self._line_width = (
+                sum(self._char_widths)
+                + self._char_spacing * max(len(self._char_widths) - 1, 0)
+            )
         self._phase = 0.0
         self._last_status = ("", False)
         self.update()
@@ -551,7 +561,7 @@ class SingingEffectPreviewCanvas(QWidget):
         cursor_x = start_x
         for w in self._char_widths:
             char_xs.append(cursor_x)
-            cursor_x += w
+            cursor_x += w + self._char_spacing
 
         # Compute per-char wipe, scale, flash & active scanline front.
         entries: list[tuple[int, float, float, float, float, float, Optional[tuple[int, int]]]] = []
@@ -1452,7 +1462,11 @@ class LitIndicatorPreviewCanvas(QWidget):
         self._descent = fm.descent()
         self._chars = [spec.char for spec in ANIMATION_PREVIEW_SING_CHARS]
         self._char_widths = [max(fm.horizontalAdvance(ch), 6.5) for ch in self._chars]
-        self._line_width = sum(self._char_widths)
+        self._char_spacing = preview_char_spacing(appearance=self._appearance)
+        self._line_width = (
+            sum(self._char_widths)
+            + self._char_spacing * max(len(self._char_widths) - 1, 0)
+        )
         self._glyph_paths: list[QPainterPath] = []
         for ch in self._chars:
             gp = QPainterPath()
@@ -1489,6 +1503,11 @@ class LitIndicatorPreviewCanvas(QWidget):
             self._style = style
             self._appearance = _resolve_preview_text_appearance(style, preview_font_px=20.0)
             self._ruby_appearance = resolve_preview_ruby_appearance(style, ruby_font_px=9.0)
+            self._char_spacing = preview_char_spacing(appearance=self._appearance)
+            self._line_width = (
+                sum(self._char_widths)
+                + self._char_spacing * max(len(self._char_widths) - 1, 0)
+            )
         self._phase = 0.0
         self._last_status = ("", False)
         self.update()
@@ -1779,7 +1798,7 @@ class LitIndicatorPreviewCanvas(QWidget):
                         kana_wipes=kana_wipes,
                     )
                 painter.restore()
-            cursor_x += w
+            cursor_x += w + self._char_spacing
 
         # Bottom progress rail.
         bar_x = 12.0
