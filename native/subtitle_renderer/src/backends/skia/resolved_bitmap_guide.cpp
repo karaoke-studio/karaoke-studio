@@ -28,8 +28,9 @@ bool near(double value, double expected) { return std::abs(value - expected) <= 
         return paint.mode == "solid" || paint.mode == "image" || (!paint.stops.empty()
             && (paint.mode == "gradient_horizontal" || paint.mode == "gradient_vertical" || paint.mode == "split_vertical"));
     };
-    if (!guide.noDecor && ((style.decorationKindForState(false) == "glow" && !supportsGlowPaint(style.beforeDecorPaint))
-        || (style.decorationKindForState(true) == "glow" && !supportsGlowPaint(style.afterDecorPaint))))
+    const auto hasGlow = [](const std::string& kind) { return kind == "glow" || kind == "both"; };
+    if (!guide.noDecor && ((hasGlow(style.decorationKindForState(false)) && !supportsGlowPaint(style.beforeGlowPaint))
+        || (hasGlow(style.decorationKindForState(true)) && !supportsGlowPaint(style.afterGlowPaint))))
         throw BackendError("Skia 图片导唱符光晕画笔无效");
     const auto shadow = guide.noDecor ? ::subtitle::skia::StaticShadow{} : skiaStaticShadow(style);
     const auto animated = [](const std::wstring& path) {

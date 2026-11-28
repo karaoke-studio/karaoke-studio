@@ -263,10 +263,14 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             && (line.entryAnimation != "none" || line.exitAnimation != "none")
             && !line.zoomPulseEnabled && !line.strokeFlashEnabled && line.bursts.empty()
             && !hasInlineRoles;
+        const auto matchesDecoration = [](const std::string& value, const char* kind) {
+            return value == kind || value == "both";
+        };
         const auto usesDecoration = [&](const char* kind) {
-            return style.decorationKindForState(false) == kind || style.decorationKindForState(true) == kind
-                || (annotated && (style.rubyDecorationKindForState(false) == kind
-                                  || style.rubyDecorationKindForState(true) == kind));
+            return matchesDecoration(style.decorationKindForState(false), kind)
+                || matchesDecoration(style.decorationKindForState(true), kind)
+                || (annotated && (matchesDecoration(style.rubyDecorationKindForState(false), kind)
+                                  || matchesDecoration(style.rubyDecorationKindForState(true), kind)));
         };
         const bool horizontalDecorationMotion = unscaledLineMotion && !line.scanlineEnabled
             && !features.contains("p05_lower_ruby");
@@ -293,8 +297,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             && line.entryAnimation == "char_fade";
         const bool fadeExit = features.contains("p07_ruby_character_exit_fade") && annotated
             && line.exitAnimation == "char_fade"
-            && style.rubyDecorationKindForState(false) != "shadow"
-            && style.rubyDecorationKindForState(true) != "shadow";
+            && !matchesDecoration(style.rubyDecorationKindForState(false), "shadow")
+            && !matchesDecoration(style.rubyDecorationKindForState(true), "shadow");
         const bool spinComposition = transformedRuby && (spinEntry || spinExit)
             && (!spinEntry || features.contains("p07_ruby_character_entry_spin"))
             && (!spinExit || features.contains("p07_ruby_character_exit_spin"));
@@ -340,7 +344,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             && (symbolEntry || line.entryAnimation == "heart" || scene::isSkiaFallingParticle(entryParticleKind));
         const bool particleEntryGlow = particleGlowAllowed && features.contains("p07_ruby_particle_entry_glow")
             && (!symbolEntry || features.contains("p07_ruby_symbol_entry_glow"))
-            && (style.decorationKindForState(false) == "glow" || style.decorationKindForState(true) == "glow");
+            && (matchesDecoration(style.decorationKindForState(false), "glow")
+                || matchesDecoration(style.decorationKindForState(true), "glow"));
         const bool geometryComposition = translationComposition || affineComposition || particleComposition;
         // Without readings the singing pose and per-character transition are independent layers.
         const bool fadeComposition = (fadeEntry || fadeExit)
@@ -566,7 +571,8 @@ void solidUndecodableDecorationImages(RenderScene& scene) {
             const auto& palette = volumePaint ? *volumePaint : style;
             const auto paints = {&palette.beforeFillPaint, &palette.afterFillPaint, &palette.beforeStrokePaint,
                                  &palette.afterStrokePaint, &palette.beforeStroke2Paint, &palette.afterStroke2Paint,
-                                 &palette.beforeDecorPaint, &palette.afterDecorPaint};
+                                 &palette.beforeDecorPaint, &palette.afterDecorPaint,
+                                 &palette.beforeGlowPaint, &palette.afterGlowPaint};
             if (line.signalBandJoin
                 || std::ranges::any_of(paints, [](const auto* paint) { return paint->mode == "gradient_horizontal"; })) {
                 const auto domains = collectRolePaintBounds(prepared, line, style, projected.charStyles,

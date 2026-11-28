@@ -8278,6 +8278,179 @@ def test_skia_dual_decoration_survives_project_roundtrip_and_resolution_scale():
             scaled.custom_style_schemes["测试"].ruby_shadow_spread_px) == (6, 1)
 
 
+def test_font_preview_renders_both_soft_shadow_and_independent_glow(qapp):
+    import numpy as np
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from krok_helper.subtitle_render.frontend.properties.controls.font_preview import (
+        _FontSampleCanvas,
+    )
+
+    def to_rgba(img):
+        img = img.convertToFormat(img.Format.Format_RGBA8888)
+        ptr = img.constBits()
+        ptr.setsize(img.sizeInBytes())
+        raw = np.frombuffer(ptr, dtype=np.uint8).reshape((img.height(), img.bytesPerLine()))
+        return raw[:, : img.width() * 4].reshape((img.height(), img.width(), 4)).copy()
+
+    colors = KaraokeColors()
+    colors = replace(
+        colors,
+        before=replace(
+            colors.before,
+            shadow=PaintFill(color="#FFE02020"),
+            glow=PaintFill(color="#FF20E040"),
+        ),
+        after=replace(
+            colors.after,
+            shadow=PaintFill(color="#FFE02020"),
+            glow=PaintFill(color="#FF20E040"),
+        ),
+    )
+    both_style = Style(
+        font_size_px=64,
+        ruby_font_size_px=28,
+        karaoke_colors=colors,
+        decoration_kind="both",
+        decoration_kind_before="both",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        shadow_blur_px=12,
+        shadow_spread_px=4,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+    )
+    shadow_only = replace(both_style, decoration_kind="shadow", decoration_kind_before="shadow")
+    glow_only = replace(both_style, decoration_kind="glow", decoration_kind_before="glow")
+    hard_zero = replace(shadow_only, shadow_blur_px=0, shadow_spread_px=0)
+
+    both_arr = to_rgba(_FontSampleCanvas._render_sample_image(both_style, "jp"))
+    shadow_arr = to_rgba(_FontSampleCanvas._render_sample_image(shadow_only, "jp"))
+    glow_arr = to_rgba(_FontSampleCanvas._render_sample_image(glow_only, "jp"))
+    hard_arr = to_rgba(_FontSampleCanvas._render_sample_image(hard_zero, "jp"))
+
+    assert not np.array_equal(both_arr, shadow_arr)
+    assert not np.array_equal(both_arr, glow_arr)
+    assert not np.array_equal(shadow_arr, hard_arr)
+    # Green channel from independent glow fill must be present in both/glow samples.
+    assert int(((glow_arr[..., 3] > 20) & (glow_arr[..., 1].astype(int) > glow_arr[..., 0].astype(int) + 40)).sum()) > 10
+
+
+def test_animation_preview_glyph_supports_both_and_independent_glow(qapp):
+    import numpy as np
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QFont, QImage, QPainter, QPainterPath
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from krok_helper.subtitle_render.frontend.properties.controls.animation_preview import (
+        _resolve_preview_text_appearance,
+        paint_styled_karaoke_glyph,
+    )
+
+    colors = KaraokeColors()
+    colors = replace(
+        colors,
+        after=replace(
+            colors.after,
+            text=PaintFill(color="#00000000"),
+            stroke=PaintFill(color="#00000000"),
+            stroke2=PaintFill(color="#00000000"),
+            shadow=PaintFill(color="#FFFF0000"),
+            glow=PaintFill(color="#FF00FF00"),
+        ),
+    )
+    style = Style(
+        font_size_px=64,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        karaoke_colors=colors,
+        decoration_kind="both",
+        decoration_kind_before="both",
+        shadow_offset_x=10,
+        shadow_offset_y=10,
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+    )
+    appearance = _resolve_preview_text_appearance(style, preview_font_px=24.0)
+    path = QPainterPath()
+    font = QFont("Microsoft YaHei UI")
+    font.setPixelSize(24)
+    path.addText(20.0, 42.0, font, "歌")
+    img = QImage(80, 64, QImage.Format.Format_RGBA8888)
+    img.fill(0)
+    painter = QPainter(img)
+    try:
+        paint_styled_karaoke_glyph(
+            painter, path, QRectF(0, 0, 80, 64), QRectF(0, 0, 80, 64),
+            appearance.colors.after, appearance, after=True,
+        )
+    finally:
+        painter.end()
+    ptr = img.constBits()
+    ptr.setsize(img.sizeInBytes())
+    arr = np.frombuffer(ptr, dtype=np.uint8).reshape((64, 80, 4))
+    has_red_shadow = (arr[..., 3] > 20) & (arr[..., 0] > 150) & (arr[..., 1] < 80)
+    has_green_glow = (arr[..., 3] > 20) & (arr[..., 1] > 150) & (arr[..., 0] < 80)
+    assert int(has_red_shadow.sum()) > 10
+    assert int(has_green_glow.sum()) > 10
+
+
+def test_title_padding_and_effect_decor_follow_both_and_glow_paint():
+    from krok_helper.subtitle_render.domain.models import TitleOverlay
+    from krok_helper.subtitle_render.domain.paint import PaintFill
+    from krok_helper.subtitle_render.engine.render.effects.metrics import title_visual_padding
+    from krok_helper.subtitle_render.engine.render.effects.particles import _state_paint_spec
+    from krok_helper.subtitle_render.engine.render.elements.scanline_image import (
+        ScanlineImagePaintSource,
+        _decor_plan,
+    )
+
+    base_title = TitleOverlay(
+        stroke_width_px=4, stroke2_width_px=0, decoration_kind="shadow",
+        shadow_offset_y=5, shadow_blur_px=0, shadow_spread_px=0, glow_radius_px=8,
+    )
+    both_soft = replace(base_title, decoration_kind="both", shadow_blur_px=12, shadow_spread_px=4)
+    assert title_visual_padding(both_soft) >= title_visual_padding(base_title) + 16
+
+    colors = KaraokeColors()
+    colors = replace(
+        colors,
+        after=replace(
+            colors.after,
+            shadow=PaintFill(color="#FFFF0000"),
+            glow=PaintFill(color="#FF00FF00"),
+        ),
+    )
+    style = Style(
+        font_size_px=100,
+        karaoke_colors=colors,
+        decoration_kind="both",
+        decoration_kind_before="both",
+        glow_after_radius_px=8,
+        scanline_image_color_layers="decor",
+    )
+    particle_spec = _state_paint_spec(
+        style, colors.after, 40.0,
+        layers="decor", after=True, include_strokes=True, fallback="#FFFFFF",
+    )
+    assert particle_spec is not None
+    assert particle_spec["decor"]["kind"] == "glow"
+    assert particle_spec["decor"]["fill"]["color"] == "#FF00FF00"
+
+    plan = _decor_plan(
+        ("decor",),
+        ScanlineImagePaintSource(state=colors.after, geometry_style=style),
+        tint_strength=50,
+        effect_ratio=0.25,
+        raster_h=100.0,
+        gradient_line=None,
+        anchor_x=0.0,
+        anchor_y=0.0,
+        fallback_color="#FFFFFF",
+    )
+    assert plan is not None
+    assert plan.decor_kind == "glow"
+    assert plan.decor_color == "#FF00FF00"
+
+
 def test_ruby_decoration_edit_exits_follow_with_full_snapshot(qapp):
     """跟随中在注音主体下编辑装饰 = 先整卡快照退出跟随，再落独立值。"""
     panel = PropertyPanel()

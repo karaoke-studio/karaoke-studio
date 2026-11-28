@@ -6,6 +6,7 @@ from dataclasses import replace
 import math
 from typing import Optional
 
+import numpy as np
 from PyQt6.QtCore import (
     QObject,
     QPoint,
@@ -40,8 +41,10 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.domain.models import Style
+from krok_helper.subtitle_render.domain.paint import KaraokeColors
 from krok_helper.subtitle_render.engine.style.style_semantics import (
     effective_karaoke_colors,
+    effective_ruby_karaoke_colors,
     style_for_role,
 )
 from krok_helper.subtitle_render.engine.style.style_preview import (
@@ -64,13 +67,145 @@ from krok_helper.subtitle_render.engine.style.style_preview import (
     ruby_stroke_width as _ruby_stroke_width,
 )
 from krok_helper.subtitle_render.frontend.widgets.theme import palette, themed
-from krok_helper.subtitle_render.engine.render.effects import (
+from krok_helper.subtitle_render.engine.render.effects.fills import (
+    brush_for_fill as _brush_for_fill,
+    fill_brush_rect as _fill_brush_rect,
+)
+from krok_helper.subtitle_render.engine.render.effects.metrics import (
     decoration_kind_for_state as _decoration_kind_for_state,
+    ruby_scale as _ruby_scale,
+    scaled_px as _scaled_px,
     shadow_offset_x as _shadow_offset_x,
     shadow_offset_y as _shadow_offset_y,
 )
 from krok_helper.subtitle_render.engine.text.font_weight import build_weight_font
 from krok_helper.subtitle_render.n3.font_catalog import resolve_qt_font_family
+
+
+def _box_blur_premultiplied_image(image: QImage, blur_px: float) -> QImage:
+    """Thread-safe 3-pass separable box blur approximating Gaussian sigma = blur_px / 3."""
+    if blur_px <= 0.0 or image.isNull():
+        return image
+    sigma = blur_px / 3.0
+    radius = max(1, int(round((math.sqrt(4.0 * sigma * sigma + 1.0) - 1.0) * 0.5)))
+    width = image.width()
+    height = image.height()
+    if width <= 0 or height <= 0:
+        return image
+    src = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    ptr = src.constBits()
+    ptr.setsize(src.sizeInBytes())
+    stride = src.bytesPerLine()
+    raw = np.frombuffer(ptr, dtype=np.uint8).reshape((height, stride))
+    arr = raw[:, : width * 4].reshape((height, width, 4)).astype(np.float32)
+
+    def blur_1d(data: np.ndarray, axis: int, r: int) -> np.ndarray:
+        pad = [(0, 0), (0, 0), (0, 0)]
+        pad[axis] = (r + 1, r)
+        padded = np.pad(data, pad, mode="constant", constant_values=0.0)
+        csum = np.cumsum(padded, axis=axis, dtype=np.float32)
+        window = float(2 * r + 1)
+        if axis == 1:
+            return (csum[:, 2 * r + 1 :, :] - csum[:, : -(2 * r + 1), :]) / window
+        return (csum[2 * r + 1 :, :, :] - csum[: -(2 * r + 1), :, :]) / window
+
+    for _ in range(3):
+        arr = blur_1d(arr, 1, radius)
+        arr = blur_1d(arr, 0, radius)
+
+    out_bytes = np.clip(np.rint(arr), 0, 255).astype(np.uint8)
+    out = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+    out_ptr = out.bits()
+    out_ptr.setsize(out.sizeInBytes())
+    out_raw = np.frombuffer(out_ptr, dtype=np.uint8).reshape((height, out.bytesPerLine()))
+    out_raw[:, : width * 4] = out_bytes.reshape((height, width * 4))
+    return out
+
+
+def _colors_with_glow_in_shadow_slot(colors: KaraokeColors) -> KaraokeColors:
+    return replace(
+        colors,
+        before=replace(colors.before, shadow=colors.before.glow or colors.before.shadow),
+        after=replace(colors.after, shadow=colors.after.glow or colors.after.shadow),
+    )
+
+
+def _paint_sample_shadow_layer(
+    dest_painter: QPainter,
+    image_size: QSize,
+    bounds: QRectF,
+    scale: float,
+    *,
+    path: QPainterPath,
+    rect: QRectF,
+    fill_rect: QRectF,
+    horizontal_fill_rect: Optional[QRectF],
+    outline_width: float,
+    ratio: float,
+    colors: KaraokeColors,
+    before_active: bool,
+    after_active: bool,
+    before_offset: tuple[int, int],
+    after_offset: tuple[int, int],
+    blur_px: int,
+    spread_px: int,
+) -> None:
+    """Paint soft/spread preview shadow layer onto ``dest_painter``."""
+    if path.isEmpty() or (not before_active and not after_active):
+        return
+    split_x = rect.left() + rect.width() * max(0.0, min(1.0, float(ratio)))
+    blur = max(int(blur_px), 0)
+    spread = max(int(spread_px), 0)
+    pen_width = max(float(outline_width), 0.0) + float(spread) * 2.0
+
+    for after, active, (dx, dy) in (
+        (False, before_active, before_offset),
+        (True, after_active, after_offset),
+    ):
+        if not active or (dx == 0 and dy == 0 and blur == 0 and spread == 0):
+            continue
+        state = colors.after if after else colors.before
+        layer = QImage(image_size, QImage.Format.Format_ARGB32_Premultiplied)
+        layer.fill(Qt.GlobalColor.transparent)
+        lp = QPainter(layer)
+        try:
+            lp.setRenderHint(QPainter.RenderHint.Antialiasing)
+            lp.scale(scale, scale)
+            lp.translate(-bounds.left(), -bounds.top())
+            if after:
+                clip = QRectF(bounds.left(), bounds.top(), max(0.0, split_x - bounds.left()), bounds.height())
+            else:
+                clip = QRectF(split_x, bounds.top(), max(0.0, bounds.right() - split_x), bounds.height())
+            lp.setClipRect(clip)
+            lp.translate(float(dx), float(dy))
+            if pen_width > 0.0:
+                lp.setPen(
+                    QPen(
+                        Qt.GlobalColor.white,
+                        pen_width,
+                        Qt.PenStyle.SolidLine,
+                        Qt.PenCapStyle.RoundCap,
+                        Qt.PenJoinStyle.RoundJoin,
+                    )
+                )
+            else:
+                lp.setPen(Qt.PenStyle.NoPen)
+            lp.setBrush(Qt.GlobalColor.white)
+            lp.drawPath(path)
+            lp.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            brush = _brush_for_fill(
+                state.shadow,
+                _fill_brush_rect(state.shadow, fill_rect, horizontal_fill_rect),
+            )
+            lp.fillRect(bounds.translated(-float(dx), -float(dy)), brush)
+        finally:
+            lp.end()
+        if blur > 0:
+            layer = _box_blur_premultiplied_image(layer, float(blur) * scale)
+        dest_painter.save()
+        dest_painter.resetTransform()
+        dest_painter.drawImage(0, 0, layer)
+        dest_painter.restore()
 
 
 def _ink_fill_rect(path: QPainterPath, fallback: QRectF, pad: int) -> QRectF:
@@ -343,6 +478,37 @@ class _FontSampleCanvas(QWidget):
                 abs(_ruby_shadow_dy(ruby_style, after=True)),
             ),
         )
+        main_before_kind = _decoration_kind_for_state(main_style, after=False)
+        main_after_kind = _decoration_kind_for_state(main_style, after=True)
+        ruby_before_kind = _ruby_decoration_kind(ruby_style, after=False)
+        ruby_after_kind = _ruby_decoration_kind(ruby_style, after=True)
+        main_shadow_blur = max(int(main_style.shadow_blur_px), 0)
+        main_shadow_spread = max(int(main_style.shadow_spread_px), 0)
+        main_shadow_extra = (
+            main_shadow_blur + main_shadow_spread
+            if main_before_kind in {"shadow", "both"}
+            or main_after_kind in {"shadow", "both"}
+            else 0
+        )
+        r_scale = _ruby_scale(ruby_style)
+        ruby_shadow_blur = max(
+            int(ruby_style.ruby_shadow_blur_px)
+            if ruby_style.ruby_shadow_blur_px is not None
+            else _scaled_px(main_shadow_blur, r_scale),
+            0,
+        )
+        ruby_shadow_spread = max(
+            int(ruby_style.ruby_shadow_spread_px)
+            if ruby_style.ruby_shadow_spread_px is not None
+            else _scaled_px(main_shadow_spread, r_scale),
+            0,
+        )
+        ruby_shadow_extra = (
+            ruby_shadow_blur + ruby_shadow_spread
+            if ruby_before_kind in {"shadow", "both"}
+            or ruby_after_kind in {"shadow", "both"}
+            else 0
+        )
         main_glow_extent = (
             max(
                 _glow_extent(
@@ -356,10 +522,8 @@ class _FontSampleCanvas(QWidget):
                     max(int(main_style.glow_after_radius_px), 0),
                 ),
             )
-            if any(
-                _decoration_kind_for_state(main_style, after=after) == "glow"
-                for after in (False, True)
-            )
+            if main_before_kind in {"glow", "both"}
+            or main_after_kind in {"glow", "both"}
             else 0
         )
         ruby_glow_before = _ruby_glow_radius(ruby_style, after=False)
@@ -377,20 +541,18 @@ class _FontSampleCanvas(QWidget):
                     ruby_glow_after,
                 ),
             )
-            if any(
-                _ruby_decoration_kind(ruby_style, after=after) == "glow"
-                for after in (False, True)
-            )
+            if ruby_before_kind in {"glow", "both"}
+            or ruby_after_kind in {"glow", "both"}
             else 0
         )
         bounds = main_rect.united(ruby_rect)
         margin = max(
             stroke + stroke2,
             ruby_stroke + ruby_stroke2,
-            abs(shadow.x()),
-            abs(shadow.y()),
-            abs(ruby_shadow.x()),
-            abs(ruby_shadow.y()),
+            abs(shadow.x()) + main_shadow_extra,
+            abs(shadow.y()) + main_shadow_extra,
+            abs(ruby_shadow.x()) + ruby_shadow_extra,
+            abs(ruby_shadow.y()) + ruby_shadow_extra,
             main_glow_extent,
             ruby_glow_extent,
         ) + 4
@@ -408,6 +570,71 @@ class _FontSampleCanvas(QWidget):
             painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
             painter.scale(scale, scale)
             painter.translate(-bounds.left(), -bounds.top())
+            main_fill_rect = _ink_fill_rect(
+                main_path,
+                main_rect,
+                math.ceil((stroke + stroke2) / 2),
+            )
+            ruby_fill_rect = _ink_fill_rect(
+                ruby_path,
+                ruby_rect,
+                math.ceil((ruby_stroke + ruby_stroke2) / 2),
+            )
+            ruby_colors = effective_ruby_karaoke_colors(ruby_style)
+            custom_main = (
+                main_before_kind == "both"
+                or main_after_kind == "both"
+                or main_shadow_extra > 0
+                or colors.before.glow is not None
+                or colors.after.glow is not None
+            )
+            custom_ruby = (
+                ruby_before_kind == "both"
+                or ruby_after_kind == "both"
+                or ruby_shadow_extra > 0
+                or ruby_colors.before.glow is not None
+                or ruby_colors.after.glow is not None
+            )
+            if custom_main:
+                _paint_sample_shadow_layer(
+                    painter,
+                    image.size(),
+                    bounds,
+                    scale,
+                    path=main_path,
+                    rect=main_rect,
+                    fill_rect=main_fill_rect,
+                    horizontal_fill_rect=None,
+                    outline_width=float(stroke + stroke2),
+                    ratio=0.5,
+                    colors=colors,
+                    before_active=main_before_kind in {"shadow", "both"},
+                    after_active=main_after_kind in {"shadow", "both"},
+                    before_offset=(
+                        _shadow_offset_x(main_style, after=False),
+                        _shadow_offset_y(main_style, after=False),
+                    ),
+                    after_offset=(
+                        _shadow_offset_x(main_style, after=True),
+                        _shadow_offset_y(main_style, after=True),
+                    ),
+                    blur_px=main_shadow_blur,
+                    spread_px=main_shadow_spread,
+                )
+                main_draw_style = replace(
+                    main_style,
+                    decoration_before_sync=False,
+                    decoration_kind=(
+                        "glow" if main_after_kind in {"glow", "both"} else "none"
+                    ),
+                    decoration_kind_before=(
+                        "glow" if main_before_kind in {"glow", "both"} else "none"
+                    ),
+                )
+                main_draw_colors = _colors_with_glow_in_shadow_slot(colors)
+            else:
+                main_draw_style = main_style
+                main_draw_colors = colors
             _paint_char_karaoke_stack(
                 painter,
                 main_path,
@@ -416,29 +643,61 @@ class _FontSampleCanvas(QWidget):
                 char_width=max(round(main_rect.width()), 1),
                 baseline_y=main_baseline,
                 metrics=main_metrics,
-                colors=colors,
-                style=main_style,
+                colors=main_draw_colors,
+                style=main_draw_style,
                 ratio=0.5,
                 clip_rect=main_rect,
                 # 与主渲染 n3_main_fill_rect 同口径：拼色/纵渐变按墨水并集
                 # 锚定，预览所见即成片所得。
-                fill_rect=_ink_fill_rect(
-                    main_path,
-                    main_rect,
-                    math.ceil((stroke + stroke2) / 2),
-                ),
+                fill_rect=main_fill_rect,
             )
+            if custom_ruby:
+                _paint_sample_shadow_layer(
+                    painter,
+                    image.size(),
+                    bounds,
+                    scale,
+                    path=ruby_path,
+                    rect=ruby_rect,
+                    fill_rect=ruby_fill_rect,
+                    horizontal_fill_rect=main_rect,
+                    outline_width=float(ruby_stroke + ruby_stroke2),
+                    ratio=0.5,
+                    colors=ruby_colors,
+                    before_active=ruby_before_kind in {"shadow", "both"},
+                    after_active=ruby_after_kind in {"shadow", "both"},
+                    before_offset=(
+                        _ruby_shadow_dx(ruby_style, after=False),
+                        _ruby_shadow_dy(ruby_style, after=False),
+                    ),
+                    after_offset=(
+                        _ruby_shadow_dx(ruby_style, after=True),
+                        _ruby_shadow_dy(ruby_style, after=True),
+                    ),
+                    blur_px=ruby_shadow_blur,
+                    spread_px=ruby_shadow_spread,
+                )
+                ruby_draw_style = replace(
+                    ruby_style,
+                    decoration_before_sync=False,
+                    ruby_colors_follow_main=False,
+                    ruby_karaoke_colors=_colors_with_glow_in_shadow_slot(ruby_colors),
+                    ruby_decoration_kind=(
+                        "glow" if ruby_after_kind in {"glow", "both"} else "none"
+                    ),
+                    ruby_decoration_kind_before=(
+                        "glow" if ruby_before_kind in {"glow", "both"} else "none"
+                    ),
+                )
+            else:
+                ruby_draw_style = ruby_style
             _paint_ruby_karaoke_fragment(
                 painter,
                 ruby_path,
                 ruby_rect,
                 0.5,
-                ruby_style,
-                fill_rect=_ink_fill_rect(
-                    ruby_path,
-                    ruby_rect,
-                    math.ceil((ruby_stroke + ruby_stroke2) / 2),
-                ),
+                ruby_draw_style,
+                fill_rect=ruby_fill_rect,
                 horizontal_fill_rect=main_rect,
             )
         finally:

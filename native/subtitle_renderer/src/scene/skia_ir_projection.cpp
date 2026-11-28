@@ -415,10 +415,13 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && plainLineAnimation(source.exitAnimation, false);
         const bool guideRubyAnimation = staticScanline
             || (features.contains("p07_ruby_line_animation") && guideWholeLineAnimation);
+        const auto hasShadowDecor = [](const QString& kind) {
+            return kind == QStringLiteral("shadow") || kind == QStringLiteral("both");
+        };
         const bool vectorGuideShadow = features.contains("p06_vector_guide_shadow") && rubyGroups.isEmpty()
             && !cfg.vertical && !cfg.rightToLeft && !source.wipeReverse && !source.scanlineEnabled
-            && (protocol::decorationKindForState(resolved, false) == "shadow"
-                || protocol::decorationKindForState(resolved, true) == "shadow");
+            && (hasShadowDecor(protocol::decorationKindForState(resolved, false))
+                || hasShadowDecor(protocol::decorationKindForState(resolved, true)));
         const bool wholeLineGuideShadow = vectorGuideShadow && (staticScanline
             || (features.contains("p07_horizontal_shadow_line_animation")
                 && guideWholeLineAnimation))
@@ -472,8 +475,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
         const bool inlineBitmapGuides = features.contains("p08_inline_bitmap_guides") && !staticTitle;
         const bool decoratedInlineBitmap = features.contains("p08_inline_bitmap_decoration");
         const bool rtlBitmapSinging = features.contains("p08_rtl_bitmap_singing") && utopiaSinging
-            && protocol::decorationKindForState(resolved, false) != "shadow"
-            && protocol::decorationKindForState(resolved, true) != "shadow";
+            && !hasShadowDecor(protocol::decorationKindForState(resolved, false))
+            && !hasShadowDecor(protocol::decorationKindForState(resolved, true));
         const bool rtlBitmapUpperRuby = features.contains("p08_rtl_bitmap_upper_ruby")
             && guideRubyAnimation && !source.scanlineEnabled && !source.wipeReverse
             && (source.karaokeAnimation == "none" || rtlBitmapSinging)
@@ -495,8 +498,8 @@ RenderScene skiaSceneFromIr(const QJsonObject& ir, bool staticTitle) {
             && !source.scanlineEnabled && !source.strokeFlashEnabled && !source.zoomPulseEnabled && source.fxBursts.empty()
             && std::ranges::all_of(source.chars, [](const auto& cell) { return cell.bitmapGuide && cell.bitmapGuide->noDecor; });
         const bool reverseBitmapSingingGlow = features.contains("p08_reverse_bitmap_singing_glow")
-            && protocol::decorationKindForState(resolved, false) != "shadow"
-            && protocol::decorationKindForState(resolved, true) != "shadow";
+            && !hasShadowDecor(protocol::decorationKindForState(resolved, false))
+            && !hasShadowDecor(protocol::decorationKindForState(resolved, true));
         const bool reverseBitmapSinging = source.karaokeAnimation == "utopia" && features.contains("p08_reverse_bitmap_singing")
             && std::ranges::all_of(source.chars, [&](const auto& cell) {
                 return !cell.vectorGlyph && (!cell.bitmapGuide || cell.bitmapGuide->noDecor || reverseBitmapSingingGlow);

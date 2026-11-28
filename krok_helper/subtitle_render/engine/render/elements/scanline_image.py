@@ -376,7 +376,7 @@ def _decor_plan(
     shadow_dx = shadow_dy = 0.0
     if "decor" in layers:
         kind = decoration_kind_for_state(geometry, after=True)
-        if kind == "glow":
+        if kind in {"glow", "both"}:
             concentration = glow_concentration_level(geometry, after=True)
             radius_raw = (
                 int(geometry.glow_after_radius_px or 0) if concentration >= 0 else 0
@@ -384,13 +384,14 @@ def _decor_plan(
             glow_w = width_of(float(radius_raw))
             if glow_w > 0:
                 decor_kind = "glow"
-        elif kind == "shadow":
+        if not decor_kind and kind in {"shadow", "both"}:
             shadow_dx = float(shadow_offset_x(geometry, after=True)) * scale
             shadow_dy = float(shadow_offset_y(geometry, after=True)) * scale
             decor_kind = "shadow"
     stroke2_w = 0
     if "stroke" in layers and getattr(geometry, "stroke2_enabled", False):
         stroke2_w = width_of(float(geometry.stroke2_width_px or 0))
+    decor_fill = (state.glow or state.shadow) if decor_kind == "glow" else state.shadow
     return _DecorPlan(
         tint_strength=tint_strength,
         tint_color=(
@@ -399,7 +400,7 @@ def _decor_plan(
         stroke_color=color_of(state.stroke),
         stroke2_color=color_of(state.stroke2),
         decor_kind=decor_kind,
-        decor_color=color_of(state.shadow),
+        decor_color=color_of(decor_fill),
         stroke_w=width_of(float(geometry.stroke_width_px or 0)) if "stroke" in layers else 0,
         stroke2_w=stroke2_w,
         glow_w=glow_w,

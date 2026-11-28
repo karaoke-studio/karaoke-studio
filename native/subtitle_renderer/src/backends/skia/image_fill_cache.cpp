@@ -106,7 +106,8 @@ std::shared_ptr<const ::subtitle::skia::ScanlineImage> SkiaImageFillCache::scanl
         canvasHeight, style.scanlineImageScale, style.scanlineImageOffsetX, style.scanlineImageOffsetY,
         style.scanlineImageStroke ? style.strokeWidth : 0.f,
         style.scanlineImageStroke ? style.stroke2Width : 0.f,
-        style.scanlineImageDecor && style.decorationKind == "glow" && style.glowConcentrationLevel >= 0
+        style.scanlineImageDecor && (style.decorationKind == "glow" || style.decorationKind == "both")
+            && style.glowConcentrationLevel >= 0
             ? style.glowAfterRadius : 0.f,
         style.scanlineColor, style.scanlineImageTintStrength, style.scanlineImageTint, style.scanlineImageBandEnabled};
     for (const auto& [cached, image] : scanlineImages_)

@@ -143,6 +143,60 @@ def test_title_shadow_and_glow_use_independent_paints(binary, project, target):
     assert not np.array_equal(frames[0], frames[2])
 
 
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_soft_shadow_avoids_double_darkening_and_preserves_blur_clip_bounds(binary, project, target):
+    """Translucent soft shadows composite once per phase without double-darkening or mid-wipe clipping."""
+    track, base = shadow_source(project, 'transparent')
+    clear = PaintFill(color='#00000000')
+    palette = replace(base.karaoke_colors,
+        before=replace(base.karaoke_colors.before, text=clear, stroke=clear, stroke2=clear,
+                       shadow=PaintFill(color='#80000000')),
+        after=replace(base.karaoke_colors.after, text=clear, stroke=clear, stroke2=clear,
+                      shadow=PaintFill(color='#80000000')))
+    style = replace(base, karaoke_colors=palette, stroke_width_px=6, stroke2_enabled=False,
+                    decoration_before_sync=False,
+                    decoration_kind='shadow', decoration_kind_before='none',
+                    shadow_offset_x=0, shadow_offset_y=0,
+                    shadow_before_offset_x=0, shadow_before_offset_y=0,
+                    shadow_blur_px=24, shadow_spread_px=6)
+    ir = ir_for(binary, (track, style), dpr=1)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        frames, _ = collect(process, [750, 2200])
+    mid, done = frames[0], frames[1]
+    assert mid[..., 3].max() > 64
+    assert int(mid[..., 3].max()) <= 132
+    assert int(done[..., 3].max()) <= 132
+    # Leading-edge blur halo beyond stroke pad must not be clipped during wipe.
+    xs = np.where(done[..., 3] > 8)[1]
+    mid_xs = np.where(mid[..., 3] > 8)[1]
+    assert abs(int(mid_xs.min()) - int(xs.min())) <= 1
+
+
+@pytest.mark.parametrize('target', ['gpu', 'raster'])
+def test_glow_renders_above_shadow_in_both_mode(binary, project, target):
+    """When shadow and glow coexist, bright outer glow composites above the shadow layer."""
+    track, base = shadow_source(project, 'transparent')
+    palette = replace(base.karaoke_colors,
+        before=replace(base.karaoke_colors.before, shadow=PaintFill(color='#FFFF0000'),
+                       glow=PaintFill(color='#FF00FF00')),
+        after=replace(base.karaoke_colors.after, shadow=PaintFill(color='#FFFF0000'),
+                      glow=PaintFill(color='#FF00FF00')))
+    style = replace(base, karaoke_colors=palette, decoration_kind='both',
+                    decoration_kind_before='both', glow_before_radius_px=8,
+                    glow_after_radius_px=8, glow_concentration_level=2,
+                    glow_before_concentration_level=2, shadow_offset_x=0,
+                    shadow_offset_y=0, shadow_before_offset_x=0,
+                    shadow_before_offset_y=0, shadow_blur_px=0, shadow_spread_px=6)
+    ir = ir_for(binary, (track, style), dpr=1)
+    with SkiaRendererProcess(binary, selection=selection(target)) as process:
+        configure(process, ir)
+        (frame,), _ = collect(process, [2200])
+    # BGRA output: green channel is index 1, red channel is index 2.
+    green_over_red = (frame[..., 3] > 64) & (frame[..., 1].astype(int) > frame[..., 2].astype(int) + 40)
+    assert int(green_over_red.sum()) > 50
+
+
 @pytest.mark.parametrize('case', CASES)
 @pytest.mark.parametrize('target', ['gpu', 'raster'])
 def test_static_glow_palette_preserves_geometry_and_replay(binary, project, case, target, tmp_path):

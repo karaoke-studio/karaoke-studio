@@ -407,7 +407,7 @@ def ruby_visual_padding(style: Style, *, after: bool) -> int:
 
 def title_visual_padding(title: TitleOverlay) -> int:
     pad = visual_stroke_extent(title.stroke_width_px, title.stroke2_width_px)
-    if title.decoration_kind == "glow":
+    if title.decoration_kind in {"glow", "both"}:
         pad = max(
             pad,
             glow_extent(
@@ -416,8 +416,12 @@ def title_visual_padding(title: TitleOverlay) -> int:
                 max(int(title.glow_radius_px), 0),
             ),
         )
-    elif title.decoration_kind == "shadow":
-        pad += abs(title.shadow_offset_y)
+    if title.decoration_kind in {"shadow", "both"}:
+        pad += (
+            abs(title.shadow_offset_y)
+            + max(int(title.shadow_blur_px), 0)
+            + max(int(title.shadow_spread_px), 0)
+        )
     return max(pad, 2)
 
 

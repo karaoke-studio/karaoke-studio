@@ -965,12 +965,18 @@ def _state_paint_spec(
         # 不是固定阴影）——shadow=偏移剪影；glow=多级描边弥散晕（半径按
         # 走字前/后取，跟随尺寸同比缩放）；none=不产出。
         kind = decoration_kind_for_state(source, after=after)
-        if kind in {"shadow", "glow"}:
+        effective_kind = "glow" if kind == "both" else kind
+        if effective_kind in {"shadow", "glow"}:
+            decor_fill = (
+                (state.glow or state.shadow)
+                if effective_kind == "glow"
+                else state.shadow
+            )
             decor: dict[str, object] = {
-                "kind": kind,
-                "fill": _layer_fill(state.shadow),
+                "kind": effective_kind,
+                "fill": _layer_fill(decor_fill),
             }
-            if kind == "shadow":
+            if effective_kind == "shadow":
                 decor["offset_x_px"] = round(
                     float(shadow_offset_x(source, after=after)) * scale, 3
                 )

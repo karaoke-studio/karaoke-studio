@@ -1633,15 +1633,23 @@ def _resolve_preview_text_appearance(
     after_decor = decoration_kind_for_state(style, after=True)
     raw_gb = max(float(getattr(style, "glow_before_radius_px", 0) or 0), 0.0)
     raw_ga = max(float(getattr(style, "glow_after_radius_px", 0) or 0), 0.0)
-    before_glow_px = min(max(raw_gb * scale, 1.2), 7.0) if before_decor == "glow" and raw_gb > 0 else 0.0
-    after_glow_px = min(max(raw_ga * scale, 1.2), 7.0) if after_decor == "glow" and raw_ga > 0 else 0.0
+    before_glow_px = (
+        min(max(raw_gb * scale, 1.2), 7.0)
+        if before_decor in {"glow", "both"} and raw_gb > 0
+        else 0.0
+    )
+    after_glow_px = (
+        min(max(raw_ga * scale, 1.2), 7.0)
+        if after_decor in {"glow", "both"} and raw_ga > 0
+        else 0.0
+    )
 
     before_shadow = (
         (
             max(-4.0, min(4.0, shadow_offset_x(style, after=False) * scale)),
             max(-4.0, min(4.0, shadow_offset_y(style, after=False) * scale)),
         )
-        if before_decor == "shadow"
+        if before_decor in {"shadow", "both"}
         else (0.0, 0.0)
     )
     after_shadow = (
@@ -1649,7 +1657,7 @@ def _resolve_preview_text_appearance(
             max(-4.0, min(4.0, shadow_offset_x(style, after=True) * scale)),
             max(-4.0, min(4.0, shadow_offset_y(style, after=True) * scale)),
         )
-        if after_decor == "shadow"
+        if after_decor in {"shadow", "both"}
         else (0.0, 0.0)
     )
     return _PreviewTextAppearance(
@@ -1711,27 +1719,8 @@ def paint_styled_karaoke_glyph(
     glow_px = appearance.after_glow_px if after else appearance.before_glow_px
     sdx, sdy = appearance.after_shadow if after else appearance.before_shadow
 
-    # 1. Shadow or soft multi-ring glow.
-    if decor == "glow" and glow_px > 0.0:
-        glow_brush = brush_for_fill(
-            state.shadow,
-            fill_brush_rect(state.shadow, char_rect, line_rect),
-        )
-        for ring_mul, alpha in ((1.9, 0.14), (1.25, 0.24), (0.7, 0.36)):
-            painter.save()
-            painter.setOpacity(painter.opacity() * alpha)
-            pen = QPen(
-                glow_brush,
-                outer_base + glow_px * ring_mul,
-                Qt.PenStyle.SolidLine,
-                Qt.PenCapStyle.RoundCap,
-                Qt.PenJoinStyle.RoundJoin,
-            )
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(path)
-            painter.restore()
-    elif decor == "shadow" and (abs(sdx) > 0.05 or abs(sdy) > 0.05):
+    # 1. Shadow underneath soft multi-ring glow (both may be active simultaneously).
+    if decor in {"shadow", "both"} and (abs(sdx) > 0.05 or abs(sdy) > 0.05):
         shadow_brush = brush_for_fill(
             state.shadow,
             fill_brush_rect(state.shadow, char_rect, line_rect),
@@ -1753,6 +1742,26 @@ def paint_styled_karaoke_glyph(
         painter.setBrush(shadow_brush)
         painter.drawPath(path)
         painter.restore()
+    if decor in {"glow", "both"} and glow_px > 0.0:
+        glow_fill = state.glow or state.shadow
+        glow_brush = brush_for_fill(
+            glow_fill,
+            fill_brush_rect(glow_fill, char_rect, line_rect),
+        )
+        for ring_mul, alpha in ((1.9, 0.14), (1.25, 0.24), (0.7, 0.36)):
+            painter.save()
+            painter.setOpacity(painter.opacity() * alpha)
+            pen = QPen(
+                glow_brush,
+                outer_base + glow_px * ring_mul,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            )
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+            painter.restore()
 
     # Optional white contour flash halo behind strokes during 「唱字闪光」.
     flash = _clamp01(flash_strength)

@@ -82,7 +82,7 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
             prepareBrush(palette.afterStroke2Paint, decoration.unitGradients.outerStroke, decoration.images.outerStroke);
     }
     const auto kind = palette.decorationKindForState(true);
-    if (!signal.image && kind == "shadow") {
+    if (!signal.image && (kind == "shadow" || kind == "both")) {
         decoration.shadowX = palette.shadowOffsetXForState(true) * ratio;
         decoration.shadowY = palette.shadowOffsetYForState(true) * ratio;
         if (decoration.shadowX || decoration.shadowY) {
@@ -90,13 +90,13 @@ std::optional<::subtitle::skia::ShapeSignal> resolveShapeSignal(
             prepareBrush(palette.afterDecorPaint, decoration.unitGradients.shadow, decoration.images.shadow);
         }
     }
-    if (kind == "glow") {
+    if (kind == "glow" || kind == "both") {
         using namespace ::subtitle::skia;
         const auto radius = std::lround(std::max(0.f, palette.glowAfterRadius * ratio));
         if (radius > 256) throw BackendError("Skia 指示灯的光晕半径超限");
         if (radius > 0)
-            prepareBrush(palette.afterDecorPaint, decoration.unitGradients.glow, decoration.images.glow);
-        const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterDecorPaint.color),
+            prepareBrush(palette.afterGlowPaint, decoration.unitGradients.glow, decoration.images.glow);
+        const auto glow = GlowState{int(radius), palette.glowConcentrationForState(true), argb(palette.afterGlowPaint.color),
                                     palette.glowStrength};
         const auto join = style.litStyle == "star" ? SkPaint::kMiter_Join : SkPaint::kRound_Join;
         decoration.glow = PreparedGlow::prepare({{}, glow, signal.strokeWidth + decoration.outerWidth, join});
@@ -158,6 +158,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             const auto& stroke = after ? palette.afterStrokePaint : palette.beforeStrokePaint;
             const auto& outer = after ? palette.afterStroke2Paint : palette.beforeStroke2Paint;
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
+            const auto& glowPaint = after ? palette.afterGlowPaint : palette.beforeGlowPaint;
             if (!supportedBrush(fill))
                 throw BackendError("Skia 未支持音量柱当前填充画笔");
             if ((signal.strokeWidth > 0 && !supportedBrush(stroke))
@@ -166,7 +167,7 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             auto& paint = signal.palette[after];
             paint = {argb(fill.color), argb(stroke.color), argb(outer.color)};
             const auto kind = palette.decorationKindForState(after);
-            if (kind == "shadow") {
+            if (kind == "shadow" || kind == "both") {
                 paint.shadowX = palette.shadowOffsetXForState(after) * ratio;
                 paint.shadowY = palette.shadowOffsetYForState(after) * ratio;
                 if (paint.shadowX || paint.shadowY) {
@@ -174,11 +175,11 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
                     paint.shadow = argb(decor.color);
                 }
             }
-            if (kind == "glow" && palette.glowConcentrationForState(after) >= 0) {
+            if ((kind == "glow" || kind == "both") && palette.glowConcentrationForState(after) >= 0) {
                 const auto radius = std::lround(std::max(0.f, (after ? palette.glowAfterRadius : palette.glowBeforeRadius) * ratio));
                 if (radius > 256) throw BackendError("Skia 音量柱的光晕半径超限");
-                if (radius > 0 && !supportedBrush(decor)) throw BackendError("Skia 音量柱光晕画笔不受支持");
-                (after ? glow.after : glow.before) = {int(radius), palette.glowConcentrationForState(after), argb(decor.color),
+                if (radius > 0 && !supportedBrush(glowPaint)) throw BackendError("Skia 音量柱光晕画笔不受支持");
+                (after ? glow.after : glow.before) = {int(radius), palette.glowConcentrationForState(after), argb(glowPaint.color),
                                                       palette.glowStrength};
             }
         }
@@ -220,9 +221,10 @@ std::optional<::subtitle::skia::VolumeSignal> resolveVolumeSignal(
             if (signal.outerWidth > 0)
                 prepareBrush(after ? palette.afterStroke2Paint : palette.beforeStroke2Paint, brush.outerGradient, brush.outerImage);
             const auto& decor = after ? palette.afterDecorPaint : palette.beforeDecorPaint;
+            const auto& glowPaint = after ? palette.afterGlowPaint : palette.beforeGlowPaint;
             if (brush.shadowX || brush.shadowY) prepareBrush(decor, brush.shadowGradient, brush.shadowImage);
             if ((after ? glow.after : glow.before).radius > 0)
-                prepareBrush(decor, glowGradients[after], brush.glowImage);
+                prepareBrush(glowPaint, glowGradients[after], brush.glowImage);
         }
         for (auto& bar : signal.bars)
             for (auto& layer : bar.glow)

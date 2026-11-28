@@ -550,6 +550,47 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
         layered = true;
         canvas.saveLayer(SkCanvas::SaveLayerRec(bounds, nullptr, SkCanvas::kF16ColorType));
     }
+    // Draw shadows underneath glows so soft/dark shadows do not darken bright outer halos.
+    const bool posedShadow = utopia || (titleOpacity >= 1.f
+        && std::ranges::any_of(states, [](const State& state) {
+            return state.transform.transformed || state.transform.opacity < 1.f;
+        }));
+    if (posedShadow && (line.shadow.visible() || !line.cellShadows.empty())) {
+        // The posed shadow clips on the line's physical wipe side (horizontal too).
+        const bool reverse = line.wipeRightToLeft;
+        const float origin = line.vertical
+            ? (reverse ? line.decorationInk.bottom() : line.decorationInk.top())
+            : (reverse ? line.decorationInk.right() : line.decorationInk.left());
+        const float edge = lineWipeFront(line.cells, tMs, origin, line.shadow.secondaryWidth / 2 + .5f,
+                                        reverse, line.vertical);
+        line.shadow.drawAnimated(canvas, line.cells, line.decorationInk, edge, lineWipeComplete(line.cells, tMs),
+            line.shadow.outlineWidth + line.shadow.secondaryWidth + 4.f, [&](std::size_t index) {
+                const auto& state = states[index];
+                return StaticShadow::WipePose{state.transform, state.phase == Phase::Before,
+                    state.phase == Phase::Wiping
+                        ? std::optional<float>(line.vertical ? state.edge : transformedEdge(index)) : std::nullopt};
+            }, line.vertical, reverse, line.cellShadows);
+    } else {
+        line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft,
+                         titleOpacity, line.noWipe, line.cellShadows);
+    }
+    float previousReadingShadowOffset = 0.f;
+    for (const auto& group : line.rubyGroups) {
+        ReadingMotion motion;
+        if (const auto owner = group.utopiaExitOwner(); owner && tMs > line.followingDone[*owner]) {
+            motion.exit = &line.utopiaTransition;
+            motion.followingDone = line.followingDone[*owner];
+        } else {
+            motion.opacity = rubyOpacity(group);
+            motion.pose = rubyPose(group);
+            motion.entryScale = rubyEntryScale(group);
+            if (const auto owner = group.fadeOwner(); rubyGeometryPhase && owner) {
+                const auto& pivot = line.cells[*owner].pivot;
+                motion.ownerPivot = {(pivot.layoutLeft + pivot.layoutRight) * .5f, pivot.centerY};
+            }
+        }
+        group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin, previousReadingShadowOffset, motion);
+    }
     // Tracking and wave restore static glow as each unit settles. Spin keeps
     // a separate blurred source for moving glyphs.
     const auto drawRubyGlow = [&](const PreparedGlow& layer, const std::vector<std::size_t>& readings) {
@@ -704,47 +745,6 @@ void PreparedScene::drawLine(SkCanvas& canvas, const Line& line, int tMs, bool t
                     draw(phase == Phase::After, std::nullopt);
                 }
             });
-    }
-    // Shadows follow each cell's transition pose and opacity, as they follow its singing pose.
-    const bool posedShadow = utopia || (titleOpacity >= 1.f
-        && std::ranges::any_of(states, [](const State& state) {
-            return state.transform.transformed || state.transform.opacity < 1.f;
-        }));
-    if (posedShadow && (line.shadow.visible() || !line.cellShadows.empty())) {
-        // The posed shadow clips on the line's physical wipe side (horizontal too).
-        const bool reverse = line.wipeRightToLeft;
-        const float origin = line.vertical
-            ? (reverse ? line.decorationInk.bottom() : line.decorationInk.top())
-            : (reverse ? line.decorationInk.right() : line.decorationInk.left());
-        const float edge = lineWipeFront(line.cells, tMs, origin, line.shadow.secondaryWidth / 2 + .5f,
-                                        reverse, line.vertical);
-        line.shadow.drawAnimated(canvas, line.cells, line.decorationInk, edge, lineWipeComplete(line.cells, tMs),
-            line.shadow.outlineWidth + line.shadow.secondaryWidth + 4.f, [&](std::size_t index) {
-                const auto& state = states[index];
-                return StaticShadow::WipePose{state.transform, state.phase == Phase::Before,
-                    state.phase == Phase::Wiping
-                        ? std::optional<float>(line.vertical ? state.edge : transformedEdge(index)) : std::nullopt};
-            }, line.vertical, reverse, line.cellShadows);
-    } else {
-        line.shadow.draw(canvas, line.cells, tMs, line.decorationInk, line.vertical, line.wipeRightToLeft,
-                         titleOpacity, line.noWipe, line.cellShadows);
-    }
-    float previousReadingShadowOffset = 0.f;
-    for (const auto& group : line.rubyGroups) {
-        ReadingMotion motion;
-        if (const auto owner = group.utopiaExitOwner(); owner && tMs > line.followingDone[*owner]) {
-            motion.exit = &line.utopiaTransition;
-            motion.followingDone = line.followingDone[*owner];
-        } else {
-            motion.opacity = rubyOpacity(group);
-            motion.pose = rubyPose(group);
-            motion.entryScale = rubyEntryScale(group);
-            if (const auto owner = group.fadeOwner(); rubyGeometryPhase && owner) {
-                const auto& pivot = line.cells[*owner].pivot;
-                motion.ownerPivot = {(pivot.layoutLeft + pivot.layoutRight) * .5f, pivot.centerY};
-            }
-        }
-        group.drawShadow(canvas, tMs, line.singingScale, line.rubySingingOrigin, previousReadingShadowOffset, motion);
     }
     if (line.hasOuterOutline)
         drawLayer(Layer::OuterOutline, line.images.outer, {line.beforeOuterGradient, line.afterOuterGradient});
