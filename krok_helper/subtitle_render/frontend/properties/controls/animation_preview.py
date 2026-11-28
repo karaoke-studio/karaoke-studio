@@ -56,6 +56,11 @@ from krok_helper.subtitle_render.engine.render.effects.metrics import (
     shadow_offset_x,
     shadow_offset_y,
 )
+from krok_helper.subtitle_render.engine.render.effects.noise import (
+    NOISE_STEPS,
+    noise_buffers,
+    paint_noise,
+)
 from krok_helper.subtitle_render.engine.render.effects.particles import FX_SPRITES
 from krok_helper.subtitle_render.engine.render.elements.horizontal.transitions import (
     ZOOM_PULSE_SHRINK_MS,
@@ -270,7 +275,7 @@ ENTRY_ANIMATION_META: dict[str, AnimationPreviewMeta] = {
     "char_drip": AnimationPreviewMeta("文字垂下", "歌词逐字以角点为轴纵向斜切垂落展开（N3 风格）。", 2400),
     "spin_flip": AnimationPreviewMeta("旋转翻转", "歌词逐字围绕字心缩放并伴随倾斜翻转出现。", 2400),
     "utopia": AnimationPreviewMeta("utopia", "逐字放大弹出至 1.3× 后轻弹回落至原大小。", 2400),
-    "noise": AnimationPreviewMeta("噪点溶解", "以随机像素块噪点的方式逐步浮现成形。", 2400),
+    "noise": AnimationPreviewMeta("噪点溶解", "以细粒噪点、横向切条与垂落光纹的方式逐步浮现成形。", 2400),
     "tracking_in": AnimationPreviewMeta("字距收拢", "逐字从宽字距由两侧向中心收拢归位。", 2300),
     "wave_in": AnimationPreviewMeta("波浪上浮", "逐字依次自下方呈波浪节奏浮起到位。", 2300),
     "stretch_in": AnimationPreviewMeta("逐字拉伸入场", "字符由横向拉伸光条逐字收束成清晰字形。", 2400),
@@ -298,7 +303,7 @@ EXIT_ANIMATION_META: dict[str, AnimationPreviewMeta] = {
     "char_drip": AnimationPreviewMeta("文字垂出", "歌词逐字以角点为轴纵向斜切收起消失（N3 风格）。", 2400),
     "spin_flip": AnimationPreviewMeta("旋转翻转", "歌词逐字围绕字心倾斜翻转并缩小消失。", 2400),
     "utopia": AnimationPreviewMeta("utopia", "逐字缩小并水平翻转旋转，沿弧线飘离淡出。", 2500),
-    "noise": AnimationPreviewMeta("噪点溶解", "以随机像素块噪点的方式逐步瓦解消散。", 2400),
+    "noise": AnimationPreviewMeta("噪点溶解", "以细粒噪点、横向切条与垂落光纹的方式逐步瓦解消散。", 2400),
     "scatter_out": AnimationPreviewMeta("碎散爆开", "逐字向随机方向旋转飞散并缩小淡出。", 2400),
     "converge_out": AnimationPreviewMeta("收拢消散", "逐字向整行中心聚拢微缩并淡出。", 2300),
     "stretch_out": AnimationPreviewMeta("逐字拉伸退场", "清晰字形逐字横向拉伸为光条弥散淡出。", 2400),
@@ -878,46 +883,53 @@ class AnimationPreviewCanvas(QWidget):
                 painter.restore()
             return
 
-        # Noise block dissolve.
+        # Noise dissolve — reuse the exact engine/Skia deterministic grain +
+        # horizontal glitch-slice + downward vertical streak-echo compositing.
         if key == "noise":
-            threshold = _smoothstep(anim_progress)
-            cell = 3.5
-            for idx, path in enumerate(self._glyph_paths):
-                if path.isEmpty():
-                    continue
-                ruby_p = self._ruby_path_for(idx)
-                bounds = path.boundingRect()
-                if ruby_p is not None and not ruby_p.isEmpty():
-                    bounds = bounds.united(ruby_p.boundingRect())
-                bounds = bounds.adjusted(-2.5, -2.5, 2.5, 2.5)
-                cols = max(1, int(math.ceil(bounds.width() / cell)))
-                rows = max(1, int(math.ceil(bounds.height() / cell)))
-                mask_path = QPainterPath()
-                for r in range(rows):
-                    for c in range(cols):
-                        h = fx_unit_hash(idx * 257 + r * 31 + c, 911)
-                        show_cell = (h <= threshold) if not is_exit else (h >= threshold)
-                        if show_cell:
-                            mask_path.addRect(
-                                bounds.left() + c * cell,
-                                bounds.top() + r * cell,
-                                cell + 0.2,
-                                cell + 0.2,
-                            )
-                if mask_path.isEmpty():
-                    continue
+            coverage = (1.0 - anim_progress) if is_exit else anim_progress
+            level = max(0, min(NOISE_STEPS, int(round(_clamp01(coverage) * NOISE_STEPS))))
+            if level <= 0:
+                return
+
+            def _draw_full_line(target: QPainter) -> None:
+                for idx, path in enumerate(self._glyph_paths):
+                    if path.isEmpty():
+                        continue
+                    target.save()
+                    target.translate(char_xs[idx], baseline_y)
+                    self._draw_styled_glyph(
+                        target,
+                        path,
+                        fill_color=fill_base,
+                        stroke_color=stroke_base,
+                        ruby_path=self._ruby_path_for(idx),
+                    )
+                    target.restore()
+
+            if level >= NOISE_STEPS:
                 painter.save()
-                painter.translate(char_xs[idx], baseline_y)
-                painter.setClipPath(mask_path)
                 painter.setOpacity(_clamp01(env_alpha))
-                self._draw_styled_glyph(
-                    painter,
-                    path,
-                    fill_color=fill_base,
-                    stroke_color=stroke_base,
-                    ruby_path=ruby_p,
-                )
+                _draw_full_line(painter)
                 painter.restore()
+                return
+
+            dpr = max(float(self.devicePixelRatioF()), 1.0)
+            buf_w = max(int(round(self.width() * dpr)), 1)
+            buf_h = max(int(round(self.height() * dpr)), 1)
+            source, scratch = noise_buffers(buf_w, buf_h, dpr)
+            source.fill(0)
+            inner = QPainter(source)
+            try:
+                inner.setRenderHint(QPainter.RenderHint.Antialiasing)
+                inner.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+                _draw_full_line(inner)
+            finally:
+                inner.end()
+
+            painter.save()
+            painter.setOpacity(_clamp01(env_alpha))
+            paint_noise(painter, source, scratch, level, font_px, cell_px=1)
+            painter.restore()
             return
 
         # Per-character transitions.
